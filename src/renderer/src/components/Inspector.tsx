@@ -1,5 +1,5 @@
 import { activityTitle } from '../activity'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   ArrowUpRight,
   Check,
@@ -11,20 +11,35 @@ import {
   LoaderCircle,
   RefreshCw,
   Terminal,
+  Undo2,
   X,
 } from 'lucide-react'
 import type { GitStatus, SessionView } from '../../../shared/protocol'
 import { IconButton, projectName } from './Primitives'
 
-function parseDiffLines(diff: string) {
+// Hunk indexes count only the `Working changes` section, which is the raw
+// working-tree diff that `gitRevertHunk` addresses. Staged hunks get none.
+export function parseDiffLines(diff: string) {
   let oldLine = 0
   let newLine = 0
+  let section: 'staged' | 'working' | '' = ''
+  let workingHunks = 0
   return diff.split('\n').map((line) => {
+    if (line === 'Staged changes' || line === 'Working changes') {
+      section = line === 'Staged changes' ? 'staged' : 'working'
+      return { kind: 'meta' as const, oldNum: '', newNum: '', text: line }
+    }
     const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
     if (hunk) {
       oldLine = Number(hunk[1])
       newLine = Number(hunk[2])
-      return { kind: 'hunk' as const, oldNum: '', newNum: '', text: line }
+      return {
+        kind: 'hunk' as const,
+        oldNum: '',
+        newNum: '',
+        text: line,
+        ...(section === 'working' ? { hunkIndex: workingHunks++ } : {}),
+      }
     }
     if (
       line.startsWith('---') ||
@@ -72,6 +87,31 @@ export function Inspector({
   const [selected, setSelected] = useState('')
   const [diff, setDiff] = useState('')
   const [refreshVersion, setRefreshVersion] = useState(0)
+  const [diffVersion, setDiffVersion] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const turnRunning = view?.session.status === 'running'
+  const act = useCallback(
+    async (action: () => Promise<void>, afterwards: 'list' | 'diff') => {
+      setBusy(true)
+      try {
+        await action()
+        if (afterwards === 'list') {
+          setRefreshVersion((value) => value + 1)
+          return
+        }
+        const status = await window.muse.gitStatus(project)
+        setGit(status)
+        if (status.changes.some((change) => change.path === selected))
+          setDiffVersion((value) => value + 1)
+        else setSelected('')
+      } catch (error) {
+        onError(error instanceof Error ? error.message : String(error))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [project, selected, onError],
+  )
   useEffect(() => {
     if (!open) return
     let cancelled = false
@@ -114,7 +154,7 @@ export function Inspector({
     return () => {
       cancelled = true
     }
-  }, [open, project, selected, onError])
+  }, [open, project, selected, diffVersion, onError])
   const activity =
     view?.items.filter(
       (item) =>
@@ -177,15 +217,40 @@ export function Inspector({
                     <ChevronLeft size={13} />
                     <span>{selected}</span>
                   </button>
-                  {onMentionDiff && (
+                  <span className="diff-actions">
                     <button
                       type="button"
                       className="diff-ask-button"
-                      onClick={() => onMentionDiff(selected)}
+                      disabled={busy || turnRunning}
+                      title={turnRunning ? 'Wait for the current turn to finish' : undefined}
+                      onClick={() =>
+                        void act(() => window.muse.gitStageFile(project, selected), 'diff')
+                      }
                     >
-                      Ask Muse <ArrowUpRight size={11} />
+                      Stage
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      className="diff-ask-button"
+                      disabled={busy || turnRunning}
+                      title={turnRunning ? 'Wait for the current turn to finish' : undefined}
+                      onClick={() => {
+                        if (!window.confirm(`Discard all changes to ${selected}?`)) return
+                        void act(() => window.muse.gitRevertFile(project, selected), 'list')
+                      }}
+                    >
+                      Revert file
+                    </button>
+                    {onMentionDiff && (
+                      <button
+                        type="button"
+                        className="diff-ask-button"
+                        onClick={() => onMentionDiff(selected)}
+                      >
+                        Ask Muse <ArrowUpRight size={11} />
+                      </button>
+                    )}
+                  </span>
                 </div>
                 <pre className="diff-view">
                   {parseDiffLines(diff).map((row, i) => (
@@ -207,6 +272,23 @@ export function Inspector({
                         {row.newNum || row.oldNum || ' '}
                       </span>
                       {row.text || ' '}
+                      {'hunkIndex' in row && row.hunkIndex !== undefined && (
+                        <button
+                          type="button"
+                          className="hunk-revert"
+                          aria-label={`Revert hunk ${row.hunkIndex + 1}`}
+                          title="Revert this hunk"
+                          disabled={busy || turnRunning}
+                          onClick={() =>
+                            void act(
+                              () => window.muse.gitRevertHunk(project, selected, row.hunkIndex!),
+                              'diff',
+                            )
+                          }
+                        >
+                          <Undo2 size={11} />
+                        </button>
+                      )}
                       <br />
                     </span>
                   ))}
