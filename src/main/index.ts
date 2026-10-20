@@ -30,7 +30,7 @@ import {
 } from '../shared/protocol'
 import { MuseHost, messageOf } from './muse-host'
 import { readPreferences, writePreferences } from './preferences'
-import { getGitDiff, getGitStatus } from './git'
+import { getGitDiff, getGitStatus, getRawDiff, revertFile, revertHunk, stageFile } from './git'
 import { listProjectFiles, readProjectFile } from './files'
 import { VoiceTranscriber } from './voice'
 import {
@@ -478,6 +478,22 @@ function setupIPC() {
   handle('git-status', async (project) => getGitStatus(await knownProject(project)))
   handle('git-diff', async (project, path) =>
     getGitDiff(await knownProject(project), pathSchema.parse(path)),
+  )
+  handle('git-raw-diff', async (project, path) =>
+    getRawDiff(await knownProject(project), pathSchema.parse(path)),
+  )
+  handle('git-revert-file', async (project, path) =>
+    revertFile(await knownProject(project), pathSchema.parse(path)),
+  )
+  handle('git-revert-hunk', async (project, path, index) =>
+    revertHunk(
+      await knownProject(project),
+      pathSchema.parse(path),
+      z.number().int().min(0).parse(index),
+    ),
+  )
+  handle('git-stage-file', async (project, path) =>
+    stageFile(await knownProject(project), pathSchema.parse(path)),
   )
   handle('files', async (project, directory) =>
     listProjectFiles(await knownProject(project), z.string().max(4096).parse(directory)),

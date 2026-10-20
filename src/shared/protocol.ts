@@ -245,6 +245,10 @@ export interface DesktopAPI {
   cancelVoice(): Promise<void>
   gitStatus(project: string): Promise<GitStatus>
   gitDiff(project: string, path: string): Promise<string>
+  gitRawDiff(project: string, path: string): Promise<string>
+  gitRevertFile(project: string, path: string): Promise<void>
+  gitRevertHunk(project: string, path: string, index: number): Promise<void>
+  gitStageFile(project: string, path: string): Promise<void>
   listFiles(project: string, directory: string): Promise<ProjectFile[]>
   readFile(project: string, path: string): Promise<string>
   revealProject(project: string): Promise<void>
