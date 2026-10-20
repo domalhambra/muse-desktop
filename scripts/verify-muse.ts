@@ -8,6 +8,7 @@ import { MuseHost } from '../src/main/muse-host'
 import type { AppEvent, SessionView } from '../src/shared/protocol'
 import { discoverCli } from '../src/main/cli'
 import { recordMuseTrust } from '../src/main/muse-config'
+import { addServer, setServerEnabled, settingsFile } from '../src/main/mcp-config'
 import { worktreeParent } from '../src/shared/worktree'
 
 const binary = (await discoverCli(process.env.MUSE_BIN)).path
@@ -171,6 +172,31 @@ try {
     ),
   )
   console.log('PASS · Muse-created worktree session, worktree listing, and a turn inside it')
+
+  // MCP entries written by Desktop must be ones Muse itself resolves.
+  const settings = settingsFile(host.configDir())
+  await addServer(settings, { name: 'remote', transport: 'http', url: 'https://127.0.0.1:9/mcp' })
+  await addServer(settings, { name: 'local', transport: 'stdio', command: 'true' })
+  const museMcp = (server: string) => {
+    try {
+      return execFileSync(binary, ['mcp', 'login', server, '--headless'], {
+        input: '',
+        stdio: 'pipe',
+        timeout: 15000,
+      }).toString()
+    } catch (error) {
+      const failed = error as { stdout?: Buffer; stderr?: Buffer }
+      return `${failed.stdout ?? ''}${failed.stderr ?? ''}`
+    }
+  }
+  assert.doesNotMatch(museMcp('remote'), /no MCP server named/)
+  await setServerEnabled(settings, 'remote', false)
+  assert.match(museMcp('remote'), /is disabled/)
+  await setServerEnabled(settings, 'remote', true)
+  assert.doesNotMatch(museMcp('remote'), /disabled|no MCP server named/)
+  await host.close()
+  assert.equal((await host.connect(binary)).state, 'ready', 'Muse should start with these entries')
+  console.log('PASS · MCP entries written by Desktop resolve in Muse and keep the host starting')
 } finally {
   await host.close()
   process.env = original
