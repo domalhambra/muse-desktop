@@ -34,6 +34,7 @@ import { readPreferences, writePreferences } from './preferences'
 import { getGitDiff, getGitStatus, getRawDiff, revertFile, revertHunk, stageFile } from './git'
 import { listProjectFiles, readProjectFile } from './files'
 import { recordMuseTrust } from './muse-config'
+import { publish } from './event-bus'
 import {
   addServer,
   listServers,
@@ -80,6 +81,7 @@ const selectedFiles = new Map<string, { attachment: Attachment; path: string }>(
 const previousStatuses = new Map<string, string>()
 
 function emit(event: AppEvent) {
+  publish(event)
   if (event.type === 'session') {
     const session = event.view.session
     if (
