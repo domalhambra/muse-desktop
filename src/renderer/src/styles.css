@@ -2149,7 +2149,8 @@ details[open] > summary .details-chevron,
   background: var(--code-background);
 }
 .diff-view > span {
-  display: inline-block;
+  display: block;
+  width: max-content;
   min-width: 100%;
   padding: 0 6px;
   border-radius: 3px;
