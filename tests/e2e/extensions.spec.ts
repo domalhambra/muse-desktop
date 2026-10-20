@@ -135,3 +135,48 @@ test('a new conversation can run in a Muse-created worktree and merge back', asy
     await rm(sandbox, { recursive: true, force: true })
   }
 })
+
+test('the MCP servers tab edits Muse settings.json without exposing secrets', async () => {
+  const sandbox = await realpath(await mkdtemp(join(tmpdir(), 'muse-desktop-mcp-')))
+  const project = join(sandbox, 'tools')
+  await mkdir(project)
+  const settings = join(sandbox, 'config', 'muse', 'settings.json')
+  await mkdir(join(sandbox, 'config', 'muse'), { recursive: true })
+  await writeFile(settings, JSON.stringify({ schema_version: 1, model: 'keep-me' }))
+  const read = async () => JSON.parse(await readFile(settings, 'utf8'))
+  let app: ElectronApplication | undefined
+  try {
+    const launched = await launch(sandbox, project)
+    app = launched.app
+    const page = launched.page
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('button', { name: 'MCP servers', exact: true }).click()
+    await expect(page.getByText('No MCP servers are configured yet.')).toBeVisible()
+    await page.getByRole('button', { name: 'Add server' }).click()
+    await page.getByLabel('Name', { exact: true }).fill('files')
+    await page.getByLabel('Command', { exact: true }).fill('npx')
+    await page.getByLabel('Arguments, one per line').fill('-y\n@scope/server')
+    await page.getByLabel('Environment, one KEY=value per line').fill('API_TOKEN=very-secret')
+    await page.getByRole('button', { name: 'Add server' }).last().click()
+    await expect(page.getByText('Environment: API_TOKEN')).toBeVisible()
+    await expect(page.getByText('very-secret')).toHaveCount(0)
+    await expect(page.getByText('Reconnect Muse Code to apply your changes.')).toBeVisible()
+    expect(await read()).toEqual({
+      schema_version: 1,
+      model: 'keep-me',
+      mcpServers: {
+        files: { command: 'npx', args: ['-y', '@scope/server'], env: { API_TOKEN: 'very-secret' } },
+      },
+    })
+    await page.getByRole('checkbox', { name: 'Enable files' }).click()
+    await expect.poll(async () => (await read()).mcpServers.files.enabled).toBe(false)
+    page.once('dialog', (dialog) => void dialog.accept())
+    await page.getByRole('button', { name: 'Remove files' }).click()
+    await expect.poll(async () => (await read()).mcpServers).toEqual({})
+    await page.getByRole('button', { name: 'Reconnect', exact: true }).click()
+    await expect(page.getByText('Connected to Muse Code', { exact: true })).toBeVisible()
+  } finally {
+    await app?.close()
+    await rm(sandbox, { recursive: true, force: true })
+  }
+})

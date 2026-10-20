@@ -189,6 +189,26 @@ export const worktreeEntrySchema = z.object({
   sessionIds: z.array(z.string()),
 })
 export type WorktreeEntry = z.infer<typeof worktreeEntrySchema>
+/** An MCP server from Muse's settings.json. Secret values never leave the main process. */
+export type McpServerView = {
+  name: string
+  transport: 'stdio' | 'http'
+  enabled: boolean
+  command?: string
+  args?: string[]
+  url?: string
+  envNames?: string[]
+  headerNames?: string[]
+}
+export type McpServerInput =
+  | {
+      name: string
+      transport: 'stdio'
+      command: string
+      args: string[]
+      env: Record<string, string>
+    }
+  | { name: string; transport: 'http'; url: string; headers: Record<string, string> }
 export type UpdateStatus = {
   available: boolean
   canCheck: boolean
@@ -239,6 +259,13 @@ export interface DesktopAPI {
   listWorktrees(project: string): Promise<WorktreeEntry[]>
   mergeWorktree(project: string, path: string): Promise<{ ok: boolean; output: string }>
   removeWorktree(project: string, path: string): Promise<void>
+  mcpList(): Promise<{ file: string; servers: McpServerView[] }>
+  mcpAdd(server: McpServerInput): Promise<void>
+  mcpSetEnabled(name: string, enabled: boolean): Promise<void>
+  mcpRemove(name: string): Promise<void>
+  /** Runs Muse's own `muse mcp login|logout <name>` in Terminal. */
+  mcpLogin(name: string, logout?: boolean): Promise<void>
+  mcpRevealSettings(): Promise<void>
   openSession(sessionId: string): Promise<SessionView>
   send(input: {
     sessionId: string

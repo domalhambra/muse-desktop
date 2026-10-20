@@ -100,3 +100,12 @@ describe('Muse MCP settings', () => {
     expect(await readFile(file, 'utf8')).toBe('{ nope')
   })
 })
+
+describe('MCP form pairs', () => {
+  it('parses env and header lines and rejects malformed ones', async () => {
+    const { parsePairs } = await import('../../src/renderer/src/components/McpSettings')
+    expect(parsePairs('A=1\n\n B = two=2 \n', '=')).toEqual({ A: '1', B: 'two=2' })
+    expect(parsePairs('Authorization: Bearer x', ':')).toEqual({ Authorization: 'Bearer x' })
+    expect(() => parsePairs('novalue', '=')).toThrow('name=value')
+  })
+})

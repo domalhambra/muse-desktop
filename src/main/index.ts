@@ -26,6 +26,7 @@ import {
   preferencesSchema,
   type AppEvent,
   type Attachment,
+  type McpServerView,
   type Preferences,
 } from '../shared/protocol'
 import { MuseHost, messageOf } from './muse-host'
@@ -33,6 +34,14 @@ import { readPreferences, writePreferences } from './preferences'
 import { getGitDiff, getGitStatus, getRawDiff, revertFile, revertHunk, stageFile } from './git'
 import { listProjectFiles, readProjectFile } from './files'
 import { recordMuseTrust } from './muse-config'
+import {
+  addServer,
+  listServers,
+  mcpServerSchema,
+  removeServer,
+  setServerEnabled,
+  settingsFile,
+} from './mcp-config'
 import { mergeWorktree, removeWorktree } from './worktrees'
 import { projectRoot, worktreeParent } from '../shared/worktree'
 import { VoiceTranscriber } from './voice'
@@ -362,6 +371,42 @@ function setupIPC() {
       worktree,
     })
   })
+  const mcpFile = () => settingsFile(muse.configDir())
+  const mcpName = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
+  handle('mcp-list', async (): Promise<{ file: string; servers: McpServerView[] }> => ({
+    file: mcpFile(),
+    servers: (await listServers(mcpFile())).map((server) =>
+      server.transport === 'stdio'
+        ? {
+            name: server.name,
+            transport: server.transport,
+            enabled: server.enabled,
+            command: server.command,
+            args: server.args,
+            envNames: Object.keys(server.env),
+          }
+        : {
+            name: server.name,
+            transport: server.transport,
+            enabled: server.enabled,
+            url: server.url,
+            headerNames: Object.keys(server.headers),
+          },
+    ),
+  }))
+  handle('mcp-add', (server) => addServer(mcpFile(), mcpServerSchema.parse(server)))
+  handle('mcp-enabled', (name, enabled) =>
+    setServerEnabled(mcpFile(), mcpName.parse(name), z.boolean().parse(enabled)),
+  )
+  handle('mcp-remove', (name) => removeServer(mcpFile(), mcpName.parse(name)))
+  handle('mcp-login', async (name, logout) => {
+    const server = (await listServers(mcpFile())).find(
+      (entry) => entry.name === mcpName.parse(name),
+    )
+    if (server?.transport !== 'http') throw new Error('Only remote MCP servers use sign-in.')
+    await openProjectTerminal(homedir(), ['mcp', logout === true ? 'logout' : 'login', server.name])
+  })
+  handle('mcp-reveal', () => shell.showItemInFolder(mcpFile()))
   handle('worktrees', async (project) => muse.listWorktrees(await knownProject(project)))
   handle('worktree-merge', async (project, path) =>
     mergeWorktree(projectRoot(await knownProject(project)), pathSchema.parse(path)),

@@ -9,6 +9,7 @@ import {
   Monitor,
   Moon,
   Palette,
+  Plug,
   Smile,
   RefreshCw,
   Sun,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react'
 import type { ConnectionStatus, Preferences, Theme, UpdateStatus } from '../../../shared/protocol'
 import { Dialog, MuseMark } from './Primitives'
+import { McpSettings } from './McpSettings'
 
 export const themes: { id: Theme; label: string; description: string; icon: typeof Sun }[] = [
   { id: 'muse', label: 'Muse', description: 'Electric blue', icon: Palette },
@@ -46,7 +48,7 @@ export function Settings({
   onReconnect: () => void
   initialTab: 'appearance' | 'connection'
 }) {
-  const [tab, setTab] = useState<'appearance' | 'connection' | 'about'>(initialTab)
+  const [tab, setTab] = useState<'appearance' | 'connection' | 'mcp' | 'about'>(initialTab)
   const [cliPath, setCliPath] = useState(preferences.cliPath)
   return (
     <Dialog title="Settings" onClose={onClose} className="settings-dialog">
@@ -65,6 +67,10 @@ export function Settings({
           >
             <Terminal size={16} />
             Muse Code
+          </button>
+          <button className={tab === 'mcp' ? 'selected' : ''} onClick={() => setTab('mcp')}>
+            <Plug size={16} />
+            MCP servers
           </button>
           <button className={tab === 'about' ? 'selected' : ''} onClick={() => setTab('about')}>
             <MuseMark size={16} />
@@ -190,6 +196,7 @@ export function Settings({
               </label>
             </>
           )}
+          {tab === 'mcp' && <McpSettings onError={onError} onReconnect={onReconnect} />}
           {tab === 'connection' && (
             <>
               <div className="settings-section-heading">

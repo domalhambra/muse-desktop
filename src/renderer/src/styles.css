@@ -4006,3 +4006,65 @@ button.breadcrumb-segment:hover {
   color: var(--muted);
   font-size: var(--font-support);
 }
+
+.mcp-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mcp-server .setting-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mcp-transport {
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--secondary-text);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 15px;
+}
+.mcp-server > div:first-child {
+  min-width: 0;
+}
+.mcp-detail {
+  font-family: var(--font-family-code);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.mcp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+.mcp-form .segmented {
+  align-self: flex-start;
+  margin-bottom: 6px;
+}
+.mcp-form .segmented > button {
+  width: auto;
+  padding: 0 12px;
+  white-space: nowrap;
+  font-size: var(--font-support);
+}
+.mcp-form textarea.text-input {
+  resize: vertical;
+  font-family: var(--font-family-code);
+}
+.mcp-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
