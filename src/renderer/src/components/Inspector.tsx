@@ -14,7 +14,8 @@ import {
   Undo2,
   X,
 } from 'lucide-react'
-import type { GitStatus, SessionView } from '../../../shared/protocol'
+import type { GitStatus, SessionView, WorktreeEntry } from '../../../shared/protocol'
+import { worktreeParent } from '../../../shared/worktree'
 import { IconButton, projectName } from './Primitives'
 
 // Hunk indexes count only the `Working changes` section, which is the raw
@@ -71,6 +72,7 @@ export function Inspector({
   onClose,
   onMentionDiff,
   onError,
+  onSuccess,
 }: {
   open?: boolean
   project: string
@@ -79,9 +81,11 @@ export function Inspector({
   onClose: () => void
   onMentionDiff?: (path: string) => void
   onError: (message: string) => void
+  onSuccess?: (message: string) => void
 }) {
   const [tab, setTab] = useState<'changes' | 'activity'>('changes')
   const [git, setGit] = useState<GitStatus>()
+  const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState('')
@@ -121,6 +125,12 @@ export function Inspector({
     if (!project) return
     setLoading(true)
     setError('')
+    void window.muse
+      .listWorktrees(project)
+      .catch(() => [])
+      .then((result) => {
+        if (!cancelled) setWorktrees(result)
+      })
     void window.muse
       .gitStatus(project)
       .then((result) => {
@@ -340,6 +350,76 @@ export function Inspector({
                           : 'This folder isn’t a Git repository. Muse can still work with its files.'}
                     </p>
                   </div>
+                )}
+                {worktrees.some((entry) => worktreeParent(entry.path)) && (
+                  <section className="worktree-list" aria-label="Muse worktrees">
+                    <h4>Muse worktrees</h4>
+                    {worktrees
+                      .filter((entry) => worktreeParent(entry.path))
+                      .map((entry) => {
+                        const name = entry.path.split(/[/\\]/).at(-1)
+                        const mainBranch =
+                          worktrees.find((other) => other.isMain)?.branch || 'the main checkout'
+                        const isOpen = entry.path === project
+                        return (
+                          <div className="worktree-row" key={entry.path}>
+                            <GitBranch size={13} />
+                            <span>
+                              <strong title={entry.path}>{name}</strong>
+                              <small>
+                                {entry.branch || 'Detached'}
+                                {entry.sessionIds.length > 0 &&
+                                  ` · ${entry.sessionIds.length === 1 ? 'a conversation' : `${entry.sessionIds.length} conversations`} open`}
+                              </small>
+                            </span>
+                            <button
+                              type="button"
+                              className="diff-ask-button"
+                              disabled={busy || turnRunning}
+                              aria-label={`Merge ${name} into ${mainBranch}`}
+                              title={`Merge ${entry.branch || name} into ${mainBranch}`}
+                              onClick={() =>
+                                void act(async () => {
+                                  const result = await window.muse.mergeWorktree(
+                                    project,
+                                    entry.path,
+                                  )
+                                  if (!result.ok) throw new Error(result.output)
+                                  onSuccess?.(result.output)
+                                }, 'list')
+                              }
+                            >
+                              Merge
+                            </button>
+                            <button
+                              type="button"
+                              className="diff-ask-button"
+                              disabled={busy || isOpen}
+                              aria-label={`Remove worktree ${name}`}
+                              title={
+                                isOpen
+                                  ? 'Open another conversation before removing this worktree'
+                                  : 'Remove this worktree (its branch is kept)'
+                              }
+                              onClick={() => {
+                                if (
+                                  !window.confirm(
+                                    `Remove the worktree ${name}? Uncommitted changes in it are discarded. The branch ${entry.branch || ''} is kept.`,
+                                  )
+                                )
+                                  return
+                                void act(
+                                  () => window.muse.removeWorktree(project, entry.path),
+                                  'list',
+                                )
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )
+                      })}
+                  </section>
                 )}
                 {loading && !git && (
                   <div className="inspector-empty">

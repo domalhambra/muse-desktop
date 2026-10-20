@@ -42,6 +42,7 @@ import {
   type SessionView,
   type Theme,
 } from '../../shared/protocol'
+import { projectRoot, worktreeParent } from '../../shared/worktree'
 import { Composer } from './components/Composer'
 import { CommandMenu } from './components/CommandMenu'
 import { Inspector } from './components/Inspector'
@@ -112,6 +113,7 @@ export function App() {
   const [loadingSession, setLoadingSession] = useState(false)
   const [sidebar, setSidebar] = useState(true)
   const [inspector, setInspector] = useState(false)
+  const [isolate, setIsolate] = useState(false)
   const [settings, setSettings] = useState<'appearance' | 'connection' | false>(false)
   const [page, setPage] = useState<'chat' | 'projects' | 'files' | 'docs'>('chat')
   const [commands, setCommands] = useState(false)
@@ -404,8 +406,17 @@ export function App() {
           if (!root) return false
           setProject(root)
         }
-        current = await window.muse.createSession(root, modelId || undefined)
+        current = await window.muse.createSession(
+          root,
+          modelId || undefined,
+          isolate ? { worktree: true } : undefined,
+        )
         if (openSequence.current === sequence) activeId.current = current.session.sessionId
+        if (isolate) {
+          setIsolate(false)
+          // Muse runs this conversation in its new worktree; follow it there.
+          if (current.session.workspaceRoot) setProject(current.session.workspaceRoot)
+        }
       }
       const submittedSessionId = current.session.sessionId
       const optimisticItem = {
@@ -483,7 +494,7 @@ export function App() {
   const visibleSessions = sessions
     .filter(
       (session) =>
-        (!project || session.workspaceRoot === project) &&
+        (!project || projectRoot(session.workspaceRoot || '') === projectRoot(project)) &&
         !['subagent', 'reminder'].includes(session.kind || '') &&
         preferences.archivedSessionIds.includes(session.sessionId) === archived,
     )
@@ -742,7 +753,17 @@ export function App() {
                                 )}
                               </span>
                               <span className="conversation-copy">
-                                <span className="conversation-title">{sessionTitle(session)}</span>
+                                <span className="conversation-title">
+                                  {(session.worktree || worktreeParent(session.workspaceRoot)) && (
+                                    <span
+                                      className="worktree-chip"
+                                      title={session.worktree?.path || session.workspaceRoot || ''}
+                                    >
+                                      worktree
+                                    </span>
+                                  )}
+                                  {sessionTitle(session)}
+                                </span>
                                 {!project && session.workspaceRoot && (
                                   <span className="conversation-project">
                                     {projectName(session.workspaceRoot)}
@@ -1067,6 +1088,8 @@ export function App() {
                         .catch((error: Error) => showError(error.message))
                   }}
                   onError={showError}
+                  worktree={isolate}
+                  onWorktree={!view && status.experimental ? setIsolate : undefined}
                 />
               </div>
             )}
@@ -1088,6 +1111,7 @@ export function App() {
           }))
         }}
         onError={showError}
+        onSuccess={showSuccess}
       />
       {settings && (
         <Settings

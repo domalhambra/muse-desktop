@@ -5,6 +5,7 @@ import {
   FileCode2,
   FileText,
   Folder,
+  GitBranchPlus,
   Image,
   Paperclip,
   Square,
@@ -50,6 +51,8 @@ export function Composer({
   onSubmit,
   onCancel,
   onError,
+  worktree = false,
+  onWorktree,
 }: {
   draft: string
   setDraft: (value: string) => void
@@ -67,6 +70,10 @@ export function Composer({
   onSubmit: (attachments: Attachment[], mode: 'queue' | 'steer') => Promise<boolean>
   onCancel: () => void
   onError: (message: string) => void
+  /** Start the next new conversation in its own Muse-created Git worktree. */
+  worktree?: boolean
+  /** Present only while composing a new conversation on a CLI that offers worktrees. */
+  onWorktree?: (value: boolean) => void
 }) {
   const [voiceBusy, setVoiceBusy] = useState(false)
   const [commandIndex, setCommandIndex] = useState(0)
@@ -411,6 +418,20 @@ export function Composer({
                   effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1),
               }))}
             />
+            {onWorktree && (
+              <IconButton
+                label={
+                  worktree
+                    ? 'Starts in a new Git worktree (click to use the project folder)'
+                    : 'Start in a new Git worktree'
+                }
+                active={worktree}
+                disabled={submitting}
+                onClick={() => onWorktree(!worktree)}
+              >
+                <GitBranchPlus size={16} />
+              </IconButton>
+            )}
           </div>
           <div className="composer-actions">
             {running && (
@@ -446,7 +467,13 @@ export function Composer({
         </div>
       </form>
       <div className="composer-footnote">
-        <span>{hasProject ? '' : 'Select a project when you send your first message.'}</span>
+        <span>
+          {!hasProject
+            ? 'Select a project when you send your first message.'
+            : worktree && onWorktree
+              ? 'Muse will create a separate Git worktree for this conversation.'
+              : ''}
+        </span>
         <span className="composer-shortcuts">
           <span className="composer-shortcut">
             <kbd>↵</kbd>

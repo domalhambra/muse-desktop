@@ -591,6 +591,17 @@ kbd {
 .conversation-indicator {
   color: var(--muted);
 }
+.worktree-chip {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--secondary-text);
+  font-size: 10px;
+  line-height: 15px;
+  vertical-align: 1px;
+}
 .conversation-row:hover .conversation-indicator,
 .conversation-row.selected .conversation-indicator {
   color: var(--text);
@@ -2113,6 +2124,12 @@ details[open] > summary .details-chevron,
   opacity: 0.5;
   cursor: default;
 }
+.diff-header:has(.diff-actions) {
+  flex-wrap: wrap;
+}
+.diff-header:has(.diff-actions) .diff-back {
+  flex-basis: 100%;
+}
 .diff-actions {
   display: inline-flex;
   gap: 6px;
@@ -2135,6 +2152,47 @@ details[open] > summary .details-chevron,
 }
 .hunk-revert:disabled {
   opacity: 0.35;
+}
+.worktree-list {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--faint-border);
+}
+.worktree-list h4 {
+  margin: 0 0 6px;
+  font-size: var(--font-caption);
+  font-weight: 600;
+  color: var(--muted);
+}
+.worktree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+}
+.worktree-row > svg {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.worktree-row > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.worktree-row strong,
+.worktree-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.worktree-row strong {
+  font-size: var(--font-support);
+  font-weight: 500;
+}
+.worktree-row small {
+  font-size: var(--font-caption);
+  color: var(--muted);
 }
 .diff-view {
   font-family: var(--font-family-code);
