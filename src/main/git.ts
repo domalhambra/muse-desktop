@@ -121,3 +121,21 @@ export async function getGitDiff(project: string, path: string) {
       .join('\n') || 'No text diff. The file may be binary or its mode changed.'
   )
 }
+
+export function splitHunks(diff: string): { header: string; hunks: string[] } {
+  const lines = diff.replace(/\n$/, '').split('\n')
+  const start = lines.findIndex((line) => line.startsWith('@@'))
+  if (start === -1) return { header: diff, hunks: [] }
+  const header = lines.slice(0, start).join('\n')
+  const hunks: string[] = []
+  let current: string[] = []
+  for (const line of lines.slice(start)) {
+    if (line.startsWith('@@') && current.length) {
+      hunks.push(current.join('\n'))
+      current = []
+    }
+    current.push(line)
+  }
+  if (current.length) hunks.push(current.join('\n'))
+  return { header, hunks }
+}
