@@ -5,6 +5,7 @@ const wire = vi.hoisted(() => ({
   request: vi.fn(),
   command: vi.fn(),
   close: vi.fn(),
+  initializeResult: { experimentalApi: true } as Record<string, unknown>,
   receive: (_notification: { method: string; params: Record<string, unknown> }) => {},
 }))
 vi.mock('../../src/main/cli', () => ({
@@ -16,6 +17,7 @@ vi.mock('@muse-code/sdk', async (importOriginal) => ({
     close: wire.close,
     initialize: async () => ({
       close: wire.close,
+      initializeResult: wire.initializeResult,
       connection: {
         request: wire.request,
         command: wire.command,
@@ -62,6 +64,7 @@ const notify = (method: string, params: Record<string, unknown>) =>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  wire.initializeResult = { experimentalApi: true }
   wire.command.mockImplementation(async (method: string) =>
     method === 'session/start' || method === 'session/resume' ? result() : {},
   )
@@ -285,5 +288,42 @@ describe('Muse protocol boundary', () => {
       { maxAttempts: 1 },
     )
     await host.close()
+  })
+})
+
+describe('Muse worktrees', () => {
+  it('asks Muse to create a worktree only when requested', async () => {
+    const host = new MuseHost(() => {})
+    expect((await host.connect('/test/muse')).experimental).toBe(true)
+    await host.create('/project')
+    expect(wire.command.mock.calls.at(-1)?.[1]).toEqual({ workspaceRoot: '/project' })
+    await host.create('/project', undefined, { worktree: true })
+    expect(wire.command.mock.calls.at(-1)?.[1]).toEqual({
+      workspaceRoot: '/project',
+      worktree: { mode: 'create' },
+    })
+  })
+  it('refuses worktree sessions when the CLI withholds experimental methods', async () => {
+    wire.initializeResult = { experimentalApi: false }
+    const host = new MuseHost(() => {})
+    await host.connect('/test/muse')
+    await expect(host.create('/project', undefined, { worktree: true })).rejects.toThrow('worktree')
+    expect(await host.listWorktrees('/project')).toEqual([])
+  })
+  it('lists worktrees and treats an untrusted repository as having none', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('/test/muse')
+    const entry = { path: '/project', branch: 'main', isMain: true, sessionIds: [] }
+    wire.request.mockImplementationOnce(async () => ({ worktrees: [entry] }))
+    expect(await host.listWorktrees('/project')).toEqual([entry])
+    const { MspError } = await import('@muse-code/sdk')
+    wire.request.mockImplementationOnce(async () => {
+      throw new MspError({
+        code: -32000,
+        message: 'not trusted',
+        data: { kind: 'workspaceNotTrusted' },
+      })
+    })
+    expect(await host.listWorktrees('/project')).toEqual([])
   })
 })

@@ -54,6 +54,7 @@ export const sessionSchema = z.object({
   turnCount: z.number(),
   kind: z.string().optional(),
   approvalMode: z.object({ mode: z.string() }).passthrough().optional(),
+  worktree: z.object({ path: z.string(), origin: z.string() }).optional(),
 })
 export type MuseSession = z.infer<typeof sessionSchema>
 
@@ -178,7 +179,16 @@ export type ConnectionStatus = {
   version?: string
   message?: string
   fingerprintWarning?: string
+  /** The CLI granted experimental MSP methods (worktrees, MCP listing). */
+  experimental?: boolean
 }
+export const worktreeEntrySchema = z.object({
+  path: z.string(),
+  branch: z.string().optional(),
+  isMain: z.boolean(),
+  sessionIds: z.array(z.string()),
+})
+export type WorktreeEntry = z.infer<typeof worktreeEntrySchema>
 export type UpdateStatus = {
   available: boolean
   canCheck: boolean
@@ -221,7 +231,14 @@ export interface DesktopAPI {
   chooseProject(): Promise<string | null>
   savePreferences(patch: Partial<Preferences>): Promise<Preferences>
   listSessions(cursor?: string): Promise<{ sessions: MuseSession[]; nextCursor: string | null }>
-  createSession(project: string, modelId?: string): Promise<SessionView>
+  createSession(
+    project: string,
+    modelId?: string,
+    options?: { worktree?: boolean },
+  ): Promise<SessionView>
+  listWorktrees(project: string): Promise<WorktreeEntry[]>
+  mergeWorktree(project: string, path: string): Promise<{ ok: boolean; output: string }>
+  removeWorktree(project: string, path: string): Promise<void>
   openSession(sessionId: string): Promise<SessionView>
   send(input: {
     sessionId: string

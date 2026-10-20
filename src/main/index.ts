@@ -32,6 +32,9 @@ import { MuseHost, messageOf } from './muse-host'
 import { readPreferences, writePreferences } from './preferences'
 import { getGitDiff, getGitStatus, getRawDiff, revertFile, revertHunk, stageFile } from './git'
 import { listProjectFiles, readProjectFile } from './files'
+import { recordMuseTrust } from './muse-config'
+import { mergeWorktree, removeWorktree } from './worktrees'
+import { projectRoot, worktreeParent } from '../shared/worktree'
 import { VoiceTranscriber } from './voice'
 import {
   initializeUpdates,
@@ -155,10 +158,14 @@ async function knownProject(value: unknown) {
       }
     }),
   )
+  // A Muse-created worktree (`<project>/.muse/worktrees/<name>`) belongs to its project.
+  const candidates = [project, worktreeParent(project)].filter((entry) => entry !== null)
   const matches = resolvedRecent.some((entry) =>
-    process.platform === 'win32'
-      ? entry.toLowerCase() === project.toLowerCase()
-      : entry === project,
+    candidates.some((candidate) =>
+      process.platform === 'win32'
+        ? entry.toLowerCase() === candidate.toLowerCase()
+        : entry === candidate,
+    ),
   )
   if (!matches) throw new Error('Choose this project using Open project first.')
   return project
@@ -166,6 +173,8 @@ async function knownProject(value: unknown) {
 
 async function trustProject(project: string) {
   if (preferences.trustedProjects.includes(project)) return
+  const parent = worktreeParent(project)
+  if (parent && preferences.trustedProjects.includes(parent)) return
   if (!window) throw new Error('No app window is available.')
   const { response } = await dialog.showMessageBox(window, {
     type: 'question',
@@ -342,19 +351,42 @@ function setupIPC() {
       await savePreferences({ recentProjects })
     return result
   })
-  handle('create', async (project, modelId) => {
+  handle('create', async (project, modelId, options) => {
     const root = await knownProject(project)
     await trustProject(root)
-    return muse.create(root, z.string().optional().parse(modelId))
+    const { worktree } =
+      z.object({ worktree: z.boolean().optional() }).optional().parse(options) ?? {}
+    // Muse's worktree methods need the repository recorded in its own trust.json.
+    if (worktree) await recordMuseTrust(muse.configDir(), projectRoot(root))
+    return muse.create(worktree ? projectRoot(root) : root, z.string().optional().parse(modelId), {
+      worktree,
+    })
+  })
+  handle('worktrees', async (project) => muse.listWorktrees(await knownProject(project)))
+  handle('worktree-merge', async (project, path) =>
+    mergeWorktree(projectRoot(await knownProject(project)), pathSchema.parse(path)),
+  )
+  handle('worktree-remove', async (project, path) => {
+    const root = projectRoot(await knownProject(project))
+    const target = await realpath(pathSchema.parse(path))
+    const entry = (await muse.listWorktrees(root)).find((worktree) => worktree.path === target)
+    const busy = entry?.sessionIds.some((sessionId) => {
+      try {
+        return muse.getSession(sessionId).status === 'running'
+      } catch {
+        return false
+      }
+    })
+    if (busy) throw new Error('A conversation is still working in this worktree.')
+    await removeWorktree(root, target)
   })
   handle('open', async (value) => {
     const view = await muse.open(id.parse(value))
-    if (
-      view.session.workspaceRoot &&
-      !preferences.recentProjects.includes(view.session.workspaceRoot)
-    ) {
+    // Record a worktree session's parent project, not each worktree folder.
+    const root = view.session.workspaceRoot && projectRoot(view.session.workspaceRoot)
+    if (root && !preferences.recentProjects.includes(root)) {
       await savePreferences({
-        recentProjects: [view.session.workspaceRoot, ...preferences.recentProjects].slice(0, 30),
+        recentProjects: [root, ...preferences.recentProjects].slice(0, 30),
       })
     }
     return view

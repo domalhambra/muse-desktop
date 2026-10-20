@@ -6,6 +6,7 @@ import {
   modelSchema,
   questionSchema,
   sessionSchema,
+  worktreeEntrySchema,
   type AppEvent,
   type ConnectionStatus,
   type MuseSession,
@@ -14,6 +15,7 @@ import {
   type TranscriptItem,
 } from '../shared/protocol'
 import { discoverCli } from './cli'
+import { museConfigDir } from './muse-config'
 
 const sessionResultSchema = z.object({
   session: sessionSchema,
@@ -42,6 +44,8 @@ export class MuseHost {
   private timers = new Map<string, ReturnType<typeof setTimeout>>()
   private refreshing = new Set<string>()
   private closing = false
+  private environment: NodeJS.ProcessEnv = process.env
+  private experimental = false
 
   constructor(private emit: (event: AppEvent) => void) {}
 
@@ -60,6 +64,7 @@ export class MuseHost {
     let handshake: ReturnType<typeof spawnMspConnection> | undefined
     try {
       const cli = await discoverCli(cliPath)
+      this.environment = cli.environment
       const isCmdWrapper = process.platform === 'win32' && /\.(cmd|bat)$/i.test(cli.path)
       const serveArgs = [
         'serve',
@@ -77,7 +82,11 @@ export class MuseHost {
         this.host = await Promise.race([
           handshake.initialize({
             clientInfo: { name: 'muse_desktop', title: 'Muse Desktop', version: '0.2.0' },
-            capabilities: { userInputDialogs: true, requestedCapabilities: ['sessionListStream'] },
+            capabilities: {
+              userInputDialogs: true,
+              requestedCapabilities: ['sessionListStream'],
+              experimentalApi: true,
+            },
           }),
           new Promise<never>((_, reject) => {
             timeout = setTimeout(
@@ -114,8 +123,10 @@ export class MuseHost {
           message: 'The Muse connection closed. Reconnect to restore your saved conversations.',
         })
       })
+      this.experimental = this.host.initializeResult?.experimentalApi === true
       this.setStatus({
         state: 'ready',
+        experimental: this.experimental,
         path: cli.path,
         version: cli.version,
         message: cli.shellWarning,
@@ -159,13 +170,21 @@ export class MuseHost {
     return z.object({ models: z.array(modelSchema) }).parse(result).models
   }
 
-  async create(project: string, modelId?: string) {
+  /** Muse Code's config folder (settings.json, auth.json, trust.json). */
+  configDir() {
+    return museConfigDir(this.environment)
+  }
+
+  async create(project: string, modelId?: string, options: { worktree?: boolean } = {}) {
+    if (options.worktree && !this.experimental)
+      throw new Error('This Muse Code version does not offer worktree sessions.')
     const result = sessionResultSchema.parse(
       await this.connection.command(
         'session/start',
         {
           workspaceRoot: project,
           ...(modelId ? { modelId } : {}),
+          ...(options.worktree ? { worktree: { mode: 'create' } } : {}),
         },
         { maxAttempts: 1 },
       ),
@@ -410,6 +429,20 @@ export class MuseHost {
         ? ''
         : '\n\n[Preview limited to 1 MB. Full output remains in Muse’s session log.]')
     )
+  }
+
+  /** Every worktree of the repository at `project`, via Muse's `worktree/list`. */
+  async listWorktrees(project: string) {
+    if (!this.experimental) return []
+    try {
+      const result = await this.connection.request('worktree/list', { workspaceRoot: project })
+      return z.object({ worktrees: z.array(worktreeEntrySchema) }).parse(result).worktrees
+    } catch (error) {
+      // Untrusted or non-Git folders have no Muse worktrees to show.
+      if (error instanceof MspError && error.kind === 'workspaceNotTrusted') return []
+      if (/not a git repository|not trusted|no repository/i.test(messageOf(error))) return []
+      throw error
+    }
   }
 
   getSession(sessionId: string): MuseSession {

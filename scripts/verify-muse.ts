@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import { MspError } from '@muse-code/sdk'
+import { execFileSync } from 'node:child_process'
 import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MuseHost } from '../src/main/muse-host'
 import type { AppEvent, SessionView } from '../src/shared/protocol'
 import { discoverCli } from '../src/main/cli'
+import { recordMuseTrust } from '../src/main/muse-config'
+import { worktreeParent } from '../src/shared/worktree'
 
 const binary = (await discoverCli(process.env.MUSE_BIN)).path
 const temporary = await realpath(await mkdtemp(join(tmpdir(), 'muse-desktop-protocol-')))
@@ -123,6 +126,51 @@ try {
       error.data.reason === 'compaction_unavailable',
   )
   console.log('PASS · Echo provider reports unsupported compaction without claiming success')
+
+  const repository = join(temporary, 'repository')
+  await mkdir(repository)
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repository, stdio: 'pipe' })
+  git('init', '-q')
+  git(
+    '-c',
+    'user.email=t@e.com',
+    '-c',
+    'user.name=T',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'init',
+  )
+  assert.equal(host.status.experimental, true, 'Muse should grant the experimental API')
+  // Written after the host started, as Desktop does on the first worktree request.
+  await recordMuseTrust(host.configDir(), repository)
+  const isolated = await host.create(repository, undefined, { worktree: true })
+  const worktreePath = isolated.session.workspaceRoot ?? ''
+  assert.equal(worktreeParent(worktreePath), repository)
+  assert.equal(isolated.session.worktree?.path, worktreePath)
+  assert.equal(isolated.session.worktree?.origin, 'created')
+  const worktrees = await host.listWorktrees(repository)
+  const entry = worktrees.find((worktree) => worktree.path === worktreePath)
+  assert(entry?.branch?.startsWith('muse/'), 'Muse should check out a muse/ branch')
+  assert.deepEqual(entry?.sessionIds, [isolated.session.sessionId])
+  updates.length = 0
+  await host.send(
+    isolated.session.sessionId,
+    [{ type: 'text', text: 'Hello from a worktree.' }],
+    'high',
+    'queue',
+    'Hello from a worktree.',
+  )
+  await waitFor(() =>
+    updates.some(
+      (view) =>
+        view.session.sessionId === isolated.session.sessionId &&
+        view.session.status === 'idle' &&
+        view.items.some((item) => item.kind === 'agentMessage' && item.status === 'completed'),
+    ),
+  )
+  console.log('PASS · Muse-created worktree session, worktree listing, and a turn inside it')
 } finally {
   await host.close()
   process.env = original
