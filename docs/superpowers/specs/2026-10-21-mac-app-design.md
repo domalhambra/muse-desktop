@@ -39,13 +39,13 @@ The Mac app never loads Electron or Chromium. At runtime it is the SwiftUI app p
 
 ### Units
 
-| Unit                    | Path                                                                  | Owns                                                                             | Depends on                      |
-| ----------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------- |
-| The core                | `src/main/` except `index.ts` and `updates.ts`                        | Everything the backend does today                                                | Node, `@muse-code/sdk`, Git     |
-| The headless front door | `src/headless/server.ts`, `src/headless/wire.ts`                      | Reading requests, calling the core, writing replies, events and Asks             | The core                        |
-| The backend client      | `mac/Packages/MuseBackend/`                                           | Starting `server.ts`, the four message kinds, typed requests and events in Swift | Node on the Mac                 |
-| `MuseKit`               | `mac/Packages/MuseKit/`                                               | Markdown, transcript and sidebar rules, the `Workspace` store                    | `MuseBackend`, `swift-markdown` |
-| The app                 | `mac/project.yml` (XcodeGen generates the Xcode project), `mac/mMac/` | All UI and every native service                                                  | `MuseBackend`                   |
+| Unit                    | Path                                                                        | Owns                                                                             | Depends on                      |
+| ----------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------- |
+| The core                | `src/main/` except `index.ts` and `updates.ts`                              | Everything the backend does today                                                | Node, `@muse-code/sdk`, Git     |
+| The headless front door | `src/headless/server.ts`, `src/headless/backend.ts`, `src/headless/wire.ts` | Reading requests, calling the core, writing replies, events and Asks             | The core                        |
+| The backend client      | `mac/Packages/MuseBackend/`                                                 | Starting `server.ts`, the four message kinds, typed requests and events in Swift | Node on the Mac                 |
+| `MuseKit`               | `mac/Packages/MuseKit/`                                                     | Markdown, transcript and sidebar rules, the `Workspace` store                    | `MuseBackend`, `swift-markdown` |
+| The app                 | `mac/project.yml` (XcodeGen generates the Xcode project), `mac/mMac/`       | All UI and every native service                                                  | `MuseBackend`                   |
 
 `MuseBackend` has no UI, and the app never writes JSON itself.
 
@@ -68,7 +68,7 @@ A request the backend cannot read, but whose `id` it can read, gets an `ok: fals
 
 | Today in `index.ts`                                                             | In mMac                                                                                                        |
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Trust prompt, "Reconnect while Muse is working?", "Quit while Muse is working?" | Asks. The backend still decides when to ask, and the app shows a native alert.                                 |
+| Trust prompt, "Reconnect while Muse is working?", "Quit while Muse is working?" | Asks. The backend still decides when to ask, and the app shows each one as a sheet on its window.              |
 | Project, CLI, attachment and export pickers                                     | The app shows the native panel and sends the chosen path. The backend validates it as today.                   |
 | Completion notification                                                         | The app posts it from session events.                                                                          |
 | Finder, Terminal, links, revealing a file                                       | The app uses `NSWorkspace`.                                                                                    |
@@ -84,7 +84,7 @@ The data folder is `~/Library/Application Support/mMac`. The app never reads or 
 - **Start:** the app finds Node. If Node is missing, it shows a setup screen with the fix. Then it starts `server.ts`, sends `hello` and `start`, and the backend connects to Muse.
 - **The backend crashes:** the app shows "The Muse backend stopped" with **Restart**. Conversations are durable in Muse Code, and unsent drafts live in the app, so nothing is lost.
 - **The app crashes:** the backend sees stdin close and runs the normal quit path: it stops the bridges and closes `muse serve`. No orphaned process.
-- **Quit:** if a turn is running, the backend Asks first. Then the app sends `shutdown`, waits up to 5 seconds, and force-stops the backend.
+- **Quit:** the app sends `shutdown`. If a turn is running, the backend Asks inside that request, and "Keep working" keeps the app open. Once it may quit, the backend replies and starts its quit path. The app waits up to 5 seconds for it to exit, then force-stops it. A second Quit force-stops it at once.
 - **Failed requests:** the app shows the backend's error message. Those messages are already written for the user.
 
 ## Testing
@@ -121,7 +121,7 @@ Each item names the test that proves it, or the date of a manual check when no t
 - [x] Finds the installed `muse`, including the login-shell environment, and accepts a custom path (M1; `npm run test:integration`, `aCustomCLIPathIsSavedThenReconnectReopens`)
 - [x] Streams conversations, reasoning summaries, grouped tool activity and stored output (M1; `TranscriptEntryTests.swift`, `storedOutputIsReadOnce`, the echo UI test)
 - [x] Code blocks with a language label and one-click copy (M1; `MarkdownBlockTests.swift`, the echo UI test)
-- [x] Opens and resumes sessions; renames them (M1; `aLateOpenReplyIsIgnored`, the echo UI test's rename)
+- [x] Opens and resumes sessions; renames them (M1; `aLateOpenReplyIsIgnored`, `sendingToAnOpenedConversationResumesIt`, the echo UI test's rename)
 - [x] The CLI's exact approval choices, and agent questions (M1; `CardsTests.swift`, `cardsCallTheBackend`, the fake-backend UI test)
 - [x] Cancel, queued follow-ups and steering (M1; `stopCancelsTheOpenConversation`, `steerAndEffortTravelWithTheMessage`)
 - [x] Model selection and reasoning effort (M1; `theDefaultModelIsChosenAndModelsChangeWhereTheyShould`, `effortIsSavedAsAPreference`, the fake-backend UI test)

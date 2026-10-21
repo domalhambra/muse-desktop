@@ -29,6 +29,8 @@ final class MMacUITests: XCTestCase {
     let app = XCUIApplication()
     app.launchEnvironment = [
       "HOME": temporary.path,
+      // A login shell started under HOME must not read the real dotfiles.
+      "ZDOTDIR": temporary.path,
       "MUSE_HOME": temporary.appending(path: "muse").path,
       "XDG_CONFIG_HOME": temporary.appending(path: "config").path,
       "XDG_DATA_HOME": temporary.appending(path: "data").path,

@@ -64,6 +64,19 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(workspace.errorMessage == "Project trust was cancelled. No session was started.")
 }
 
+@MainActor @Test func sendingToAnOpenedConversationResumesIt() async throws {
+  // A conversation from history: the message goes to it, and no new one is created.
+  let (workspace, backend) = await makeWorkspace(script: openScript())
+  await workspace.open("s1")
+  workspace.draft = "more"
+  #expect(await workspace.send() == .sent)
+  #expect(requests(backend) == [
+    ["open", ["s1"]],
+    ["send", [["sessionId": "s1", "text": "more", "attachments": [], "effort": "high", "mode": "queue"]]],
+  ])
+  #expect(workspace.view?.session.sessionId == "s1")
+}
+
 @MainActor @Test func steerAndEffortTravelWithTheMessage() async throws {
   let (workspace, backend) = await makeWorkspace(
     preferences: Preferences(recentProjects: ["/p"], reasoningEffort: "max"), script: openScript())
