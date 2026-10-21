@@ -112,7 +112,7 @@ The gate is in "Prove a change" in `docs/changing-things.md`: the six commands t
 | M3: Settings  | A macOS Settings window: Muse Code path, MCP servers, bridges, appearance, notifications                                                                                               |
 | M4: the rest  | Everything else on the parity checklist                                                                                                                                                |
 
-Each milestone is one PR into the fork's `main` from the `mac-app` branch, and Dom merges.
+Each milestone is one PR from its own branch into the fork's `extensions` branch: M0 from `mac-app`, M1 from `mac-m1`. Dom merges.
 
 ## Parity checklist
 
