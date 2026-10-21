@@ -5,13 +5,19 @@ public enum Launcher {
   /// Starts `src/headless/server.ts` in `repository`. Blocks for up to 6 seconds while it reads
   /// the login shell's PATH, so call it off the main actor.
   public static func launch(repository: URL) throws -> ProcessTransport {
-    var environment = ProcessInfo.processInfo.environment
+    // Xcode's debug launches inject DYLD_ variables and NODE_OPTIONS, which Node must not inherit.
+    var environment = ProcessInfo.processInfo.environment.filter {
+      !$0.key.hasPrefix("DYLD_") && $0.key != "NODE_OPTIONS"
+    }
+    // The login shell's PATH comes first, so the backend uses the same tools as the terminal.
     let path = mergePaths([
-      environment["PATH"], loginPath(), "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+      loginPath(), environment["PATH"], "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
     ])
     environment["PATH"] = path
     guard let node = findNode(path: path) else {
-      throw BackendError.backend("mMac could not find Node. Install Node 22.12 or newer, then restart mMac.")
+      throw BackendError.backend(
+        "mMac could not find Node on the PATH from your login shell. Install Node 22.12 or newer, "
+          + "or check that your shell profile adds it to PATH, then restart mMac.")
     }
     return try ProcessTransport(node: node, repository: repository, environment: environment)
   }
@@ -33,37 +39,24 @@ public enum Launcher {
   /// shell's start-up files, can hold stdout open after the process exits. That case returns
   /// what was read by the deadline.
   static func output(of process: Process, timeout: TimeInterval) -> Data? {
-    final class Collected: @unchecked Sendable {
-      private let lock = NSLock()
-      private var data = Data()
-      func append(_ more: Data) { lock.withLock { data.append(more) } }
-      var value: Data { lock.withLock { data } }
-    }
     let pipe = Pipe()
-    let collected = Collected()
+    var data = Data()
     let closed = DispatchSemaphore(value: 0)
+    let reader = PipeReader(
+      pipe.fileHandleForReading, received: { data.append($0) }, ended: { closed.signal() })
     process.standardOutput = pipe
-    pipe.fileHandleForReading.readabilityHandler = { handle in
-      let data = handle.availableData
-      if data.isEmpty {
-        handle.readabilityHandler = nil
-        closed.signal()
-      } else {
-        collected.append(data)
-      }
-    }
     do { try process.run() } catch {
-      pipe.fileHandleForReading.readabilityHandler = nil
+      reader.end()
       return nil
     }
-    if closed.wait(timeout: .now() + timeout) == .timedOut {
-      pipe.fileHandleForReading.readabilityHandler = nil
-      if process.isRunning {
-        kill(process.processIdentifier, SIGKILL)
-        return nil
-      }
+    let reachedEOF = closed.wait(timeout: .now() + timeout) == .success
+    // After `end()` no handler runs, so `data` is safe to read.
+    reader.end()
+    if !reachedEOF, process.isRunning {
+      kill(process.processIdentifier, SIGKILL)
+      return nil
     }
-    return collected.value
+    return data
   }
 
   /// The text after the `MMAC_PATH` marker. Shell start-up output before it is ignored.

@@ -14,18 +14,11 @@ public protocol Transport: Sendable {
 
 /// Runs a child process and speaks lines over its stdin and stdout. mMac runs
 /// `node --import tsx src/headless/server.ts` in a checkout of the fork.
-public final class ProcessTransport: Transport, @unchecked Sendable {
+public final class ProcessTransport: Transport, Sendable {
   public let lines: AsyncStream<Data>
   private let process = Process()
   private let input = Pipe()
-  private let output = Pipe()
-
-  /// Splits stdout into lines. The pipe's handler runs on a background queue.
-  private final class Reader: @unchecked Sendable {
-    private let lock = NSLock()
-    private var splitter = LineSplitter()
-    func append(_ data: Data) -> [Data] { lock.withLock { splitter.append(data) } }
-  }
+  private let stdout: PipeReader
 
   /// Starts `src/headless/server.ts` under `node`, in `repository`.
   public convenience init(node: URL, repository: URL, environment: [String: String]) throws {
@@ -38,8 +31,16 @@ public final class ProcessTransport: Transport, @unchecked Sendable {
   public init(executable: URL, arguments: [String], directory: URL, environment: [String: String]) throws {
     // A write to a backend that has exited must throw, not end mMac with SIGPIPE.
     signal(SIGPIPE, SIG_IGN)
-    let stream = AsyncStream.makeStream(of: Data.self)
-    lines = stream.stream
+    let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
+    lines = stream
+    let output = Pipe()
+    var splitter = LineSplitter()
+    stdout = PipeReader(
+      output.fileHandleForReading,
+      received: { data in
+        for line in splitter.append(data) { continuation.yield(line) }
+      },
+      ended: { continuation.finish() })
     process.executableURL = executable
     process.arguments = arguments
     process.currentDirectoryURL = directory
@@ -47,18 +48,10 @@ public final class ProcessTransport: Transport, @unchecked Sendable {
     process.standardInput = input
     process.standardOutput = output
     process.standardError = FileHandle.standardError
-    let reader = Reader()
-    let continuation = stream.continuation
-    output.fileHandleForReading.readabilityHandler = { handle in
-      let data = handle.availableData
-      if data.isEmpty {
-        handle.readabilityHandler = nil
-        continuation.finish()
-        return
-      }
-      for line in reader.append(data) { continuation.yield(line) }
+    do { try process.run() } catch {
+      stdout.end()
+      throw error
     }
-    try process.run()
   }
 
   public func send(_ line: Data) throws {
@@ -69,14 +62,57 @@ public final class ProcessTransport: Transport, @unchecked Sendable {
     try? input.fileHandleForWriting.close()
   }
 
-  /// Sends SIGTERM, which runs the backend's normal quit path, then SIGKILL after 2 seconds.
-  /// Either signal closes the child's stdout, and the readability handler then ends `lines`.
+  /// Sends SIGTERM, which runs the backend's normal quit path, then SIGKILL after 2 seconds, and
+  /// then ends `lines`. It ends `lines` itself because a grandchild can hold stdout open after
+  /// the child is gone, so the pipe may never reach EOF.
   public func forceStop() {
-    guard process.isRunning else { return }
+    let stdout = self.stdout
+    guard process.isRunning else {
+      stdout.end()
+      return
+    }
     process.terminate()
     let process = self.process
     DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
       if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+      stdout.end()
     }
+  }
+}
+
+/// Reads a pipe on its background queue until EOF or `end()`, whichever comes first, then clears
+/// the handler, closes the read end and calls `ended` once. `received` and the close run under
+/// one lock, so a read never meets a closed handle.
+final class PipeReader: @unchecked Sendable {
+  private let lock = NSLock()
+  private let handle: FileHandle
+  private let received: (Data) -> Void
+  private let ended: () -> Void
+  private var isOpen = true
+
+  init(_ handle: FileHandle, received: @escaping (Data) -> Void, ended: @escaping () -> Void) {
+    self.handle = handle
+    self.received = received
+    self.ended = ended
+    handle.readabilityHandler = { [self] _ in read() }
+  }
+
+  /// Stops reading and closes the read end. Safe to call more than once, from any thread.
+  func end() { lock.withLock { endLocked() } }
+
+  private func read() {
+    lock.withLock {
+      guard isOpen else { return }
+      let data = handle.availableData
+      if data.isEmpty { endLocked() } else { received(data) }
+    }
+  }
+
+  private func endLocked() {
+    guard isOpen else { return }
+    isOpen = false
+    handle.readabilityHandler = nil
+    try? handle.close()
+    ended()
   }
 }
