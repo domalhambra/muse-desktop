@@ -125,8 +125,9 @@ public final class Workspace {
     if !hasLoadedHistory { historyLoading = true }
     historyError = nil
     defer { if sequence == refreshSequence { historyLoading = false } }
-    // Names known before this refresh. Each page also reads the current rows, for a session
-    // event that named a conversation between pages.
+    // Labels known before this refresh. Each page also reads the current rows, for a session
+    // event that named a conversation between pages. The open conversation counts too: a new one
+    // has no row until a refresh adds it.
     let before = Self.byId(sessions)
     var merged: [String: Session] = [:]
     var order: [String] = []
@@ -136,10 +137,11 @@ public final class Workspace {
       repeat {
         let page = try await client.sessions(cursor: cursor)
         guard sequence == refreshSequence else { return }
-        let known = before.merging(Self.byId(sessions)) { _, now in now }
+        var known = before.merging(Self.byId(sessions)) { _, now in now }
+        if let open = view?.session { known[open.sessionId] = open }
         for session in page.sessions {
           if merged[session.sessionId] == nil { order.append(session.sessionId) }
-          merged[session.sessionId] = Self.keepingKnownName(session, from: known)
+          merged[session.sessionId] = Self.keepingKnownLabels(session, from: known)
         }
         sessions = order.compactMap { merged[$0] }
         cursor = page.nextCursor
@@ -159,12 +161,15 @@ public final class Workspace {
     Dictionary(sessions.map { ($0.sessionId, $0) }, uniquingKeysWith: { first, _ in first })
   }
 
-  /// `session/list` can lag a rename for a live conversation and leave out its name. Keep the name
-  /// a session event already gave. The CLI itself lowercases ASCII letters in names.
-  static func keepingKnownName(_ session: Session, from known: [String: Session]) -> Session {
-    guard session.name == nil, let name = known[session.sessionId]?.name else { return session }
+  /// `session/list` lags a live conversation. Just after a turn it can leave out the name, the title
+  /// and the first prompt that session events already gave. Keep each one the list leaves out; a
+  /// value in the list wins. The CLI itself lowercases ASCII letters in names.
+  static func keepingKnownLabels(_ session: Session, from known: [String: Session]) -> Session {
+    guard let old = known[session.sessionId] else { return session }
     var kept = session
-    kept.name = name
+    kept.name = session.name ?? old.name
+    kept.title = session.title ?? old.title
+    kept.firstUserPrompt = session.firstUserPrompt ?? old.firstUserPrompt
     return kept
   }
 

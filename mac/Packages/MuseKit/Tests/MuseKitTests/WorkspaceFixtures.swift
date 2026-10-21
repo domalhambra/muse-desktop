@@ -11,9 +11,11 @@ func failure(_ id: Int, _ message: String) -> String { #"{"id":\#(id),"ok":false
 
 func sessionJSON(
   _ id: String, root: String = "/p", status: String = "idle", updatedAt: String = "2026-10-21T10:00:00Z",
-  name: String? = nil, modelId: String? = nil
+  name: String? = nil, modelId: String? = nil, title: String? = nil, firstUserPrompt: String? = nil
 ) -> String {
-  let named = name.map { #","name":"\#($0)""# } ?? ""
+  let named =
+    (name.map { #","name":"\#($0)""# } ?? "") + (title.map { #","title":"\#($0)""# } ?? "")
+    + (firstUserPrompt.map { #","firstUserPrompt":"\#($0)""# } ?? "")
   let model = modelId.map { #""\#($0)""# } ?? "null"
   return #"{"sessionId":"\#(id)","workspaceRoot":"\#(root)","createdAt":"2026-10-21T00:00:00Z","updatedAt":"\#(updatedAt)","status":"\#(status)","activeTurnId":null,"modelId":\#(model),"turnCount":0\#(named)}"#
 }

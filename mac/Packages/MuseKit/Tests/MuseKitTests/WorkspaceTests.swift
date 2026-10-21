@@ -75,6 +75,51 @@ import Testing
   #expect(workspace.sessions[0].name == "renamed")
 }
 
+@MainActor @Test func historyKeepsATitleAndPromptTheListOmits() async throws {
+  // Just after a turn, session/list lags and returns the row without its title and first prompt.
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "sessions" ? [reply(id, #"{"sessions":[\#(sessionJSON("s1"))],"nextCursor":null}"#)] : []
+  }
+  await workspace.refreshSessions()
+  workspace.apply(
+    .session(try decodeView(viewJSON(sessionJSON("s1", title: "Fix it", firstUserPrompt: "Fix the bug")))))
+  #expect(workspace.sessions[0].title == "Fix it")
+  await workspace.refreshSessions()
+  #expect(workspace.sessions[0].title == "Fix it")
+  #expect(workspace.sessions[0].firstUserPrompt == "Fix the bug")
+  #expect(SessionTitle.of(workspace.sessions[0]) == "Fix it")
+}
+
+@MainActor @Test func historyKeepsTheOpenConversationsPromptForANewRow() async throws {
+  // A new conversation has no row until a refresh, so a session event cannot update one. The open
+  // view still holds the prompt.
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1", firstUserPrompt: "Fix the bug")))]
+    case "sessions": [reply(id, #"{"sessions":[\#(sessionJSON("s1"))],"nextCursor":null}"#)]
+    default: []
+    }
+  }
+  await workspace.open("s1")
+  await workspace.refreshSessions()
+  #expect(workspace.sessions[0].firstUserPrompt == "Fix the bug")
+}
+
+@MainActor @Test func aTitleOrPromptFromTheListReplacesTheKnownOne() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1", title: "Older", firstUserPrompt: "Older prompt")))]
+    case "sessions":
+      [reply(id, #"{"sessions":[\#(sessionJSON("s1", title: "Newer", firstUserPrompt: "Newer prompt"))],"nextCursor":null}"#)]
+    default: []
+    }
+  }
+  await workspace.open("s1")
+  await workspace.refreshSessions()
+  #expect(workspace.sessions[0].title == "Newer")
+  #expect(workspace.sessions[0].firstUserPrompt == "Newer prompt")
+}
+
 @MainActor @Test func sessionsChangedRefreshesOnceAfterAPause() async throws {
   let (workspace, backend) = await makeWorkspace { method, _, id in
     method == "sessions" ? [reply(id, #"{"sessions":[],"nextCursor":null}"#)] : []

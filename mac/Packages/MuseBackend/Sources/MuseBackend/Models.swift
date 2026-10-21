@@ -43,8 +43,8 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
   public let activeTurnId: String?
   public var modelId: String?
   public var name: String?
-  public let title: String?
-  public let firstUserPrompt: String?
+  public var title: String?
+  public var firstUserPrompt: String?
   /// `subagent` and `reminder` sessions never show in the sidebar.
   public let kind: String?
   public let worktree: Worktree?
