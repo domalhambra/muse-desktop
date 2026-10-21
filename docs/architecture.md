@@ -72,7 +72,7 @@ Daily checks are opt-in, automatic installation and system profiling are disable
 
 ## Module map
 
-The Test column names the unit test that covers a file. A dash means no unit test does. `tests/e2e/desktop.spec.ts`, `tests/e2e/extensions.spec.ts` and `tests/e2e/setup.spec.ts` drive the whole app on top of these, and `scripts/verify-muse.ts` (`npm run test:integration`) drives the real CLI. `scripts/verify-headless.ts` (`npm run test:headless`) drives `src/headless/server.ts` the same way.
+The Test column names the unit test that covers a file. A dash means no unit test does. `tests/e2e/desktop.spec.ts`, `tests/e2e/extensions.spec.ts` and `tests/e2e/setup.spec.ts` drive the whole app on top of these, and `scripts/verify-muse.ts` (`npm run test:integration`) drives the real CLI. `scripts/verify-headless.ts` (`npm run test:headless`) drives `src/headless/server.ts` the same way. In the `src/headless/` rows, an Ask is a native alert the backend asks mMac to show, and `notYet` in the parity test lists the methods the headless backend has not ported yet.
 
 | File                                             | Owns                                                                                                 | Test                                                        |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |

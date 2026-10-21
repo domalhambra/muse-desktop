@@ -42,7 +42,7 @@ The Mac app never loads Electron or Chromium. At runtime it is the SwiftUI app p
 | Unit                    | Path                                                                  | Owns                                                                             | Depends on                  |
 | ----------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------- |
 | The core                | `src/main/` except `index.ts` and `updates.ts`                        | Everything the backend does today                                                | Node, `@muse-code/sdk`, Git |
-| The headless front door | `src/headless/server.ts`                                              | Reading requests, calling the core, writing replies, events and Asks             | The core                    |
+| The headless front door | `src/headless/server.ts`, `src/headless/wire.ts`                      | Reading requests, calling the core, writing replies, events and Asks             | The core                    |
 | The backend client      | `mac/Packages/MuseBackend/`                                           | Starting `server.ts`, the four message kinds, typed requests and events in Swift | Node on the Mac             |
 | The app                 | `mac/project.yml` (XcodeGen generates the Xcode project), `mac/mMac/` | All UI and every native service                                                  | `MuseBackend`               |
 
@@ -59,9 +59,9 @@ One JSON object per line, in both directions.
 | Event   | backend → app                | `{"event": …}`, an `AppEvent` from `src/shared/protocol.ts`                                                                                     |
 | Ask     | backend → app, then answered | `{"ask": 3, "kind": "confirm", "title": "…", "message": "…", "detail": "…", "buttons": ["…", "…"]}`, answered with `{"answer": 3, "choice": 0}` |
 
-Method names and reply shapes are today's IPC channels (`src/preload/index.ts`) and the `{ ok, value | error }` replies that `handle()` in `src/main/index.ts` writes. The first request is `hello`, which carries the build identifier. A mismatch stops the connection with a clear error. The second request, `start`, carries the data folder and the bridge token.
+Method names and reply shapes are today's IPC channels (`src/preload/index.ts`) and the `{ ok, value | error }` replies that `handle()` in `src/main/index.ts` writes. The first request is `hello`, which carries the protocol number (`HEADLESS_PROTOCOL` in `src/headless/wire.ts`). A mismatch stops the connection with a clear error. The second request, `start`, carries the data folder. In M0 it carries only that. The bridge token joins it in M3.
 
-A request the backend cannot read, but whose `id` it can read, gets an `ok: false` Reply, so mMac's call never waits forever. A line with no readable `id` becomes an error Event. mMac answers an Ask it cannot read with `-1`, the cancel choice.
+A request the backend cannot read, but whose `id` it can read, gets an `ok: false` Reply, so mMac's call never waits forever. A line with no readable `id` becomes an error Event. An Ask whose id mMac can read, but whose body it cannot, is answered with `-1`, the cancel choice. An Ask with no readable id gets only an error event.
 
 ### What moves from the backend to the app
 
@@ -98,7 +98,7 @@ Every test points `HOME`, `XDG_CONFIG_HOME` and `MUSE_HOME` at a temporary folde
 | `MuseBackend` | Every message kind is encoded, decoded and routed                                     | `swift test` against a scripted fake backend                                                                                          |
 | The app       | The main flows work end to end                                                        | UI tests through `xcodebuild test`, driving the real app, backend and echo CLI                                                        |
 
-The gate is in "Prove a change" in `docs/changing-things.md`: today's six commands, `npm run test:headless`, `swift test` and an `xcodebuild` build. `xcodebuild test` joins it when the UI tests exist.
+The gate is in "Prove a change" in `docs/changing-things.md`: the six commands the Electron app already had, `npm run test:headless`, `swift test` and an `xcodebuild` build. `xcodebuild test` joins it when the UI tests exist.
 
 ## Milestones
 
