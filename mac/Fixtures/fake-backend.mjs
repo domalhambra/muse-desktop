@@ -107,7 +107,12 @@ const update = () => setTimeout(() => write({ event: { type: 'session', view: vi
 const ready = { state: 'ready', version: 'fake' }
 
 const methods = {
-  hello: () => ({ protocol: 1, version: 'fake' }),
+  // As backend.ts does: a client that speaks another protocol gets an error reply.
+  hello: (theirs) => {
+    if (theirs !== 1)
+      throw new Error(`mMac speaks backend protocol ${theirs}, but the fake speaks 1.`)
+    return { protocol: 1, version: 'fake' }
+  },
   start: () => ({ preferences, status: ready }),
   sessions: () => ({ sessions: [session], nextCursor: null }),
   models: () => models,
@@ -139,6 +144,8 @@ let asked = false
 let waitingOpen = null
 createInterface({ input: process.stdin })
   .on('line', (line) => {
+    // As wire.ts does: blank lines are skipped.
+    if (!line.trim()) return
     const message = JSON.parse(line)
     if ('answer' in message) {
       record({ answer: message.answer, choice: message.choice })
@@ -165,6 +172,10 @@ createInterface({ input: process.stdin })
       write({ id: message.id, ok: false, error: `The fake backend has no ${message.method}.` })
       return
     }
-    write({ id: message.id, ok: true, value: action(...(message.args ?? [])) ?? null })
+    try {
+      write({ id: message.id, ok: true, value: action(...(message.args ?? [])) ?? null })
+    } catch (error) {
+      write({ id: message.id, ok: false, error: error.message })
+    }
   })
   .on('close', () => process.exit(0))

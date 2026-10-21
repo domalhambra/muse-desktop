@@ -41,6 +41,11 @@ final class MMacUITests: XCTestCase {
     // Run the backend from this checkout, whatever the build recorded.
     app.launchArguments = ["-MMacRepository", repository.path]
     app.launch()
+    // A test that fails partway still stops the app, and with it the backend, before tearDown
+    // deletes the temporary folder.
+    addTeardownBlock { @MainActor in
+      if app.state != .notRunning { app.terminate() }
+    }
     return app
   }
 

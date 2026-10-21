@@ -59,3 +59,5 @@ schemes:
         mMacUITests: [test]
     test:
       targets: [mMacUITests]
+      # UI tests drive the real desktop. Recordings would capture whatever else is on screen.
+      captureScreenshotsAutomatically: false
