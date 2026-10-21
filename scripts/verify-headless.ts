@@ -282,12 +282,24 @@ try {
     20000,
   )
 
+  // A backend that crashes (SIGKILL, no quit path) must not leave its muse serve behind.
+  const crashed = launch('The crashed backend')
+  backends.push(crashed)
+  await crashed.request('hello', HEADLESS_PROTOCOL)
+  await crashed.request('start', { dataFolder })
+  assertOwnsServe(crashed)
+  crashed.child.kill('SIGKILL')
+  await exitWithin(crashed)
+  await until(() => ownedGone(crashed), 'muse serve to stop after the backend crashed', 20000)
+
   const mismatched = launch('The mismatched backend')
   backends.push(mismatched)
   await assert.rejects(mismatched.request('hello', HEADLESS_PROTOCOL + 1), /backend protocol/)
   assert.equal(await exitWithin(mismatched), 2)
   for (const each of backends) assert(!each.fault(), String(each.fault()))
-  console.log('PASS · Closing stdin (idle or mid-connect) exits 0; a mismatched hello exits 2')
+  console.log(
+    'PASS · Closing stdin (idle or mid-connect) or a crash leaves no muse process; a mismatched hello exits 2',
+  )
 } finally {
   // Whatever happened, leave no backend and no muse serve of ours running.
   for (const each of backends) {

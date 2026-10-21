@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { HEADLESS_PROTOCOL } from '../../src/headless/wire'
 
 // mMac's backend repeats the wiring of src/main/index.ts (see the mMac spec).
 // This test keeps the two front doors from drifting apart. When a milestone
@@ -114,6 +115,19 @@ describe('headless method parity', () => {
     expect(duplicates(lists.flat())).toEqual([])
     expect(notYet.filter((name) => headless.includes(name))).toEqual([])
     expect(Object.keys(electronOnly).filter((name) => headless.includes(name))).toEqual([])
+  })
+
+  it('speaks the same protocol number as MuseBackend', () => {
+    const swift = readFileSync(
+      new URL('../../mac/Packages/MuseBackend/Sources/MuseBackend/Messages.swift', import.meta.url),
+      'utf8',
+    )
+    const match = swift.match(/public let backendProtocol = (\d+)/)
+    expect(match, 'Messages.swift should declare public let backendProtocol = N').not.toBeNull()
+    expect(
+      Number(match![1]),
+      'Raise HEADLESS_PROTOCOL in src/headless/wire.ts and backendProtocol in Messages.swift together',
+    ).toBe(HEADLESS_PROTOCOL)
   })
 
   it('has no stale entries', () => {

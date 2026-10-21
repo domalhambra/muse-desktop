@@ -62,9 +62,10 @@ public final class ProcessTransport: Transport, Sendable {
     try? input.fileHandleForWriting.close()
   }
 
-  /// Sends SIGTERM, which runs the backend's normal quit path, then SIGKILL after 2 seconds, and
-  /// then ends `lines`. It ends `lines` itself because a grandchild can hold stdout open after
-  /// the child is gone, so the pipe may never reach EOF.
+  /// Sends SIGTERM, then SIGKILL after 2 seconds, and then ends `lines`. When `waitForExit`
+  /// calls it, the backend is usually already quitting and ignores SIGTERM, so the SIGKILL does
+  /// the work. It ends `lines` itself because a grandchild can hold stdout open after the child
+  /// is gone, so the pipe may never reach EOF.
   public func forceStop() {
     let stdout = self.stdout
     guard process.isRunning else {
