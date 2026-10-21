@@ -77,17 +77,18 @@ public enum MarkdownBlock: Equatable, Sendable {
     return MarkdownListItem(checked: checked, blocks: blocks(in: item))
   }
 
-  /// The inline children of `markup` as one attributed string.
-  static func inline(_ markup: Markup, intent: InlinePresentationIntent = [], link: URL? = nil)
-    -> AttributedString
-  {
+  /// The inline children of `markup` as one attributed string. `inLink` is true inside any
+  /// Markdown link, allowed or blocked, so a blocked link's text is never autolinked.
+  static func inline(
+    _ markup: Markup, intent: InlinePresentationIntent = [], link: URL? = nil, inLink: Bool = false
+  ) -> AttributedString {
     var result = AttributedString()
     // cmark splits text at delimiters such as `_`, so adjacent text nodes are joined before
     // bare URLs are found: `https://a.com/x_y_z` links whole.
     var pending = ""
     func flush() {
       guard !pending.isEmpty else { return }
-      result += link == nil ? autolinked(pending, intent) : styled(pending, intent, link)
+      result += inLink ? styled(pending, intent, link) : autolinked(pending, intent)
       pending = ""
     }
     for child in markup.children {
@@ -99,13 +100,13 @@ public enum MarkdownBlock: Equatable, Sendable {
       if let code = child as? InlineCode {
         result += styled(code.code, intent.union(.code), link)
       } else if child is Emphasis {
-        result += inline(child, intent: intent.union(.emphasized), link: link)
+        result += inline(child, intent: intent.union(.emphasized), link: link, inLink: inLink)
       } else if child is Strong {
-        result += inline(child, intent: intent.union(.stronglyEmphasized), link: link)
+        result += inline(child, intent: intent.union(.stronglyEmphasized), link: link, inLink: inLink)
       } else if child is Strikethrough {
-        result += inline(child, intent: intent.union(.strikethrough), link: link)
+        result += inline(child, intent: intent.union(.strikethrough), link: link, inLink: inLink)
       } else if let anchor = child as? Link {
-        result += inline(child, intent: intent, link: webURL(anchor.destination) ?? link)
+        result += inline(child, intent: intent, link: webURL(anchor.destination) ?? link, inLink: true)
       } else if let image = child as? Image {
         let alt = image.plainText.isEmpty ? "External image" : image.plainText
         result += styled("[Image: \(alt)]", intent, link)
@@ -118,10 +119,10 @@ public enum MarkdownBlock: Equatable, Sendable {
       } else if let attributes = child as? InlineAttributes {
         // `^[text](attrs)` is swift-markdown's extension, not GFM: show it as typed.
         result += styled("^[", intent, link)
-        result += inline(child, intent: intent, link: link)
+        result += inline(child, intent: intent, link: link, inLink: inLink)
         result += styled("](\(attributes.attributes))", intent, link)
       } else {
-        result += inline(child, intent: intent, link: link)
+        result += inline(child, intent: intent, link: link, inLink: inLink)
       }
     }
     flush()

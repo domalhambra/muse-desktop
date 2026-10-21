@@ -148,6 +148,15 @@ private func intent(of word: String, in text: AttributedString) -> InlinePresent
   #expect(split[split.range(of: "https://b.com")!].runs.first?.link == nil)
 }
 
+@Test func aBlockedLinksTextIsNeverAutolinked() {
+  guard case .paragraph(let text) = MarkdownBlock.parse("[https://evil.com](javascript:x)").first else {
+    Issue.record("Expected a paragraph")
+    return
+  }
+  #expect(String(text.characters) == "https://evil.com")
+  #expect(text.runs.allSatisfy { $0.link == nil })
+}
+
 @Test func inlineAttributesShowLiterally() {
   #expect(MarkdownBlock.parse("a ^[text](rate: 3) b") == [.paragraph(AttributedString("a ^[text](rate: 3) b"))])
 }

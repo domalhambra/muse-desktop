@@ -26,6 +26,11 @@ let package = Package(
       ]),
     .testTarget(
       name: "MuseKitTests",
-      dependencies: ["MuseKit", .product(name: "MuseBackendTesting", package: "MuseBackend")]),
+      dependencies: [
+        "MuseKit",
+        .product(name: "MuseBackendTesting", package: "MuseBackend"),
+        // MarkdownBlockTests.swift imports Markdown directly.
+        .product(name: "Markdown", package: "swift-markdown"),
+      ]),
   ]
 )
