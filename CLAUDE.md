@@ -6,16 +6,17 @@ This file routes and does not restate. Every document is indexed at `docs/README
 
 ## Read this before changing that
 
-| Changing                                                                  | Read first                                                         |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Anything, for the first time                                              | `README.md`, then `docs/architecture.md`                           |
-| Any task: a feature, an upstream sync, a bridge, a CLI update, a decision | `docs/changing-things.md`                                          |
-| A Muse CLI behavior the extensions rely on                                | `docs/superpowers/plans/2026-10-20-discovery.md`                   |
-| A bridge request, tool or security rule                                   | `docs/bridge.md`                                                   |
-| A CLI or SDK version                                                      | `docs/compatibility.md`                                            |
-| Themes, layout or copy                                                    | `docs/design.md`, `CONTRIBUTING.md`                                |
-| Something that looks like a past decision                                 | `docs/decisions.md`                                                |
-| How this repo is documented                                               | `docs/superpowers/specs/2026-10-20-documentation-layout-design.md` |
+| Changing                                                                  | Read first                                                                                                            |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Anything, for the first time                                              | `README.md`, then `docs/architecture.md`                                                                              |
+| Any task: a feature, an upstream sync, a bridge, a CLI update, a decision | `docs/changing-things.md`                                                                                             |
+| A Muse CLI behavior the extensions rely on                                | `docs/superpowers/plans/2026-10-20-discovery.md`                                                                      |
+| A bridge request, tool or security rule                                   | `docs/bridge.md`                                                                                                      |
+| A CLI or SDK version                                                      | `docs/compatibility.md`                                                                                               |
+| Themes, layout or copy                                                    | `docs/design.md`, `CONTRIBUTING.md`                                                                                   |
+| Something that looks like a past decision                                 | `docs/decisions.md`                                                                                                   |
+| How this repo is documented                                               | `docs/superpowers/specs/2026-10-20-documentation-layout-design.md`                                                    |
+| mMac, the SwiftUI app in `mac/`, or its backend in `src/headless/`        | `docs/superpowers/specs/2026-10-21-mac-app-design.md`, then "Change mMac or its backend" in `docs/changing-things.md` |
 
 ## Invariants
 
@@ -29,7 +30,7 @@ This file routes and does not restate. Every document is indexed at `docs/README
 ## Working here
 
 - Run `npm run dev:isolated` to develop. It keeps Desktop's data out of an installed app.
-- The gate is the six commands in `docs/changing-things.md` ("Prove a change"). Integration and e2e use the echo provider. Set `MUSE_BIN="$(command -v muse)"` so they test the CLI you run.
+- The gate is the commands in `docs/changing-things.md` ("Prove a change"). Integration, headless and e2e use the echo provider. Set `MUSE_BIN="$(command -v muse)"` so they test the CLI you run.
 - The e2e run rewrites `docs/screenshots/*.png`. Run `git checkout -- docs/screenshots` before you commit.
 - `npm test` includes `tests/unit/docs.test.ts`, which runs the vendored `scripts/docs_check.py`. It holds this file under 2,000 tokens.
 - Commits use the repo's `area: summary` style.

@@ -64,6 +64,32 @@ Back up both files before you test either feature against your real Muse. The te
 - Prove: the bridge check in `npm run test:integration` and the two bridge tests in `tests/e2e/extensions.spec.ts`.
 - Read first: `docs/bridge.md`. Update it in the same change when a request field or a tool changes.
 
+## Change mMac or its backend
+
+- Edit: `src/headless/server.ts` for a backend method, `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift side and `mac/mMac/` for the UI.
+- Test: `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts` and the Swift tests in `mac/Packages/MuseBackend/Tests/`, which `swift test` runs.
+- Prove: `npm run test:headless`, then the `xcodebuild` build in "Prove a change".
+- Read first: `docs/superpowers/specs/2026-10-21-mac-app-design.md`.
+
+To port a method from `src/main/index.ts`:
+
+1. Register it with `method('name', …)` in `src/headless/server.ts`.
+2. Delete it from `notYet` in `tests/unit/headless-parity.test.ts`.
+3. Add its typed call to `mac/Packages/MuseBackend/Sources/MuseBackend/Methods.swift`.
+
+When a message shape changes, raise `HEADLESS_PROTOCOL` in `src/headless/wire.ts` and `backendProtocol` in `mac/Packages/MuseBackend/Sources/MuseBackend/Messages.swift` together. The parity test fails when they differ.
+
+To run mMac from the checkout, you need Xcode, XcodeGen (`brew install xcodegen`), Node 22.12 or newer on your login shell's PATH, and `muse`. Run `npm ci` once.
+
+1. Build mMac with the last command in "Prove a change".
+2. Run `open .cache/mmac/Build/Products/Debug/mMac.app`.
+
+XcodeGen writes the Xcode project and its Info.plist from `mac/project.yml`. Do not edit or commit them.
+
+mMac starts the backend from the checkout it was built in, with `node --import tsx src/headless/server.ts`. `npm run headless` starts the same backend for a person or a smoke check. mMac does not use it, because npm prints a banner on stdout.
+
+mMac keeps its preferences in `~/Library/Application Support/mMac`. Set `MMAC_DATA_FOLDER` to use another folder.
+
 ## Add an IPC method
 
 Follow `CONTRIBUTING.md`: add a typed method to `src/shared/protocol.ts` and `src/preload/index.ts`, validate at the boundary, and keep Electron privileges in `src/main/`.
@@ -84,7 +110,7 @@ Every Markdown file under `docs/` needs a row in `docs/README.md`. Quote repo pa
 
 ## Prove a change
 
-Run all six, in this order. The e2e run rewrites `docs/screenshots/*.png`, so restore them before you commit.
+Run all of these, in this order. The e2e run rewrites `docs/screenshots/*.png`, so restore them before you commit.
 
 ```sh
 npm run typecheck
@@ -92,8 +118,15 @@ npm test
 npm run build
 npm run format:check
 MUSE_BIN="$(command -v muse)" npm run test:integration
+MUSE_BIN="$(command -v muse)" npm run test:headless
 MUSE_BIN="$(command -v muse)" npm run test:e2e
 git checkout -- docs/screenshots
+swift test --package-path mac/Packages/MuseBackend --scratch-path .cache/swift
+(cd mac && xcodegen generate) && xcodebuild -project mac/mMac.xcodeproj -scheme mMac -configuration Debug -derivedDataPath .cache/mmac build
 ```
 
 The first e2e run on a new machine can time out while Playwright downloads Electron. Run it again.
+
+Until PR 4 merges, `tests/unit/bridge-files.test.ts` fails about one run in six. Run `npm test` again.
+
+Only the last command needs Xcode and XcodeGen. `swift test` needs only the Swift toolchain. Both write their build output to the gitignored .cache folder at the repo root.
