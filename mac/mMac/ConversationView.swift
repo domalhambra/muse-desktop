@@ -6,6 +6,12 @@ struct ConversationView: View {
   @Bindable var workspace: Workspace
 
   var body: some View {
-    Text(workspace.view.map { SessionTitle.of($0.session) } ?? "No conversation")
+    if let view = workspace.view {
+      TranscriptView(workspace: workspace, view: view).id(view.session.sessionId)
+    } else {
+      ContentUnavailableView(
+        "No conversation", systemImage: "bubble.left.and.bubble.right",
+        description: Text("Choose one, or start a new conversation."))
+    }
   }
 }
