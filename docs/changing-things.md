@@ -66,14 +66,14 @@ Back up both files before you test either feature against your real Muse. The te
 
 ## Change mMac or its backend
 
-- Edit: `src/headless/server.ts` for a backend method, `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift side and `mac/mMac/` for the UI.
-- Test: `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts` and the Swift tests in `mac/Packages/MuseBackend/Tests/`, which `swift test` runs.
+- Edit: `src/headless/backend.ts` for a backend method, `src/headless/server.ts` for the process, `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift side and `mac/mMac/` for the UI.
+- Test: `tests/unit/headless-backend.test.ts`, `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts` and the Swift tests in `mac/Packages/MuseBackend/Tests/`, which `swift test` runs.
 - Prove: `npm run test:headless`, then the `xcodebuild` build in "Prove a change".
 - Read first: `docs/superpowers/specs/2026-10-21-mac-app-design.md`.
 
 To port a method from `src/main/index.ts`:
 
-1. Register it with `method('name', …)` in `src/headless/server.ts`.
+1. Register it with `method('name', …)` in `src/headless/backend.ts`.
 2. Delete it from `notYet` in `tests/unit/headless-parity.test.ts`.
 3. Add its typed call to `mac/Packages/MuseBackend/Sources/MuseBackend/Methods.swift`.
 

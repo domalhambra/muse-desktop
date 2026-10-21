@@ -12,7 +12,7 @@ function names(file: string, pattern: RegExp) {
 }
 
 const electron = names('src/main/index.ts', /\bhandle\('([^']+)'/g)
-const headless = names('src/headless/server.ts', /\bmethod\('([^']+)'/g)
+const headless = names('src/headless/backend.ts', /\bmethod\('([^']+)'/g)
 const preload = names('src/preload/index.ts', /\binvoke\('([^']+)'/g)
 
 const electronOnly: Record<string, string> = {
@@ -98,7 +98,7 @@ describe('headless method parity', () => {
     )
     expect(
       missing,
-      'Port it in src/headless/server.ts, or add it to electronOnly with a reason, or to notYet',
+      'Port it in src/headless/backend.ts, or add it to electronOnly with a reason, or to notYet',
     ).toEqual([])
   })
 
