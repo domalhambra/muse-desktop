@@ -20,6 +20,8 @@ struct SidebarView: View {
           Label("New conversation", systemImage: "square.and.pencil")
         }
         .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
         .help("New conversation (⌘N)")
         Picker("Current project", selection: projectSelection) {
           Text("All projects").tag("")
@@ -29,6 +31,8 @@ struct SidebarView: View {
           Divider()
           Text("Open another project…").tag(Self.openAnother)
         }
+        // The label is for VoiceOver only, as in Electron, so project names fit at 240 points.
+        .labelsHidden()
         .id(pickerGeneration)
       }
       history
@@ -69,6 +73,8 @@ struct SidebarView: View {
   }
 
   @ViewBuilder private var history: some View {
+    // Read once: each read groups and sorts every session.
+    let sections = workspace.sections
     if let error = workspace.historyError {
       Section {
         VStack(alignment: .leading, spacing: 6) {
@@ -78,7 +84,7 @@ struct SidebarView: View {
         }
       }
     }
-    ForEach(workspace.sections) { section in
+    ForEach(sections) { section in
       Section(section.title) {
         ForEach(section.sessions) { session in
           SessionRow(session: session, showProject: workspace.project.isEmpty)
@@ -95,7 +101,7 @@ struct SidebarView: View {
           Text("Loading Muse history…")
         }
       }
-    } else if workspace.sections.isEmpty, workspace.historyError == nil, workspace.isConnected {
+    } else if sections.isEmpty, workspace.historyError == nil, workspace.isConnected {
       Section {
         VStack(alignment: .leading, spacing: 2) {
           Text("No conversations yet").font(.headline)
@@ -105,15 +111,20 @@ struct SidebarView: View {
     }
   }
 
+  /// On a bar background, so rows do not show through it as the list scrolls.
   private var connectionFooter: some View {
-    HStack(spacing: 6) {
-      Circle().fill(dotColor).frame(width: 7, height: 7)
-      Text(statusText).font(.caption).foregroundStyle(.secondary)
-      Spacer()
+    VStack(spacing: 0) {
+      Divider()
+      HStack(spacing: 6) {
+        Circle().fill(dotColor).frame(width: 7, height: 7)
+        Text(statusText).font(.caption).foregroundStyle(.secondary)
+        Spacer()
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+      .help(workspace.status.version.map { "Muse Code \($0)" } ?? workspace.status.message ?? "")
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 8)
-    .help(workspace.status.version.map { "Muse Code \($0)" } ?? workspace.status.message ?? "")
+    .background(.bar)
   }
 
   private var statusText: String {
@@ -144,7 +155,7 @@ struct SessionRow: View {
       if session.status == "running" {
         ProgressView().controlSize(.mini).accessibilityLabel("Working")
       } else {
-        Image(systemName: "bubble.left").foregroundStyle(.secondary)
+        Image(systemName: "bubble.left").foregroundStyle(.secondary).accessibilityHidden(true)
       }
       VStack(alignment: .leading, spacing: 2) {
         Text(SessionTitle.of(session)).lineLimit(1)
