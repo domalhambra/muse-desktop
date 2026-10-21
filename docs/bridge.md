@@ -34,11 +34,11 @@ A job is one prompt sent as one turn. A conversation has one active job at a tim
 
 ## Folder bridge
 
-Muse Desktop keeps the folder in its application data, as `bridge/` next to `preferences.json`. On macOS that is `~/Library/Application Support/muse-desktop/bridge`. **Settings → Bridges → Open bridge folder** opens it. The folder contains a `README.md` with a short version of this section, for the other agent to read.
+Muse Desktop keeps the folder in its application data folder, next to its preferences. On macOS that is `~/Library/Application Support/muse-desktop/bridge`. **Settings → Bridges → Open bridge folder** opens it. The folder contains a `README.md` with a short version of this section, for the other agent to read.
 
 ### Ask for work
 
-Write a Markdown file into `inbox/`. Put the settings in YAML frontmatter and the prompt below it:
+Write a Markdown file into `<bridge folder>/inbox/`. Put the settings in YAML frontmatter and the prompt below it:
 
 ```md
 ---
@@ -59,7 +59,7 @@ Add a README section that describes the install steps.
 | `model`    | No                             | A Muse Code model id                                                          |
 | `worktree` | No                             | `true` to run in a new Git worktree that Muse creates                         |
 
-Muse Desktop moves the request to `inbox/processed/` as soon as it reads it. If Muse Desktop cannot start the job, it moves the request to `inbox/rejected/` and writes a `.error.txt` file that gives the reason. Examples are a missing field or an untrusted project. A turn that fails after it starts stays in `processed/`, and its outbox file shows `status: error`.
+Muse Desktop moves the request to `<bridge folder>/inbox/processed/` as soon as it reads it. If Muse Desktop cannot start the job, it moves the request to `<bridge folder>/inbox/rejected/` and writes `<bridge folder>/inbox/rejected/<name>.error.txt`, which gives the reason. Examples are a missing field or an untrusted project. A turn that fails after it starts stays in `<bridge folder>/inbox/processed/`, and its outbox file shows `status: error`.
 
 ### Read the result
 
@@ -90,7 +90,7 @@ cancel: true
 ---
 ```
 
-For a question with options, an answer that matches an option label selects that option. Separate labels with commas for a multiple-choice question. Any other answer goes to Muse as free text. Muse Desktop moves each decision file to `decisions/processed/`. A decision that fails leaves `decisions/<job id>.error.txt`.
+For a question with options, an answer that matches an option label selects that option. Separate labels with commas for a multiple-choice question. Any other answer goes to Muse as free text. Muse Desktop moves each decision file to `<bridge folder>/decisions/processed/`. A decision that fails leaves `<bridge folder>/decisions/<job id>.error.txt`.
 
 ## MCP bridge
 
