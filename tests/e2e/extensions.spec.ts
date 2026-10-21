@@ -173,7 +173,26 @@ test('the MCP servers tab edits Muse settings.json without exposing secrets', as
     page.once('dialog', (dialog) => void dialog.accept())
     await page.getByRole('button', { name: 'Remove files' }).click()
     await expect.poll(async () => (await read()).mcpServers).toEqual({})
+    // The status already reads Connected, so record that a reconnect really started.
+    await page.locator('.connection-status').evaluate((element) => {
+      const seen: string[] = []
+      Object.assign(window, { connectionStatusSeen: seen })
+      new MutationObserver(() => seen.push(element.textContent ?? '')).observe(element, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      })
+    })
     await page.getByRole('button', { name: 'Reconnect', exact: true }).click()
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as unknown as { connectionStatusSeen: string[] }).connectionStatusSeen.some(
+            (text) => text.includes('Connecting to Muse'),
+          ),
+        ),
+      )
+      .toBe(true)
     await expect(page.getByText('Connected to Muse Code', { exact: true })).toBeVisible()
   } finally {
     await app?.close()
