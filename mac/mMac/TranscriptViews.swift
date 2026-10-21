@@ -41,6 +41,8 @@ struct TranscriptView: View {
       .defaultScrollAnchor(.bottom, for: .initialOffset)
       .onScrollPhaseChange { _, phase in
         scrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+        // Growth during a gesture is not followed; catch up once it ends.
+        if phase == .idle, following { proxy.scrollTo(Self.bottom, anchor: .bottom) }
       }
       .onScrollGeometryChange(for: ScrollPlace.self) { geometry in
         ScrollPlace(
@@ -63,8 +65,8 @@ struct TranscriptView: View {
       .onAppear { proxy.scrollTo(Self.bottom, anchor: .bottom) }
       // Announced when the error arrives, not each time the lazy row is drawn again.
       .onChange(of: view.error) { old, new in
-        if old == nil, new != nil {
-          AccessibilityNotification.Announcement("Muse couldn’t finish this turn.").post()
+        if old == nil, let new {
+          AccessibilityNotification.Announcement("Muse couldn’t finish this turn. \(new)").post()
         }
       }
       .overlay(alignment: .bottom) {
@@ -252,8 +254,21 @@ struct StatusIcon: View {
       ProgressView().controlSize(.mini).accessibilityLabel("In progress")
     case "completed":
       Image(systemName: "checkmark.circle").foregroundStyle(.green).accessibilityLabel("Completed")
-    default:
+    case "failed":
       Image(systemName: "xmark.circle").foregroundStyle(.red).accessibilityLabel("Failed")
+    default:
+      Image(systemName: "xmark.circle").foregroundStyle(.red).accessibilityLabel(Self.spoken(status))
+    }
+  }
+
+  /// A status as words: "cancelled" stays, "notStarted" reads "not started".
+  static func spoken(_ status: String) -> String {
+    status.reduce(into: "") { words, character in
+      if character.isUppercase {
+        words += " " + character.lowercased()
+      } else {
+        words.append(character)
+      }
     }
   }
 }
