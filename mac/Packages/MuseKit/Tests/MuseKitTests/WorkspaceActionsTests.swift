@@ -154,7 +154,7 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
     }
   })
   await workspace.open("s1")
-  await workspace.setCLIPath("/opt/muse")
+  await workspace.setCLIPath("  /opt/muse\n")
   #expect(workspace.preferences.cliPath == "/opt/muse")
   #expect(Array(requests(backend).suffix(3)) == [
     ["preferences", [["cliPath": "/opt/muse"]]],
@@ -281,4 +281,157 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(await sending.value == .notSent)
   #expect(workspace.draft == "next")
   #expect(workspace.view?.items.isEmpty == true)
+}
+
+// Review fixes before Task 9.
+
+@MainActor @Test func sendingWithANewProjectMovesTheDraftThere() async throws {
+  // The app's flow: send() asks for a project, the open panel picks one, then this sends.
+  let (workspace, backend) = await makeWorkspace(preferences: Preferences()) { method, _, id in
+    switch method {
+    case "add-project": [reply(id, #""/real/p""#)]
+    case "create": [reply(id, viewJSON(sessionJSON("s1", root: "/real/p")))]
+    default: [reply(id, "null")]
+    }
+  }
+  workspace.draft = "hi"
+  #expect(await workspace.send() == .needsProject)
+  #expect(await workspace.send(addingProject: URL(fileURLWithPath: "/tmp/p")) == .sent)
+  #expect(requests(backend) == [
+    ["add-project", ["/tmp/p"]],
+    ["create", ["/real/p"]],
+    ["send", [["sessionId": "s1", "text": "hi", "attachments": [], "effort": "high", "mode": "queue"]]],
+  ])
+  #expect(workspace.view?.items.last?.text == "hi")
+  // No copy stays behind under All projects.
+  workspace.selectProject("")
+  #expect(workspace.draft == "")
+}
+
+@MainActor @Test func aFolderThatCannotBeAddedLeavesTheDraft() async throws {
+  let (workspace, backend) = await makeWorkspace(preferences: Preferences()) { method, _, id in
+    method == "add-project" ? [failure(id, "That folder is not available.")] : [reply(id, "null")]
+  }
+  workspace.draft = "hi"
+  #expect(await workspace.send(addingProject: URL(fileURLWithPath: "/tmp/p")) == .notSent)
+  #expect(workspace.draft == "hi")
+  #expect(workspace.errorMessage == "That folder is not available.")
+  #expect(requests(backend) == [["add-project", ["/tmp/p"]]])
+}
+
+@MainActor @Test func storedOutputBelongsToTheOpenConversation() async throws {
+  // t1's output comes at once; t2's waits until the test pushes it.
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "open":
+      [reply(id, viewJSON(sessionJSON(args.first == "s1" ? "s1" : "s2")))]
+    case "output":
+      args.last == "t1" ? [reply(id, #""one""#)] : []
+    default: [reply(id, "null")]
+    }
+  }
+  await workspace.open("s1")
+  await workspace.readOutput(TranscriptItem(itemId: "t1", kind: "toolCall", status: "completed"))
+  #expect(workspace.storedOutput["t1"] == "one")
+  await workspace.open("s1", force: true)
+  #expect(workspace.storedOutput["t1"] == "one")
+  await workspace.open("s2")
+  #expect(workspace.storedOutput.isEmpty)
+  let reading = Task {
+    await workspace.readOutput(TranscriptItem(itemId: "t2", kind: "toolCall", status: "completed"))
+  }
+  try await eventually { backend.messages.contains { $0["method"] == "output" && $0["args"] == ["s2", "t2"] } }
+  #expect(workspace.loadingOutput == ["t2"])
+  workspace.startNew()
+  #expect(workspace.loadingOutput.isEmpty)
+  let id = try #require(lastId(backend, "output"))
+  backend.push(reply(id, #""two""#))
+  await reading.value
+  #expect(workspace.storedOutput.isEmpty)
+  #expect(workspace.loadingOutput.isEmpty)
+}
+
+@MainActor @Test func aRepeatedReplyShowsAgainAtOnce() async throws {
+  let earlier = #"{"session":\#(sessionJSON("s1")),"items":[{"itemId":"i1","kind":"userMessage","revision":0,"status":"completed","text":"yes","displayText":"yes"}],"approvals":[],"questions":[]}"#
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "open" ? [reply(id, earlier)] : [reply(id, "null")]
+  }
+  await workspace.open("s1")
+  workspace.draft = "yes"
+  #expect(await workspace.send() == .sent)
+  #expect(workspace.view?.items.map(\.text) == ["yes", "yes"])
+}
+
+@MainActor @Test func reconnectReopensTheLatestClick() async throws {
+  // s2's open waits until the test pushes it, so it is still opening when reconnect replies.
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "open": args.first == "s1" ? [reply(id, viewJSON(sessionJSON("s1")))] : []
+    case "connect": [reply(id, #"{"state":"ready","version":"1.4.11"}"#)]
+    default: [reply(id, "null")]
+    }
+  }
+  await workspace.open("s1")
+  let opening = Task { await workspace.open("s2") }
+  try await eventually { backend.messages.contains { $0["method"] == "open" && $0["args"] == ["s2"] } }
+  let reconnecting = Task { await workspace.reconnect() }
+  try await eventually { backend.messages.filter { $0["method"] == "open" && $0["args"] == ["s2"] }.count == 2 }
+  #expect(Array(requests(backend).suffix(2)) == [["connect", []], ["open", ["s2"]]])
+  let id = try #require(lastId(backend, "open"))
+  backend.push(reply(id, viewJSON(sessionJSON("s2"))))
+  await reconnecting.value
+  #expect(workspace.view?.session.sessionId == "s2")
+  opening.cancel()
+  await opening.value
+}
+
+@MainActor @Test func aCancelledSendKeepsTheMessageShown() async throws {
+  // The backend still finishes a request whose caller stopped waiting, so the message may have gone.
+  let (workspace, backend) = await makeWorkspace(script: openScript { method, _, _ in
+    method == "send" ? [] : nil
+  })
+  await workspace.open("s1")
+  workspace.draft = "hi"
+  let sending = Task { await workspace.send() }
+  try await eventually { backend.messages.contains { $0["method"] == "send" } }
+  sending.cancel()
+  #expect(await sending.value == .notSent)
+  #expect(workspace.view?.items.last?.text == "hi")
+  #expect(workspace.draft == "")
+  #expect(workspace.errorMessage == nil)
+  #expect(!workspace.submitting)
+}
+
+@MainActor @Test func aFailedCreateRestoresTheDraftAndShowsNoConversation() async throws {
+  // The real backend cancels the project trust Ask inside create.
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    method == "create"
+      ? [failure(id, "Project trust was cancelled. No session was started.")] : [reply(id, "null")]
+  }
+  workspace.draft = "hi"
+  #expect(await workspace.send() == .notSent)
+  #expect(workspace.view == nil)
+  #expect(workspace.draft == "hi")
+  #expect(workspace.errorMessage == "Project trust was cancelled. No session was started.")
+  #expect(requests(backend) == [["create", ["/p"]]])
+  #expect(!workspace.submitting)
+}
+
+@MainActor @Test func aSendThatFailsAfterCreateKeepsTheNewConversation() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "create": [reply(id, viewJSON(sessionJSON("s1")))]
+    case "send": [failure(id, "boom")]
+    default: [reply(id, "null")]
+    }
+  }
+  workspace.draft = "hi"
+  #expect(await workspace.send() == .notSent)
+  #expect(workspace.view?.session.sessionId == "s1")
+  #expect(workspace.view?.items.isEmpty == true)
+  #expect(workspace.view?.session.status == "idle")
+  #expect(workspace.drafts["s1"] == "hi")
+  #expect(workspace.drafts["new:/p"] == nil)
+  #expect(workspace.draft == "hi")
+  #expect(workspace.errorMessage == "boom")
 }

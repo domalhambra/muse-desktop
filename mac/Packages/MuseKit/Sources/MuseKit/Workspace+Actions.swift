@@ -33,17 +33,15 @@ extension Workspace {
       let sessionId = current.session.sessionId
       sentId = sessionId
       if sequence == openSequence, view?.session.sessionId == sessionId {
-        // Show the message at once. The next session event replaces the whole list.
-        if view?.items.contains(where: { $0.kind == "userMessage" && ($0.text == text || $0.displayText == text) })
-          != true
-        {
-          let id = "optimistic-\(UUID().uuidString)"
-          shownId = id
-          view?.items.append(
-            TranscriptItem(
-              itemId: id, kind: "userMessage", status: "completed", text: text, displayText: text,
-              recordedAt: Date.now.ISO8601Format()))
-        }
+        // Show the message at once. The next session event replaces the whole list. Muse cannot
+        // have echoed it yet, so there is no copy to look for; a check would only hide a repeated
+        // reply such as "yes".
+        let id = "optimistic-\(UUID().uuidString)"
+        shownId = id
+        view?.items.append(
+          TranscriptItem(
+            itemId: id, kind: "userMessage", status: "completed", text: text, displayText: text,
+            recordedAt: Date.now.ISO8601Format()))
         previousStatus = view?.session.status
         view?.session.status = "running"
       }
@@ -51,6 +49,10 @@ extension Workspace {
       for key in [startKey, sessionId] where drafts[key] == text { drafts[key] = nil }
       try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode)
       return .sent
+    } catch is CancellationError {
+      // The caller stopped waiting, but the backend still finishes the request, so the message
+      // may have gone. Keep it shown and the draft cleared; the next session event settles it.
+      return .notSent
     } catch {
       let stillShown = sequence == openSequence && sentId != nil && view?.session.sessionId == sentId
       if stillShown {
@@ -64,6 +66,20 @@ extension Workspace {
       errorMessage = error.localizedDescription
       return .notSent
     }
+  }
+
+  /// Sends the draft in a new conversation in a folder chosen in the open panel, after `send()`
+  /// returned `.needsProject`. The draft moves to the new project, so it does not stay behind
+  /// under All projects. If the folder cannot be added, the draft stays where it was.
+  public func send(addingProject folder: URL) async -> SendOutcome {
+    let text = draft
+    let startKey = draftKey
+    guard await addProject(folder) else { return .notSent }
+    if draftKey != startKey {
+      drafts[draftKey] = text
+      drafts[startKey] = nil
+    }
+    return await send()
   }
 
   /// Stops the open conversation's turn.
@@ -95,7 +111,7 @@ extension Workspace {
     let sequence = openSequence
     await run {
       try await self.client.setModel(sessionId: sessionId, modelId: id)
-      if sequence == self.openSequence { self.modelId = id }
+      if sequence == self.openSequence, self.view?.session.sessionId == sessionId { self.modelId = id }
     }
   }
 
@@ -106,8 +122,10 @@ extension Workspace {
 
   /// Saves a custom Muse Code path (empty for automatic detection), then reconnects.
   public func setCLIPath(_ path: String) async {
+    // Electron trims the field before saving it.
+    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
     do {
-      preferences = try await client.preferences(PreferencesPatch(cliPath: path))
+      preferences = try await client.preferences(PreferencesPatch(cliPath: trimmed))
     } catch {
       errorMessage = error.localizedDescription
       return
@@ -115,12 +133,15 @@ extension Workspace {
     await reconnect()
   }
 
-  /// Reconnects to Muse, then reopens the open conversation, as Electron does.
+  /// Reconnects to Muse, then reopens the conversation last clicked, as Electron reopens `activeId`:
+  /// the one opening, or else the one shown.
   public func reconnect() async {
     do {
       let next = try await client.connect()
       apply(.connection(next))
-      if next.isReady, let sessionId = view?.session.sessionId { await open(sessionId, force: true) }
+      if next.isReady, let sessionId = openingSessionId ?? view?.session.sessionId {
+        await open(sessionId, force: true)
+      }
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -155,15 +176,19 @@ extension Workspace {
     }
   }
 
-  /// "Read stored output": reads a tool item's full output once.
+  /// "Read stored output": reads a tool item's full output once. Opening another conversation or
+  /// starting a new one clears what was read, and a reply that arrives after that is dropped.
   public func readOutput(_ item: TranscriptItem) async {
     guard let sessionId = view?.session.sessionId, storedOutput[item.itemId] == nil,
       !loadingOutput.contains(item.itemId)
     else { return }
+    let sequence = openSequence
     loadingOutput.insert(item.itemId)
+    // Always: a reopen of this same conversation moves the sequence on without clearing the set.
     defer { loadingOutput.remove(item.itemId) }
     await run {
-      self.storedOutput[item.itemId] = try await self.client.readOutput(sessionId: sessionId, itemId: item.itemId)
+      let output = try await self.client.readOutput(sessionId: sessionId, itemId: item.itemId)
+      if sequence == self.openSequence { self.storedOutput[item.itemId] = output }
     }
   }
 }

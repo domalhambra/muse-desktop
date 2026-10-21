@@ -181,6 +181,13 @@ public final class Workspace {
     openingSessionId = nil
     view = nil
     mode = .queue
+    clearStoredOutput()
+  }
+
+  /// Stored output belongs to one conversation's items.
+  private func clearStoredOutput() {
+    storedOutput = [:]
+    loadingOutput = []
   }
 
   /// Adds a folder chosen in the open panel and selects its real path.
@@ -214,6 +221,7 @@ public final class Workspace {
     do {
       let opened = try await client.open(sessionId)
       guard sequence == openSequence else { return }
+      if opened.session.sessionId != view?.session.sessionId { clearStoredOutput() }
       view = opened
       // As Electron: a conversation without a folder shows all projects, so it stays visible.
       project = opened.session.workspaceRoot ?? ""
