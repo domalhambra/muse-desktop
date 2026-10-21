@@ -13,7 +13,7 @@ public enum TranscriptEntry: Identifiable, Equatable, Sendable {
   public var id: String {
     switch self {
     case .user(let item), .agent(let item), .reasoning(let item), .tool(let item): item.itemId
-    case .toolGroup(let items): "group-\(items[0].itemId)"
+    case .toolGroup(let items): "group-\(items.first?.itemId ?? "empty")"
     }
   }
 
@@ -88,24 +88,43 @@ public enum ToolPresentation {
     first(stored, item.visibleOutput, item.result?.text, item.failureReason, item.finalSummary)
   }
 
+  /// Pretty-printed JSON, or `args` unchanged when it is not JSON. Electron's
+  /// `JSON.stringify(value, null, 2)` keeps key order and writes `"b": 1`; this sorts keys and
+  /// writes `"b" : 1`. Numbers go through `JSONEncoder`, which prints 0.7 as 0.7, as JavaScript does.
   public static func formattedArgs(_ args: String) -> String {
-    guard let data = args.data(using: .utf8),
-      let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
-      let pretty = try? JSONSerialization.data(
-        withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])
+    guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(args.utf8)),
+      let pretty = try? argsEncoder.encode(value)
     else { return args }
     return String(decoding: pretty, as: UTF8.self)
   }
 
-  /// `+3 −1`, with the minus sign U+2212, or nil when nothing changed.
+  static let argsEncoder: JSONEncoder = {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    return encoder
+  }()
+
+  /// `+3 −1`, with the minus sign U+2212, whenever the tool has a patch summary, even `+0 −0`,
+  /// as in Electron. nil when it has none.
   public static func patch(_ item: TranscriptItem) -> String? {
-    guard let patch = item.patchSummary, patch.added > 0 || patch.removed > 0 else { return nil }
+    guard let patch = item.patchSummary else { return nil }
     return "+\(patch.added) \u{2212}\(patch.removed)"
   }
 
   public static func footer(_ item: TranscriptItem) -> String {
     guard let duration = item.durationMs else { return item.status }
-    return "\(item.status) · \(String(format: "%.1f", duration / 1000))s"
+    return "\(item.status) · \(fixed1(duration / 1000))s"
+  }
+
+  /// JavaScript's `toFixed(1)`: the exact binary value rounded, with a tie away from zero.
+  /// `%.1f` rounds the exact value too, but breaks a tie to even. A tie needs the value to be
+  /// an odd number of quarters (1.25, 0.75), and four times a double is exact, so only those
+  /// round half away from zero here. 1.15 is really 1.1499…, so it stays 1.1, as in Electron.
+  static func fixed1(_ value: Double) -> String {
+    let quarters = value * 4
+    let tie = quarters.rounded() == quarters && quarters.truncatingRemainder(dividingBy: 2) != 0
+    let rounded = tie ? (value * 10).rounded(.toNearestOrAwayFromZero) / 10 : value
+    return String(format: "%.1f", rounded)
   }
 
   public static func groupTitle(_ items: [TranscriptItem]) -> String { "Ran \(items.count) tools" }

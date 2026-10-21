@@ -55,6 +55,36 @@ private func message(_ id: String, _ kind: String = "agentMessage") -> Transcrip
   #expect(ToolPresentation.footer(item) == "completed · 1.2s")
 }
 
+@Test func numbersInToolInputPrintAsTyped() {
+  #expect(ToolPresentation.formattedArgs(#"{"a":0.7,"b":3.14,"c":[1,2]}"#)
+    == "{\n  \"a\" : 0.7,\n  \"b\" : 3.14,\n  \"c\" : [\n    1,\n    2\n  ]\n}")
+  #expect(ToolPresentation.formattedArgs("0.7") == "0.7")
+  #expect(ToolPresentation.formattedArgs("{not json") == "{not json")
+}
+
+@Test func durationsRoundAsToFixedDoes() {
+  func footer(_ ms: Double) -> String {
+    ToolPresentation.footer(TranscriptItem(itemId: "a", kind: "toolCall", status: "completed", durationMs: ms))
+  }
+  // An exact tie rounds away from zero; 1.15 and 2.35 are not exact in binary, so they do not tie.
+  #expect(footer(1250) == "completed · 1.3s")
+  #expect(footer(250) == "completed · 0.3s")
+  #expect(footer(1750) == "completed · 1.8s")
+  #expect(footer(1150) == "completed · 1.1s")
+  #expect(footer(2350) == "completed · 2.4s")
+  #expect(footer(25) == "completed · 0.0s")
+  #expect(ToolPresentation.footer(TranscriptItem(itemId: "a", kind: "toolCall", status: "failed")) == "failed")
+}
+
+@Test func patchCountsShowOnEveryToolWithASummary() {
+  let zero = TranscriptItem(
+    itemId: "z", kind: "toolCall", status: "completed", patchSummary: .init(added: 0, removed: 0, files: 0))
+  #expect(ToolPresentation.patch(zero) == "+0 \u{2212}0")
+  #expect(ToolPresentation.patch(tool("n")) == nil)
+  #expect(ToolPresentation.groupPatch([zero, zero, zero]) == nil)
+  #expect(TranscriptEntry.toolGroup([]).id == "group-empty")
+}
+
 @Test func groupLabelsNameUpToThreeTools() {
   let items = [tool("1", title: "read"), tool("2", title: "read"), tool("3", title: "write"), tool("4", title: "grep"), tool("5", title: "ls")]
   #expect(ToolPresentation.groupTitle(items) == "Ran 5 tools")

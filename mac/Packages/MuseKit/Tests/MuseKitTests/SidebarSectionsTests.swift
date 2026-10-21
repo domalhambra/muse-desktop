@@ -67,6 +67,16 @@ private func session(_ id: String, root: String? = "/p", hoursAgo: Double, kind:
   #expect(RelativeTime.text(iso(now.addingTimeInterval(-20)), now: now) == "Now")
   #expect(RelativeTime.text(iso(now.addingTimeInterval(-5 * 60)), now: now) == "5m")
   #expect(RelativeTime.text(iso(now.addingTimeInterval(-3 * 3600)), now: now) == "3h")
-  #expect(RelativeTime.text("2026-10-01T12:00:00Z", now: now, locale: Locale(identifier: "en_US")) == "Oct 1")
+  // 01:00 UTC on Oct 2 is still Oct 1 in Los Angeles.
+  #expect(
+    RelativeTime.text("2026-10-02T01:00:00Z", now: now, locale: Locale(identifier: "en_US"), calendar: calendar)
+      == "Oct 1")
   #expect(RelativeTime.text("not a date", now: now) == "")
+}
+
+@Test func timestampsParseWithAndWithoutFractions() {
+  #expect(RelativeTime.date("2026-10-21T19:00:00Z") == now)
+  #expect(RelativeTime.date("2026-10-21T19:00:00.500Z") == now.addingTimeInterval(0.5))
+  #expect(RelativeTime.date("2026-10-21T12:00:00-07:00") == now)
+  #expect(RelativeTime.date("2026-10-21") == nil)
 }

@@ -16,31 +16,39 @@ public enum SessionTitle {
 
   /// Removes injected tags and collapses whitespace.
   static func clean(_ value: String?) -> String {
-    stripInjectedTags(value)
-      .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    let text = stripInjectedTags(value)
+    return whitespace.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
       .trimmingCharacters(in: .whitespacesAndNewlines)
   }
+
+  // Built once. NSRegularExpression is immutable and documented as thread-safe.
+  static let whitespace = try! NSRegularExpression(pattern: #"\s+"#)
+  static let tagBlock = try! NSRegularExpression(pattern: #"<([a-zA-Z_][\w.-]*)\b[^>]*>[\s\S]*?</\1>"#)
+  static let closingTag = try! NSRegularExpression(pattern: #"^</[a-zA-Z_][\w.-]*>$"#)
+  static let openingTag = try! NSRegularExpression(
+    pattern: #"^<[a-zA-Z_][\w.-]*\b[^>]*>[\s\S]*"#, options: .caseInsensitive)
 
   /// Removes `<tag …>…</tag>` blocks that tools inject, as Electron's `stripInjectedTags`.
   static func stripInjectedTags(_ value: String?) -> String {
     guard var text = value, !text.isEmpty else { return "" }
-    let block = try! NSRegularExpression(pattern: #"<([a-zA-Z_][\w.-]*)\b[^>]*>[\s\S]*?</\1>"#)
     for _ in 0..<4 {
-      let next = block.stringByReplacingMatches(
+      let next = tagBlock.stringByReplacingMatches(
         in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
       if next == text { break }
       text = next
     }
     if let closing = text.range(of: "</", options: .backwards),
       let end = text[closing.lowerBound...].firstIndex(of: ">"),
-      text[closing.lowerBound...end].range(of: #"^</[a-zA-Z_][\w.-]*>$"#, options: .regularExpression) != nil
+      matches(closingTag, String(text[closing.lowerBound...end]))
     {
       text = String(text[text.index(after: end)...])
     }
-    if let opening = text.range(of: #"^<[a-zA-Z_][\w.-]*\b[^>]*>[\s\S]*"#, options: [.regularExpression, .caseInsensitive]) {
-      text.removeSubrange(opening)
-    }
+    if matches(openingTag, text) { text = "" }
     return text.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  static func matches(_ expression: NSRegularExpression, _ text: String) -> Bool {
+    expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
   }
 }
 
@@ -48,11 +56,15 @@ public enum SessionTitle {
 public enum ProjectPath {
   public static func worktreeParent(_ path: String?) -> String? {
     guard let path,
-      let match = path.firstMatch(of: #/^(.*)[/\\]\.muse[/\\]worktrees[/\\]([^/\\]+)[/\\]?$/#),
-      !match.1.isEmpty
+      let match = worktree.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)),
+      let parent = Range(match.range(at: 1), in: path), !parent.isEmpty
     else { return nil }
-    return String(match.1)
+    return String(path[parent])
   }
+
+  /// Electron's `worktreePattern` in `src/shared/worktree.ts`, built once.
+  static let worktree = try! NSRegularExpression(
+    pattern: #"^(.*)[/\\]\.muse[/\\]worktrees[/\\]([^/\\]+)[/\\]?$"#)
 
   public static func root(of path: String) -> String { worktreeParent(path) ?? path }
 
@@ -114,19 +126,28 @@ public enum SidebarSections {
 
 /// Electron's `friendlyTime`: Now, minutes, hours, then a short date.
 public enum RelativeTime {
-  public static func text(_ value: String, now: Date = .now, locale: Locale = .current) -> String {
+  /// `calendar` and its time zone decide the short date's day, as `SidebarSections` groups by it.
+  public static func text(
+    _ value: String, now: Date = .now, locale: Locale = .current, calendar: Calendar = .current
+  ) -> String {
     guard let date = date(value) else { return "" }
     let minutes = now.timeIntervalSince(date) / 60
     if minutes < 1 { return "Now" }
     if minutes < 60 { return "\(Int(minutes))m" }
     if minutes < 1440 { return "\(Int(minutes / 60))h" }
-    return date.formatted(.dateTime.month(.abbreviated).day().locale(locale))
+    var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
+    style.locale = locale
+    style.calendar = calendar
+    style.timeZone = calendar.timeZone
+    return date.formatted(style)
   }
 
   /// Parses a CLI timestamp: ISO 8601, with or without fractional seconds.
   public static func date(_ value: String) -> Date? {
-    let precise = ISO8601DateFormatter()
-    precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return precise.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    (try? precise.parse(value)) ?? (try? plain.parse(value))
   }
+
+  // Built once; a format style is a Sendable value, cheap to parse with.
+  static let precise = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+  static let plain = Date.ISO8601FormatStyle()
 }
