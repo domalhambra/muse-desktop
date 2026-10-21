@@ -44,6 +44,7 @@ struct ComposerTextView: NSViewRepresentable {
     textView.isAutomaticQuoteSubstitutionEnabled = false
     textView.isAutomaticDashSubstitutionEnabled = false
     textView.isAutomaticTextReplacementEnabled = false
+    textView.isAutomaticSpellingCorrectionEnabled = false
     textView.setAccessibilityIdentifier("composer")
     textView.setAccessibilityLabel("Message Muse")
     textView.string = text
@@ -63,12 +64,20 @@ struct ComposerTextView: NSViewRepresentable {
     return scroll
   }
 
+  static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+    guard let textView = scroll.documentView as? ComposerNSTextView else { return }
+    textView.delegate = nil
+    textView.onSubmit = nil
+    textView.onWidthChange = nil
+  }
+
   func updateNSView(_ scroll: NSScrollView, context: Context) {
     context.coordinator.parent = self
     guard let textView = context.coordinator.textView else { return }
-    // Only when the text differs, so typing never resets the cursor. A new draft (after a send,
-    // or another conversation's) keeps the selection where it still fits.
-    if textView.string != text {
+    // Only when the text differs, so typing never resets the cursor, and never during an
+    // input-method composition, which a redraw from streamed output must not wipe. A new draft
+    // (after a send, or another conversation's) keeps the selection where it still fits.
+    if textView.string != text, !textView.hasMarkedText() {
       let length = (text as NSString).length
       let selection = textView.selectedRanges.map { value -> NSValue in
         let range = value.rangeValue
@@ -78,6 +87,8 @@ struct ComposerTextView: NSViewRepresentable {
       textView.string = text
       textView.font = Self.font
       textView.selectedRanges = selection
+      // The undo steps refer to text that is gone; Cmd-Z on them raises a range exception.
+      context.coordinator.undo.removeAllActions()
       context.coordinator.measureLater()
     }
     apply(to: textView)
@@ -93,14 +104,21 @@ struct ComposerTextView: NSViewRepresentable {
       textView.isEditable = isEnabled
       textView.textColor = isEnabled ? .labelColor : .secondaryLabelColor
     }
+    // So VoiceOver reports the read-only state while a conversation opens.
+    if textView.isAccessibilityEnabled() != isEnabled { textView.setAccessibilityEnabled(isEnabled) }
   }
 
   @MainActor
   final class Coordinator: NSObject, NSTextViewDelegate {
     var parent: ComposerTextView
     weak var textView: ComposerNSTextView?
+    /// The composer's own undo history, not the window's, so it can be cleared when the text
+    /// is rewritten from code.
+    let undo = UndoManager()
 
     init(_ parent: ComposerTextView) { self.parent = parent }
+
+    func undoManager(for view: NSTextView) -> UndoManager? { undo }
 
     func textDidChange(_ notification: Notification) {
       guard let textView else { return }
@@ -158,7 +176,8 @@ final class ComposerNSTextView: NSTextView {
       if !event.isARepeat, isEditable { onSubmit?() }
       return
     }
-    if modifiers == .shift || modifiers == .option {
+    // A plain line break: Control-Return would otherwise insert U+2028.
+    if modifiers == .shift || modifiers == .option || modifiers == .control {
       if isEditable { insertNewlineIgnoringFieldEditor(nil) }
       return
     }
@@ -175,6 +194,10 @@ final class ComposerNSTextView: NSTextView {
     }
     return super.performKeyEquivalent(with: event)
   }
+
+  /// Tab and Shift-Tab move focus, as in Electron's textarea, rather than typing a tab.
+  override func insertTab(_ sender: Any?) { window?.selectNextKeyView(nil) }
+  override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(nil) }
 
   override func didChangeText() {
     super.didChangeText()
