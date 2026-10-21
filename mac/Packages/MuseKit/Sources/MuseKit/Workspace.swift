@@ -23,7 +23,9 @@ public final class Workspace {
   public private(set) var status: ConnectionStatus
   public internal(set) var preferences: Preferences
   public private(set) var sessions: [Session] = []
+  /// True only until the first refresh succeeds, as in Electron. Later refreshes run quietly.
   public private(set) var historyLoading = false
+  private var hasLoadedHistory = false
   public private(set) var historyError: String?
   /// The project filter, and the folder a new conversation starts in. Empty means all projects.
   public private(set) var project: String
@@ -92,15 +94,20 @@ public final class Workspace {
     case .session(let next):
       if next.session.sessionId == view?.session.sessionId { view = next }
       if let index = sessions.firstIndex(where: { $0.sessionId == next.session.sessionId }) {
-        sessions[index] = next.session
+        // Only on a change: every streamed update sends a session event, and the sidebar
+        // rebuilds its sections whenever `sessions` is written.
+        if sessions[index] != next.session { sessions[index] = next.session }
       }
     case .sessionsChanged:
+      // Cancels only a pause still waiting. A refresh that already started is not cancelled,
+      // which would cancel its request; the newer refresh's sequence retires it instead.
       refreshDelay?.cancel()
       // Weak: the stored task must not keep the Workspace alive through the pause.
       refreshDelay = Task { [weak self, refreshDebounce] in
         try? await Task.sleep(for: refreshDebounce)
-        guard !Task.isCancelled else { return }
-        await self?.refreshSessions()
+        guard !Task.isCancelled, let self else { return }
+        self.refreshDelay = nil
+        await self.refreshSessions()
       }
     case .error(let message):
       errorMessage = message
@@ -113,8 +120,12 @@ public final class Workspace {
   public func refreshSessions() async {
     refreshSequence += 1
     let sequence = refreshSequence
-    if sessions.isEmpty { historyLoading = true }
+    if !hasLoadedHistory { historyLoading = true }
+    historyError = nil
     defer { if sequence == refreshSequence { historyLoading = false } }
+    // Names known before this refresh. Each page also reads the current rows, for a session
+    // event that named a conversation between pages.
+    let before = Self.byId(sessions)
     var merged: [String: Session] = [:]
     var order: [String] = []
     var cursor: String?
@@ -123,8 +134,7 @@ public final class Workspace {
       repeat {
         let page = try await client.sessions(cursor: cursor)
         guard sequence == refreshSequence else { return }
-        // Read per page: a session event between pages may have named a conversation.
-        let known = Dictionary(sessions.map { ($0.sessionId, $0) }, uniquingKeysWith: { first, _ in first })
+        let known = before.merging(Self.byId(sessions)) { _, now in now }
         for session in page.sessions {
           if merged[session.sessionId] == nil { order.append(session.sessionId) }
           merged[session.sessionId] = Self.keepingKnownName(session, from: known)
@@ -135,14 +145,20 @@ public final class Workspace {
           throw WorkspaceError("Muse returned a repeated history cursor. Reconnect to refresh history.")
         }
       } while cursor != nil
-      historyError = nil
+      hasLoadedHistory = true
+    } catch is CancellationError {
+      // Not a failure the person needs to see.
     } catch {
       if sequence == refreshSequence { historyError = error.localizedDescription }
     }
   }
 
+  private static func byId(_ sessions: [Session]) -> [String: Session] {
+    Dictionary(sessions.map { ($0.sessionId, $0) }, uniquingKeysWith: { first, _ in first })
+  }
+
   /// `session/list` can lag a rename for a live conversation and leave out its name. Keep the name
-  /// a session event or `open` already gave. The CLI itself lowercases ASCII letters in names.
+  /// a session event already gave. The CLI itself lowercases ASCII letters in names.
   static func keepingKnownName(_ session: Session, from known: [String: Session]) -> Session {
     guard session.name == nil, let name = known[session.sessionId]?.name else { return session }
     var kept = session
@@ -177,10 +193,15 @@ public final class Workspace {
     }
   }
 
-  /// Opens a conversation. A reply that arrives after a newer `open` started is ignored.
-  /// `force` reopens the open conversation, after a reconnect.
+  /// Opens a conversation. A reply that arrives after a newer `open` started is ignored, so the
+  /// last click wins. `force` reopens the open conversation, after a reconnect.
   public func open(_ sessionId: String, force: Bool = false) async {
-    guard force || sessionId != view?.session.sessionId else { return }
+    if !force, sessionId == view?.session.sessionId {
+      // Already shown. Drop any other open still in flight, so it does not replace this one.
+      openSequence += 1
+      openingSessionId = nil
+      return
+    }
     openSequence += 1
     let sequence = openSequence
     openingSessionId = sessionId
@@ -189,7 +210,8 @@ public final class Workspace {
       let opened = try await client.open(sessionId)
       guard sequence == openSequence else { return }
       view = opened
-      if let root = opened.session.workspaceRoot { project = root }
+      // As Electron: a conversation without a folder shows all projects, so it stays visible.
+      project = opened.session.workspaceRoot ?? ""
       modelId = opened.session.modelId ?? ""
     } catch {
       guard sequence == openSequence else { return }

@@ -80,7 +80,9 @@ import Testing
   }
   workspace.apply(.sessionsChanged)
   workspace.apply(.sessionsChanged)
-  try await Task.sleep(for: .milliseconds(150))
+  try await eventually { backend.messages.filter { $0["method"] == "sessions" }.count == 1 }
+  // Longer than the pause, so a second refresh would have started by now.
+  try await Task.sleep(for: .milliseconds(50))
   #expect(backend.messages.filter { $0["method"] == "sessions" }.count == 1)
 }
 
@@ -150,4 +152,85 @@ import Testing
   backend.push(reply(Int(id), #"{"sessions":[\#(sessionJSON("s1"))],"nextCursor":null}"#))
   await refreshing.value
   #expect(workspace.sessions.map(\.name) == ["renamed"])
+}
+
+@MainActor @Test func aSecondSessionsChangedDoesNotCancelARunningRefresh() async throws {
+  // Muse never answers, so the first refresh is still loading when the second event comes.
+  let (workspace, backend) = await makeWorkspace()
+  workspace.apply(.sessionsChanged)
+  try await eventually { backend.messages.filter { $0["method"] == "sessions" }.count == 1 }
+  workspace.apply(.sessionsChanged)
+  try await eventually { backend.messages.filter { $0["method"] == "sessions" }.count == 2 }
+  try await Task.sleep(for: .milliseconds(20))
+  #expect(workspace.historyError == nil)
+}
+
+@MainActor @Test func aLaterPageKeepsItsKnownName() async throws {
+  let (workspace, _) = await makeWorkspace { method, args, id in
+    guard method == "sessions" else { return [] }
+    if args.isEmpty { return [reply(id, #"{"sessions":[\#(sessionJSON("s1"))],"nextCursor":"c2"}"#)] }
+    return [reply(id, #"{"sessions":[\#(sessionJSON("s2"))],"nextCursor":null}"#)]
+  }
+  await workspace.refreshSessions()
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s2", name: "renamed")))))
+  #expect(workspace.sessions.map(\.name) == [nil, "renamed"])
+  await workspace.refreshSessions()
+  #expect(workspace.sessions.map(\.name) == [nil, "renamed"])
+}
+
+@MainActor @Test func clickingTheShownConversationWhileAnotherOpensKeepsIt() async throws {
+  // The last click wins: s2's late reply must not replace s1.
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    method == "open" && args.first == "s1" ? [reply(id, viewJSON(sessionJSON("s1")))] : []
+  }
+  await workspace.open("s1")
+  let second = Task { await workspace.open("s2") }
+  try await eventually { backend.messages.filter { $0["method"] == "open" }.count == 2 }
+  await workspace.open("s1")
+  #expect(workspace.openingSessionId == nil)
+  guard case .number(let id)? = backend.messages.last(where: { $0["method"] == "open" })?["id"] else {
+    Issue.record("No second open request")
+    return
+  }
+  backend.push(reply(Int(id), viewJSON(sessionJSON("s2"))))
+  await second.value
+  #expect(workspace.view?.session.sessionId == "s1")
+}
+
+@MainActor @Test func openingAFolderlessConversationShowsAllProjects() async throws {
+  let noRoot = #"{"sessionId":"s9","workspaceRoot":null,"createdAt":"2026-10-21T00:00:00Z","updatedAt":"2026-10-21T10:00:00Z","status":"idle","activeTurnId":null,"modelId":null,"turnCount":0}"#
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "sessions": [reply(id, #"{"sessions":[\#(noRoot)],"nextCursor":null}"#)]
+    case "open": [reply(id, viewJSON(noRoot))]
+    default: []
+    }
+  }
+  await workspace.refreshSessions()
+  await workspace.open("s9")
+  #expect(workspace.project == "")
+  #expect(workspace.sections.flatMap(\.sessions).map(\.sessionId).contains("s9"))
+}
+
+@MainActor @Test func openingAConversationSelectsItsModel() async throws {
+  let (workspace, _) = await makeWorkspace { method, args, id in
+    guard method == "open" else { return [] }
+    let model: String? = args.first == "s1" ? "m-large" : nil
+    return [reply(id, viewJSON(sessionJSON(args.first == "s1" ? "s1" : "s2", modelId: model)))]
+  }
+  await workspace.open("s1")
+  #expect(workspace.modelId == "m-large")
+  await workspace.open("s2")
+  #expect(workspace.modelId == "")
+}
+
+@MainActor @Test func selectingAProjectClosesTheOpenConversation() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "open" ? [reply(id, viewJSON(sessionJSON("s1")))] : []
+  }
+  await workspace.open("s1")
+  #expect(workspace.view != nil)
+  workspace.selectProject("/other")
+  #expect(workspace.view == nil)
+  #expect(workspace.project == "/other")
 }
