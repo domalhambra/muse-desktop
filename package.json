@@ -12,6 +12,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:isolated": "MUSE_DESKTOP_USER_DATA=\"${MUSE_DESKTOP_USER_DATA:-$HOME/Library/Application Support/muse-desktop-dev}\" electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
