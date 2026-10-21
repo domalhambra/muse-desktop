@@ -257,7 +257,7 @@ struct StatusIcon: View {
     case "failed":
       Image(systemName: "xmark.circle").foregroundStyle(.red).accessibilityLabel("Failed")
     default:
-      Image(systemName: "xmark.circle").foregroundStyle(.red).accessibilityLabel(Self.spoken(status))
+      Image(systemName: "minus.circle").foregroundStyle(.secondary).accessibilityLabel(Self.spoken(status))
     }
   }
 

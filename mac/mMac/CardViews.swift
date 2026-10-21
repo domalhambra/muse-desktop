@@ -87,6 +87,7 @@ struct QuestionCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(option.label)
+            .accessibilityHint(option.description ?? "")
             .accessibilityAddTraits(form.isChosen(option.label, in: prompt.id) ? .isSelected : [])
           }
           TextField(
@@ -95,20 +96,27 @@ struct QuestionCard: View {
           )
           .textFieldStyle(.roundedBorder)
           .accessibilityLabel("Your answer: \(prompt.header)")
+          .onSubmit(submit)
         }
       }
       HStack {
         Spacer()
         Button("Skip question") { Task { await workspace.skip(question) } }
-        Button(sending ? "Sending…" : "Continue") {
-          Task { await workspace.answer(question, answers: form.submission) }
-        }
+        Button(sending ? "Sending…" : "Continue", action: submit)
         .buttonStyle(.borderedProminent)
         .disabled(!form.canContinue)
       }
       .disabled(sending)
     }
     .cardStyle()
+    // A question asked again under the same id with new prompts starts a fresh form.
+    .onChange(of: question) { _, new in form = QuestionForm(new) }
+  }
+
+  /// Continue, and Return in a free-text field: only when the form can continue and is not sent.
+  private func submit() {
+    guard form.canContinue, !workspace.answeringQuestions.contains(question.userInputId) else { return }
+    Task { await workspace.answer(question, answers: form.submission) }
   }
 
   private func icon(_ prompt: UserQuestion.Prompt, _ option: UserQuestion.Option) -> String {

@@ -6,27 +6,24 @@ import SwiftUI
 struct ComposerView: View {
   let controller: AppController
   @Bindable var workspace: Workspace
-  @FocusState private var focused: Bool
+  /// The text area's height, which it measures itself.
+  @State private var inputHeight: CGFloat = 17
+  /// A choice still being saved. The picker shows it until the Workspace answers, then shows the
+  /// real value again, so a failed change does not leave the popup showing it.
+  @State private var pendingModel: String?
+  @State private var pendingEffort: String?
 
   static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       if workspace.isRunning { runningBar }
-      TextField(placeholder, text: $workspace.draft, axis: .vertical)
-        .textFieldStyle(.plain)
-        .lineLimit(1...10)
-        .focused($focused)
-        .onSubmit(submit)
-        .onKeyPress(.return, phases: .down) { press in
-          // Return sends (onSubmit). Shift-Return adds a line, as in Electron.
-          guard press.modifiers.contains(.shift) else { return .ignored }
-          workspace.draft += "\n"
-          return .handled
-        }
-        .accessibilityLabel("Message Muse")
-        .accessibilityIdentifier("composer")
-        .padding(10)
+      ComposerTextView(
+        text: $workspace.draft, height: $inputHeight, placeholder: placeholder,
+        isEnabled: workspace.openingSessionId == nil, onSubmit: submit
+      )
+      .frame(height: inputHeight)
+      .padding(10)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
       HStack(spacing: 10) {
         Picker("Model", selection: modelSelection) {
@@ -48,7 +45,7 @@ struct ComposerView: View {
         if let footnote {
           Text(footnote).font(.caption).foregroundStyle(.secondary)
         }
-        Text("↵ Send · ⇧↵ New line").font(.caption).foregroundStyle(.tertiary)
+        Text("↵ Send · ⇧ ↵ New line").font(.caption).foregroundStyle(.tertiary)
         Button(action: submit) {
           if workspace.submitting {
             ProgressView().controlSize(.small)
@@ -63,7 +60,6 @@ struct ComposerView: View {
       }
     }
     .padding(12)
-    .onAppear { focused = true }
   }
 
   private var runningBar: some View {
@@ -101,7 +97,7 @@ struct ComposerView: View {
   }
 
   private var canSend: Bool {
-    !workspace.submitting && workspace.isConnected
+    !workspace.submitting && workspace.isConnected && workspace.openingSessionId == nil
       && !workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
@@ -111,10 +107,27 @@ struct ComposerView: View {
   }
 
   private var modelSelection: Binding<String> {
-    Binding(get: { workspace.modelId }, set: { id in Task { await workspace.chooseModel(id) } })
+    Binding(
+      get: { pendingModel ?? workspace.modelId },
+      set: { id in
+        pendingModel = id
+        Task {
+          await workspace.chooseModel(id)
+          // A later choice may still be saving; it clears its own.
+          if pendingModel == id { pendingModel = nil }
+        }
+      })
   }
 
   private var effortSelection: Binding<String> {
-    Binding(get: { workspace.effort }, set: { effort in Task { await workspace.chooseEffort(effort) } })
+    Binding(
+      get: { pendingEffort ?? workspace.effort },
+      set: { effort in
+        pendingEffort = effort
+        Task {
+          await workspace.chooseEffort(effort)
+          if pendingEffort == effort { pendingEffort = nil }
+        }
+      })
   }
 }

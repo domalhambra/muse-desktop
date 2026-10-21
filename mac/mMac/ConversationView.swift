@@ -47,11 +47,7 @@ struct ConversationView: View {
       }
     }
     .sheet(isPresented: $renaming) {
-      RenameSheet(name: $newName) { name in
-        Task { if await workspace.rename(name) { renaming = false } }
-      } cancel: {
-        renaming = false
-      }
+      RenameSheet(name: $newName, workspace: workspace) { renaming = false }
     }
   }
 }
@@ -63,7 +59,9 @@ struct ConnectionBanner: View {
   var body: some View {
     HStack(spacing: 10) {
       Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
-      Text(workspace.status.message ?? "Connect Muse Code to get started.").lineLimit(3)
+      // As Electron's `status.message || …`: an empty message counts as none.
+      Text(workspace.status.message.flatMap { $0.isEmpty ? nil : $0 } ?? "Connect Muse Code to get started.")
+        .lineLimit(3)
       Spacer()
       Button("Reconnect") { Task { await workspace.reconnect() } }
       Button("Choose Muse Code…") { Task { await controller.chooseCLI() } }
@@ -78,27 +76,67 @@ struct ConnectionBanner: View {
 
 struct RenameSheet: View {
   @Binding var name: String
-  let save: (String) -> Void
-  let cancel: () -> Void
+  let workspace: Workspace
+  let close: () -> Void
+  @State private var error: String?
+  @State private var saving = false
+
+  /// The backend's limit, counted as it counts: in UTF-16 units.
+  static let limit = 200
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Rename conversation").font(.headline)
-      TextField("Conversation name", text: $name)
-        .textFieldStyle(.roundedBorder)
-        .onSubmit { save(name) }
-        .onChange(of: name) {
-          if name.count > 200 { name = String(name.prefix(200)) }
+      VStack(alignment: .leading, spacing: 4) {
+        // No onSubmit: Return reaches the Save button's default action, so it saves once.
+        TextField("Conversation name", text: $name)
+          .textFieldStyle(.roundedBorder)
+          .onChange(of: name) {
+            if name.utf16.count > Self.limit { name = Self.limited(name) }
+            error = nil
+          }
+        if let error {
+          Text(error).font(.caption).foregroundStyle(.red)
         }
+      }
       HStack {
         Spacer()
-        Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
-        Button("Save") { save(name) }
+        Button("Cancel", action: close).keyboardShortcut(.cancelAction)
+        Button("Save", action: save)
           .keyboardShortcut(.defaultAction)
-          .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          .disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }
     }
     .padding(20)
     .frame(width: 420)
+  }
+
+  private func save() {
+    guard !saving, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    saving = true
+    error = nil
+    Task {
+      if await workspace.rename(name) {
+        close()
+        return
+      }
+      // Shown here, under the field. Cleared on the Workspace, so the window's alert does not
+      // show it a second time behind the sheet.
+      error = workspace.errorMessage ?? "Muse could not rename this conversation."
+      workspace.errorMessage = nil
+      saving = false
+    }
+  }
+
+  /// `text` cut to `limit` UTF-16 units, at a whole character.
+  static func limited(_ text: String) -> String {
+    var count = 0
+    var end = text.startIndex
+    for index in text.indices {
+      count += text[index].utf16.count
+      if count > limit { break }
+      end = text.index(after: index)
+    }
+    return String(text[..<end])
   }
 }
