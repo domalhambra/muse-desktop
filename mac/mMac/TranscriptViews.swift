@@ -27,6 +27,8 @@ struct TranscriptView: View {
               description: Text("Ask a question or describe what you want to build."))
           }
           ForEach(entries) { entry in EntryView(entry: entry, workspace: workspace) }
+          ForEach(view.approvals) { approval in ApprovalCard(approval: approval, workspace: workspace) }
+          ForEach(view.questions) { question in QuestionCard(question: question, workspace: workspace) }
           if let error = view.error { TurnErrorView(message: error) }
           Color.clear.frame(height: 1).id(Self.bottom)
         }
