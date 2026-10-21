@@ -78,6 +78,8 @@ struct CodeBlockView: View {
           .buttonStyle(.borderless)
           .font(.caption)
           .help(copyFailed ? "Could not copy. Select and copy the text." : "Copy the code")
+          // Message headers have a Copy button too; the UI tests tell this one apart by it.
+          .accessibilityIdentifier("code-copy")
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 6)
