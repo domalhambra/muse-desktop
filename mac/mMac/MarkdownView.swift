@@ -90,8 +90,9 @@ struct CodeBlockView: View {
           .padding(10)
       }
     }
-    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
+    // Strong enough that the block's edge shows in the dark appearance too.
+    .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
   }
 
   private func copy() {

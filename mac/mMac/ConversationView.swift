@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ConversationView: View {
   let controller: AppController
-  @Bindable var workspace: Workspace
+  let workspace: Workspace
 
   var body: some View {
     if let view = workspace.view {

@@ -5,10 +5,12 @@ import SwiftUI
 
 /// The open conversation, as Electron's `Transcript.tsx`.
 struct TranscriptView: View {
-  @Bindable var workspace: Workspace
+  let workspace: Workspace
   let view: SessionView
   /// True while Dom is near the bottom, so new output scrolls into view.
   @State private var following = true
+  /// True while Dom's own scrolling moves the transcript, so growth never pulls against it.
+  @State private var scrolling = false
   private static let bottom = "transcript-bottom"
 
   var body: some View {
@@ -35,23 +37,34 @@ struct TranscriptView: View {
         .accessibilityLabel("Conversation")
       }
       .defaultScrollAnchor(.bottom, for: .initialOffset)
+      .onScrollPhaseChange { _, phase in
+        scrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+      }
       .onScrollGeometryChange(for: ScrollPlace.self) { geometry in
         ScrollPlace(
           nearBottom: geometry.contentSize.height - geometry.visibleRect.maxY < 110,
-          offset: geometry.contentOffset.y)
+          offset: geometry.contentOffset.y, contentHeight: geometry.contentSize.height)
       } action: { old, new in
         // Only Dom scrolling up stops following. Output that grows past the bottom moves
-        // neither the offset nor the decision, so the next change still scrolls it in.
-        if new.nearBottom {
-          if !following { following = true }
-        } else if new.offset < old.offset, following {
-          following = false
+        // neither the offset nor the decision.
+        if new.offset < old.offset, !new.nearBottom {
+          if following { following = false }
+        } else if new.nearBottom, !following {
+          following = true
+        }
+        // New output, an expanded row, a resize or growth in an earlier in-progress item all
+        // grow the content: keep the latest output in view while following.
+        if following, !scrolling, new.contentHeight > old.contentHeight {
+          proxy.scrollTo(Self.bottom, anchor: .bottom)
         }
       }
-      .onChange(of: contentMark) {
-        if following { proxy.scrollTo(Self.bottom, anchor: .bottom) }
-      }
       .onAppear { proxy.scrollTo(Self.bottom, anchor: .bottom) }
+      // Announced when the error arrives, not each time the lazy row is drawn again.
+      .onChange(of: view.error) { old, new in
+        if old == nil, new != nil {
+          AccessibilityNotification.Announcement("Muse couldn’t finish this turn.").post()
+        }
+      }
       .overlay(alignment: .bottom) {
         if !following {
           Button("Jump to latest message", systemImage: "arrow.down") {
@@ -64,41 +77,18 @@ struct TranscriptView: View {
       }
     }
   }
-
-  /// Changes whenever new output arrives. Streamed deltas leave `revision` alone, so the
-  /// last item's growing fields are counted too.
-  private var contentMark: ContentMark {
-    let last = view.items.last
-    return ContentMark(
-      items: view.items.count, revision: last?.revision ?? 0, text: last?.text?.count ?? 0,
-      output: last?.visibleOutput?.count ?? 0,
-      summary: last?.summary?.reduce(0) { $0 + $1.count } ?? 0,
-      status: last?.status ?? "", approvals: view.approvals.count,
-      questions: view.questions.count, error: view.error != nil)
-  }
 }
 
 /// Where the transcript is scrolled, for following new output.
 private struct ScrollPlace: Equatable {
   let nearBottom: Bool
   let offset: CGFloat
-}
-
-private struct ContentMark: Equatable {
-  let items: Int
-  let revision: Int
-  let text: Int
-  let output: Int
-  let summary: Int
-  let status: String
-  let approvals: Int
-  let questions: Int
-  let error: Bool
+  let contentHeight: CGFloat
 }
 
 struct EntryView: View {
   let entry: TranscriptEntry
-  @Bindable var workspace: Workspace
+  let workspace: Workspace
 
   var body: some View {
     switch entry {
@@ -194,14 +184,36 @@ struct AgentMessageView: View {
   }
 }
 
-/// Lets a click anywhere on a disclosure row's label open it, as Electron's whole-row button.
-private struct TogglesOnClick: ViewModifier {
+/// A row that expands, as Electron's whole-row button: a click anywhere on its width toggles
+/// it, and the content shows below while expanded.
+struct ExpandableRow<RowLabel: View, Content: View>: View {
   @Binding var expanded: Bool
+  @ViewBuilder let label: () -> RowLabel
+  @ViewBuilder let content: () -> Content
 
-  func body(content: Content) -> some View {
-    content
-      .contentShape(Rectangle())
-      .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Button {
+        expanded.toggle()
+      } label: {
+        HStack(spacing: 6) {
+          Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .rotationEffect(.degrees(expanded ? 90 : 0))
+            .animation(.easeInOut(duration: 0.15), value: expanded)
+            .accessibilityHidden(true)
+          label()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
+      }
+      .buttonStyle(.plain)
+      .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+      if expanded {
+        content().padding(.leading, 18)
+      }
+    }
   }
 }
 
@@ -210,24 +222,21 @@ struct ReasoningView: View {
   @State private var expanded = false
 
   var body: some View {
-    DisclosureGroup(isExpanded: $expanded) {
-      MarkdownView(
-        blocks: MarkdownCache.shared.blocks(id: item.itemId, text: ToolPresentation.reasoningText(item))
-      )
-      .padding(.top, 4)
-    } label: {
+    ExpandableRow(expanded: $expanded) {
       HStack(spacing: 6) {
         if item.status == "inProgress" {
-          ProgressView().controlSize(.mini)
+          ProgressView().controlSize(.mini).accessibilityHidden(true)
           Text("Thinking")
         } else {
-          Image(systemName: "checkmark.circle")
+          Image(systemName: "checkmark.circle").accessibilityHidden(true)
           Text("Reasoning summary")
         }
       }
       .font(.callout)
       .foregroundStyle(.secondary)
-      .modifier(TogglesOnClick(expanded: $expanded))
+    } content: {
+      MarkdownView(
+        blocks: MarkdownCache.shared.blocks(id: item.itemId, text: ToolPresentation.reasoningText(item)))
     }
   }
 }
@@ -237,9 +246,12 @@ struct StatusIcon: View {
 
   var body: some View {
     switch status {
-    case "inProgress": ProgressView().controlSize(.mini)
-    case "completed": Image(systemName: "checkmark.circle").foregroundStyle(.green)
-    default: Image(systemName: "xmark.circle").foregroundStyle(.red)
+    case "inProgress":
+      ProgressView().controlSize(.mini).accessibilityLabel("In progress")
+    case "completed":
+      Image(systemName: "checkmark.circle").foregroundStyle(.green).accessibilityLabel("Completed")
+    default:
+      Image(systemName: "xmark.circle").foregroundStyle(.red).accessibilityLabel("Failed")
     }
   }
 }
@@ -252,6 +264,7 @@ struct ToolLabel: View {
       StatusIcon(status: item.status)
       Image(systemName: item.kind == "subagent" ? "person.2" : item.kind == "toolCall" ? "terminal" : "doc.text")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       Text(ToolPresentation.title(item)).bold()
       if let summary = ToolPresentation.summary(item) {
         Text(summary).foregroundStyle(.secondary).lineLimit(1)
@@ -266,11 +279,13 @@ struct ToolLabel: View {
 
 struct ToolView: View {
   let item: TranscriptItem
-  @Bindable var workspace: Workspace
+  let workspace: Workspace
   @State private var expanded = false
 
   var body: some View {
-    DisclosureGroup(isExpanded: $expanded) {
+    ExpandableRow(expanded: $expanded) {
+      ToolLabel(item: item)
+    } content: {
       VStack(alignment: .leading, spacing: 8) {
         if let objective = item.objective, !objective.isEmpty { Text(objective) }
         if let args = item.args, !args.isEmpty {
@@ -292,28 +307,20 @@ struct ToolView: View {
         }
         Text(ToolPresentation.footer(item)).font(.caption).foregroundStyle(.secondary)
       }
-      .padding(.top, 4)
-    } label: {
-      ToolLabel(item: item).modifier(TogglesOnClick(expanded: $expanded))
     }
   }
 }
 
 struct ToolGroupView: View {
   let items: [TranscriptItem]
-  @Bindable var workspace: Workspace
+  let workspace: Workspace
   @State private var expanded = false
 
   var body: some View {
-    DisclosureGroup(isExpanded: $expanded) {
-      VStack(alignment: .leading, spacing: 8) {
-        ForEach(items) { item in ToolView(item: item, workspace: workspace) }
-      }
-      .padding(.top, 4)
-    } label: {
+    ExpandableRow(expanded: $expanded) {
       HStack(spacing: 6) {
-        Image(systemName: "checkmark.circle").foregroundStyle(.green)
-        Image(systemName: "square.stack.3d.up").foregroundStyle(.secondary)
+        Image(systemName: "checkmark.circle").foregroundStyle(.green).accessibilityHidden(true)
+        Image(systemName: "square.stack.3d.up").foregroundStyle(.secondary).accessibilityHidden(true)
         Text(ToolPresentation.groupTitle(items)).bold()
         Text(ToolPresentation.groupDetail(items)).foregroundStyle(.secondary).lineLimit(1)
         if let patch = ToolPresentation.groupPatch(items) {
@@ -321,26 +328,49 @@ struct ToolGroupView: View {
         }
       }
       .font(.callout)
-      .modifier(TogglesOnClick(expanded: $expanded))
+    } content: {
+      VStack(alignment: .leading, spacing: 8) {
+        ForEach(items) { item in ToolView(item: item, workspace: workspace) }
+      }
     }
   }
 }
 
-/// Tool input or output: monospaced, selectable, scrolling past 320 points.
+/// Tool input or output: monospaced, selectable, scrolling past 320 points. Shows at most the
+/// first 256 KB, so a 1 MB stored output stays quick to draw.
 struct MonospacedBox: View {
   let text: String
 
+  static let limit = 256 * 1024
+
   var body: some View {
-    ScrollView([.horizontal, .vertical]) {
-      Text(text)
-        .font(.system(.caption, design: .monospaced))
-        .textSelection(.enabled)
-        .fixedSize()
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
+    let (shown, cut) = Self.prefix(text)
+    VStack(alignment: .leading, spacing: 4) {
+      ScrollView([.horizontal, .vertical]) {
+        Text(shown)
+          .font(.system(.caption, design: .monospaced))
+          .textSelection(.enabled)
+          .fixedSize()
+          .padding(8)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .frame(maxHeight: 320)
+      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+      if cut {
+        Text("Showing the first 256 KB of this output.").font(.caption).foregroundStyle(.secondary)
+      }
     }
-    .frame(maxHeight: 320)
-    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+  }
+
+  /// The first `limit` UTF-8 bytes of `text`, cut back to a whole character, and whether it cut.
+  static func prefix(_ text: String) -> (String, Bool) {
+    let bytes = text.utf8
+    guard bytes.count > limit else { return (text, false) }
+    var end = bytes.index(bytes.startIndex, offsetBy: limit)
+    while end > bytes.startIndex, end.samePosition(in: text) == nil {
+      end = bytes.index(before: end)
+    }
+    return (String(text[..<end]), true)
   }
 }
 
