@@ -4068,3 +4068,12 @@ button.breadcrumb-segment:hover {
   gap: 8px;
   margin-top: 14px;
 }
+
+.bridge-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+.bridge-port {
+  max-width: 120px;
+}

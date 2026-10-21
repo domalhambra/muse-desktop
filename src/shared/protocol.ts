@@ -140,6 +140,9 @@ const preferenceFields = {
   fontSize: z.enum(['compact', 'comfortable', 'large']),
   reduceMotion: z.boolean(),
   notifyOnCompletion: z.boolean(),
+  bridgeFilesEnabled: z.boolean(),
+  bridgeMcpEnabled: z.boolean(),
+  bridgeMcpPort: z.number().int().min(1024).max(65535),
 }
 
 export const preferencesSchema = z.object({
@@ -154,6 +157,9 @@ export const preferencesSchema = z.object({
   fontSize: preferenceFields.fontSize.default('comfortable'),
   reduceMotion: preferenceFields.reduceMotion.default(false),
   notifyOnCompletion: preferenceFields.notifyOnCompletion.default(false),
+  bridgeFilesEnabled: preferenceFields.bridgeFilesEnabled.default(false),
+  bridgeMcpEnabled: preferenceFields.bridgeMcpEnabled.default(false),
+  bridgeMcpPort: preferenceFields.bridgeMcpPort.default(7735),
 })
 // Updates must never apply defaults to omitted fields or grant project trust.
 export const preferencesPatchSchema = z
@@ -209,6 +215,12 @@ export type McpServerInput =
       env: Record<string, string>
     }
   | { name: string; transport: 'http'; url: string; headers: Record<string, string> }
+export type BridgeStatus = {
+  folder: string
+  files: { enabled: boolean; running: boolean; error?: string }
+  mcp: { enabled: boolean; running: boolean; url: string; hasToken: boolean; error?: string }
+  activeJobs: number
+}
 export type UpdateStatus = {
   available: boolean
   canCheck: boolean
@@ -266,6 +278,11 @@ export interface DesktopAPI {
   /** Runs Muse's own `muse mcp login|logout <name>` in Terminal. */
   mcpLogin(name: string, logout?: boolean): Promise<void>
   mcpRevealSettings(): Promise<void>
+  bridgeStatus(): Promise<BridgeStatus>
+  bridgeRevealFolder(): Promise<void>
+  /** Makes a new MCP bridge token, returns it once and invalidates the old one. */
+  bridgeRegenerateToken(): Promise<string>
+  bridgeCopyToken(): Promise<void>
   openSession(sessionId: string): Promise<SessionView>
   send(input: {
     sessionId: string

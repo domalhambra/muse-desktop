@@ -180,3 +180,45 @@ test('the MCP servers tab edits Muse settings.json without exposing secrets', as
     await rm(sandbox, { recursive: true, force: true })
   }
 })
+
+test('the folder bridge runs a request as a Muse conversation', async () => {
+  const sandbox = await realpath(await mkdtemp(join(tmpdir(), 'muse-desktop-bridge-')))
+  const project = join(sandbox, 'bridged')
+  const outsider = join(sandbox, 'outsider')
+  await mkdir(project)
+  await mkdir(outsider)
+  const bridge = join(sandbox, 'desktop', 'bridge')
+  let app: ElectronApplication | undefined
+  try {
+    const launched = await launch(sandbox, project)
+    app = launched.app
+    const page = launched.page
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('button', { name: 'Bridges', exact: true }).click()
+    await page.getByRole('checkbox', { name: /Folder bridge/ }).click()
+    await expect(page.getByRole('checkbox', { name: /Folder bridge/ })).toBeChecked()
+    await expect(page.getByText(/Requests are Markdown files in a folder\. Running/)).toBeVisible()
+    await page.keyboard.press('Escape')
+    expect(await readFile(join(bridge, 'README.md'), 'utf8')).toContain('## Ask for work')
+
+    await writeFile(
+      join(bridge, 'inbox', 'hello.md'),
+      `---\nproject: ${project}\neffort: low\n---\nHello through the folder bridge.\n`,
+    )
+    await writeFile(join(bridge, 'inbox', 'sneaky.md'), `---\nproject: ${outsider}\n---\nHi\n`)
+    const outbox = join(bridge, 'outbox', 'hello.md')
+    await expect
+      .poll(() => readFile(outbox, 'utf8').catch(() => ''), { timeout: 20000 })
+      .toContain('status: done')
+    expect(await readFile(outbox, 'utf8')).toMatch(/# Reply\n.*Hello through the folder bridge/)
+    await expect(page.locator('.conversation-row')).toHaveCount(1)
+    await expect
+      .poll(() =>
+        readFile(join(bridge, 'inbox', 'rejected', 'sneaky.error.txt'), 'utf8').catch(() => ''),
+      )
+      .toContain('Open project')
+  } finally {
+    await app?.close()
+    await rm(sandbox, { recursive: true, force: true })
+  }
+})

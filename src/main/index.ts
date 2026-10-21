@@ -5,8 +5,10 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  clipboard,
   nativeTheme,
   Notification,
+  safeStorage,
   shell,
   systemPreferences,
   type IpcMainInvokeEvent,
@@ -26,6 +28,7 @@ import {
   preferencesSchema,
   type AppEvent,
   type Attachment,
+  type BridgeStatus,
   type McpServerView,
   type Preferences,
 } from '../shared/protocol'
@@ -35,6 +38,9 @@ import { getGitDiff, getGitStatus, getRawDiff, revertFile, revertHunk, stageFile
 import { listProjectFiles, readProjectFile } from './files'
 import { recordMuseTrust } from './muse-config'
 import { publish } from './event-bus'
+import { AgentApi } from './agent-api'
+import { FileBridge } from './bridge-files'
+import { readToken, regenerateToken, type TokenCipher } from './bridge-token'
 import {
   addServer,
   listServers,
@@ -106,6 +112,71 @@ function emit(event: AppEvent) {
   if (window && !window.isDestroyed()) window.webContents.send('muse:event', event)
 }
 const muse = new MuseHost(emit)
+
+// Bridges: other agents drive Muse Code through Desktop, limited to projects
+// Desktop already knows and trusts.
+const agentApi = new AgentApi(muse, {
+  resolveProject: async (path) => {
+    const project = await knownProject(path)
+    if (
+      !preferences.trustedProjects.includes(project) &&
+      !preferences.trustedProjects.includes(projectRoot(project))
+    )
+      throw new Error('That project is not trusted in Muse Desktop. Open it there first.')
+    return project
+  },
+})
+const bridgeRoot = join(app.getPath('userData'), 'bridge')
+const tokenPath = join(app.getPath('userData'), 'bridge-token')
+const tokenCipher: TokenCipher = {
+  available: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (value) => safeStorage.encryptString(value),
+  decrypt: (value) => safeStorage.decryptString(value),
+}
+let fileBridge: FileBridge | undefined
+const bridgeErrors: { files?: string; mcp?: string } = {}
+let bridgeSync: Promise<void> = Promise.resolve()
+
+function syncBridges() {
+  bridgeSync = bridgeSync.then(async () => {
+    const wantFiles = preferences.bridgeFilesEnabled && !quitting
+    if (wantFiles && !fileBridge) {
+      const bridge = new FileBridge(bridgeRoot, agentApi)
+      try {
+        await bridge.start()
+        fileBridge = bridge
+        delete bridgeErrors.files
+      } catch (error) {
+        await bridge.stop().catch(() => {})
+        bridgeErrors.files = messageOf(error)
+      }
+    } else if (!wantFiles && fileBridge) {
+      await fileBridge.stop().catch(() => {})
+      fileBridge = undefined
+    }
+  })
+  return bridgeSync
+}
+
+async function bridgeStatus(): Promise<BridgeStatus> {
+  await bridgeSync
+  return {
+    folder: bridgeRoot,
+    files: {
+      enabled: preferences.bridgeFilesEnabled,
+      running: Boolean(fileBridge),
+      ...(bridgeErrors.files ? { error: bridgeErrors.files } : {}),
+    },
+    mcp: {
+      enabled: preferences.bridgeMcpEnabled,
+      running: false,
+      url: `http://127.0.0.1:${preferences.bridgeMcpPort}/mcp`,
+      hasToken: Boolean(await readToken(tokenPath, tokenCipher)),
+      ...(bridgeErrors.mcp ? { error: bridgeErrors.mcp } : {}),
+    },
+    activeJobs: agentApi.activeCount,
+  }
+}
 const voice = new VoiceTranscriber()
 let microphoneEnabled = false
 
@@ -149,6 +220,7 @@ async function savePreferences(patch: Partial<Preferences>) {
           ? 'dark'
           : 'light'
     emit({ type: 'preferences', preferences: snapshot })
+    if (Object.keys(patch).some((key) => key.startsWith('bridge'))) void syncBridges()
     return snapshot
   })
   preferenceWrites = write.then(
@@ -409,6 +481,18 @@ function setupIPC() {
     await openProjectTerminal(homedir(), ['mcp', logout === true ? 'logout' : 'login', server.name])
   })
   handle('mcp-reveal', () => shell.showItemInFolder(mcpFile()))
+  handle('bridge-status', () => bridgeStatus())
+  handle('bridge-reveal', async () => {
+    await mkdir(bridgeRoot, { recursive: true, mode: 0o700 })
+    const error = await shell.openPath(bridgeRoot)
+    if (error) throw new Error(error)
+  })
+  handle('bridge-token', () => regenerateToken(tokenPath, tokenCipher))
+  handle('bridge-copy-token', async () => {
+    const token = await readToken(tokenPath, tokenCipher)
+    if (!token) throw new Error('Make a token first.')
+    clipboard.writeText(token)
+  })
   handle('worktrees', async (project) => muse.listWorktrees(await knownProject(project)))
   handle('worktree-merge', async (project, path) =>
     mergeWorktree(projectRoot(await knownProject(project)), pathSchema.parse(path)),
@@ -823,7 +907,7 @@ else {
       if (response !== 0) return
     }
     quitting = true
-    void Promise.all([muse.close(), preferenceWrites, voice.cancel()]).then(
+    void Promise.all([syncBridges(), muse.close(), preferenceWrites, voice.cancel()]).then(
       () => app.quit(),
       (error: unknown) => {
         dialog.showErrorBox('Muse could not shut down cleanly', messageOf(error))
@@ -858,6 +942,7 @@ else {
       setupMenu()
       createWindow(iconPath)
       await muse.connect(preferences.cliPath)
+      await syncBridges()
     })
     .catch((error: unknown) => {
       dialog.showErrorBox('Could not start Muse Desktop', messageOf(error))

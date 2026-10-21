@@ -9,6 +9,7 @@ import {
   Monitor,
   Moon,
   Palette,
+  Workflow,
   Plug,
   Smile,
   RefreshCw,
@@ -18,6 +19,7 @@ import {
 import type { ConnectionStatus, Preferences, Theme, UpdateStatus } from '../../../shared/protocol'
 import { Dialog, MuseMark } from './Primitives'
 import { McpSettings } from './McpSettings'
+import { BridgeSettings } from './BridgeSettings'
 
 export const themes: { id: Theme; label: string; description: string; icon: typeof Sun }[] = [
   { id: 'muse', label: 'Muse', description: 'Electric blue', icon: Palette },
@@ -48,7 +50,9 @@ export function Settings({
   onReconnect: () => void
   initialTab: 'appearance' | 'connection'
 }) {
-  const [tab, setTab] = useState<'appearance' | 'connection' | 'mcp' | 'about'>(initialTab)
+  const [tab, setTab] = useState<'appearance' | 'connection' | 'mcp' | 'bridges' | 'about'>(
+    initialTab,
+  )
   const [cliPath, setCliPath] = useState(preferences.cliPath)
   return (
     <Dialog title="Settings" onClose={onClose} className="settings-dialog">
@@ -71,6 +75,10 @@ export function Settings({
           <button className={tab === 'mcp' ? 'selected' : ''} onClick={() => setTab('mcp')}>
             <Plug size={16} />
             MCP servers
+          </button>
+          <button className={tab === 'bridges' ? 'selected' : ''} onClick={() => setTab('bridges')}>
+            <Workflow size={16} />
+            Bridges
           </button>
           <button className={tab === 'about' ? 'selected' : ''} onClick={() => setTab('about')}>
             <MuseMark size={16} />
@@ -197,6 +205,9 @@ export function Settings({
             </>
           )}
           {tab === 'mcp' && <McpSettings onError={onError} onReconnect={onReconnect} />}
+          {tab === 'bridges' && (
+            <BridgeSettings preferences={preferences} onSave={onSave} onError={onError} />
+          )}
           {tab === 'connection' && (
             <>
               <div className="settings-section-heading">
