@@ -48,6 +48,8 @@ function emit(event: AppEvent) {
 }
 const muse = new MuseHost(emit)
 
+// Register every method with a literal call to method, name in quotes as the first argument:
+// tests/unit/headless-parity.test.ts finds them by that pattern.
 function method(name: string, action: Method) {
   methods.set(name, async (...args: unknown[]) => {
     if (name !== 'hello' && !greeted) throw new Error('Send hello first.')

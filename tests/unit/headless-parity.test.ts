@@ -12,16 +12,16 @@ function names(file: string, pattern: RegExp) {
 
 const electron = names('src/main/index.ts', /\bhandle\('([^']+)'/g)
 const headless = names('src/headless/server.ts', /\bmethod\('([^']+)'/g)
+const preload = names('src/preload/index.ts', /\binvoke\('([^']+)'/g)
 
 const electronOnly: Record<string, string> = {
   'update-status': 'Sparkle runs natively in mMac',
   'check-updates': 'Sparkle runs natively in mMac',
   'automatic-updates': 'Sparkle runs natively in mMac',
   microphone: 'mMac asks macOS for the microphone',
-  bootstrap: 'start returns the same data',
+  bootstrap: 'hello and start return its data; mMac knows the home folder and platform natively',
   'choose-cli': 'mMac shows the panel and saves the path as a preference',
   'choose-project': 'mMac shows the panel and sends the folder to add-project',
-  attachments: 'mMac shows the panel and sends the chosen paths',
   'mcp-reveal': 'mMac reveals files with NSWorkspace',
   'bridge-reveal': 'mMac reveals files with NSWorkspace',
   'reveal-project': 'mMac reveals files with NSWorkspace',
@@ -58,6 +58,7 @@ const notYet = [
   'approve',
   'answer',
   'cancel-question',
+  'attachments',
   'remove-attachment',
   'git-status',
   'git-diff',
@@ -73,29 +74,52 @@ const notYet = [
   'output',
 ]
 
+function duplicates(list: string[]) {
+  return list.filter((name, index) => list.indexOf(name) !== index)
+}
+
 describe('headless method parity', () => {
   it('finds both front doors', () => {
     expect(electron).toHaveLength(53)
     expect(headless).toHaveLength(10)
   })
 
+  it('finds every Electron channel the preload calls', () => {
+    expect(
+      [...electron].sort(),
+      'src/main/index.ts and src/preload/index.ts disagree: a registration the regex cannot see may have been added',
+    ).toEqual([...preload].sort())
+  })
+
   it('accounts for every Electron channel', () => {
     const missing = electron.filter(
       (name) => !headless.includes(name) && !(name in electronOnly) && !notYet.includes(name),
     )
-    expect(missing).toEqual([])
+    expect(
+      missing,
+      'Port it in src/headless/server.ts, or add it to electronOnly with a reason, or to notYet',
+    ).toEqual([])
   })
 
   it('accounts for every headless method', () => {
     const extra = headless.filter((name) => !electron.includes(name) && !(name in headlessOnly))
-    expect(extra).toEqual([])
+    expect(
+      extra,
+      'Add it to src/main/index.ts as a channel, or to headlessOnly with a reason',
+    ).toEqual([])
   })
 
   it('keeps the lists apart', () => {
     const lists = [Object.keys(electronOnly), Object.keys(headlessOnly), notYet]
-    const all = lists.flat()
-    expect(new Set(all).size).toBe(all.length)
+    expect(duplicates(lists.flat())).toEqual([])
     expect(notYet.filter((name) => headless.includes(name))).toEqual([])
     expect(Object.keys(electronOnly).filter((name) => headless.includes(name))).toEqual([])
+  })
+
+  it('has no stale entries', () => {
+    expect(notYet.filter((name) => !electron.includes(name))).toEqual([])
+    expect(Object.keys(electronOnly).filter((name) => !electron.includes(name))).toEqual([])
+    expect(Object.keys(headlessOnly).filter((name) => !headless.includes(name))).toEqual([])
+    expect(Object.keys(headlessOnly).filter((name) => electron.includes(name))).toEqual([])
   })
 })
