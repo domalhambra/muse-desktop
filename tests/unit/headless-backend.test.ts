@@ -244,15 +244,18 @@ describe('headless backend, M1 methods', () => {
   }
 
   it('patches preferences, but never the project lists', async () => {
-    const { call, start, lastPreferences } = harness()
+    const { call, start, events, lastPreferences } = harness()
     await start()
     const saved = (await call('preferences', { reasoningEffort: 'low', cliPath: '/opt/muse' })) as {
       reasoningEffort: string
     }
     expect(saved.reasoningEffort).toBe('low')
     expect(lastPreferences()?.preferences.cliPath).toBe('/opt/muse')
+    const emitted = events.length
     await expect(call('preferences', { trustedProjects: ['/x'] })).rejects.toThrow()
     await expect(call('preferences', { recentProjects: ['/x'] })).rejects.toThrow()
+    await expect(call('preferences', { nope: true })).rejects.toThrow()
+    expect(events).toHaveLength(emitted)
   })
 
   it('renames after the trust check, trimming the name', async () => {
@@ -264,11 +267,12 @@ describe('headless backend, M1 methods', () => {
   })
 
   it('lists models with or without a session', async () => {
-    const { call, muse } = await trustedSession()
+    const { call, muse, asks } = await trustedSession()
     expect(await call('models')).toHaveLength(1)
     await call('models', 's1')
     expect(muse.models).toHaveBeenNthCalledWith(1, undefined)
     expect(muse.models).toHaveBeenNthCalledWith(2, 's1')
+    expect(asks).toHaveLength(0)
   })
 
   it('sets the model after the trust check', async () => {
@@ -298,6 +302,24 @@ describe('headless backend, M1 methods', () => {
     const { call, muse } = await trustedSession()
     await call('cancel-question', 's1', 'u1')
     expect(muse.cancelQuestion).toHaveBeenCalledWith('s1', 'u1')
+  })
+
+  it.each([
+    ['rename', 'rename', ['s1', 'New name']],
+    ['set-model', 'setModel', ['s1', 'm1']],
+    ['approve', 'approve', ['s1', 'a1', 'c1']],
+    ['answer', 'answer', ['s1', 'u1', [{ questionId: 'q', selectedLabel: 'Yes' }]]],
+    ['cancel-question', 'cancelQuestion', ['s1', 'u1']],
+  ] as const)('%s stops at a cancelled trust check', async (name, hostMethod, args) => {
+    const project = await folder('project')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const { call, start, asks } = harness(muse, [1])
+    await start()
+    await expect(call(name, ...args)).rejects.toThrow(
+      'Project trust was cancelled. No session was started.',
+    )
+    expect(asks).toHaveLength(1)
+    expect(muse[hostMethod]).not.toHaveBeenCalled()
   })
 
   it('reads stored output without a trust check', async () => {

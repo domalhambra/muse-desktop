@@ -175,3 +175,8 @@ The plan was attached to the kickoff message and is not committed in this reposi
 ### Verification
 
 On Linux with Muse Code 1.4.11 and the echo provider: typecheck, 80 unit tests, the integration script (8 checks), 17 Playwright tests under `xvfb-run`, build and format check all pass. macOS, a real model, packaging and the Muse app's reach to `127.0.0.1` are not verified.
+
+## Rename, found 2026-10-21 while building mMac M1
+
+- `session/list` can omit a live session's `name` just after a rename. A fresh backend's list has it, along with `title` and `firstUserPrompt`. The pushed `session` event and `open` carry the name.
+- The CLI trims the name and lowercases ASCII A-Z only. " mMac check " becomes "mmac check", and "Hello WORLD Äb-Cd_9 ÉCOLE" becomes "hello world Äb-cd_9 École". Non-ASCII capitals stay as typed.

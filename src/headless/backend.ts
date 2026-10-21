@@ -266,6 +266,7 @@ export function createBackend({ muse, ask, emit, version, quitting, quit }: Back
 
   method('cancel', (value) => muse.cancel(id.parse(value)))
 
+  // Electron also restarts the bridges when a bridge* key changes; mMac adds that with the bridges in M3.
   method('preferences', (value) => savePreferences(preferencesPatchSchema.parse(value)))
 
   method('rename', async (session, name) => {
