@@ -174,9 +174,14 @@ private func waitFor(_ condition: () -> Bool) async throws {
   let waiting = Task { try await client.sessions() }
   while backend.messages.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
   waiting.cancel()
+  // The Reply to the cancelled request arrives a second later and must be ignored. If
+  // cancelling stopped nothing, this Reply ends the wait, and the expectation fails, not hangs.
+  let late = Task.detached {
+    try await Task.sleep(for: .seconds(1))
+    backend.push(#"{"id":1,"ok":true,"value":{"sessions":[],"nextCursor":null}}"#)
+  }
   await #expect(throws: CancellationError.self) { _ = try await waiting.value }
-  // The Reply to the cancelled request arrives late and must be ignored.
-  backend.push(#"{"id":1,"ok":true,"value":{"sessions":[],"nextCursor":null}}"#)
+  try await late.value
   let next = Task { try await client.sessions() }
   while backend.messages.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
   backend.push(#"{"id":2,"ok":true,"value":{"sessions":[],"nextCursor":null}}"#)

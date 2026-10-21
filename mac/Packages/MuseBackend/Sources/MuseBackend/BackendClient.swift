@@ -34,8 +34,9 @@ public actor BackendClient {
   }
 
   /// Sends a Request and returns the Reply's value. If the calling task is cancelled, this throws
-  /// `CancellationError` at once and ignores the Reply when it comes. The backend still finishes
-  /// the request; cancelling only stops waiting.
+  /// `CancellationError` as soon as the actor is free, and ignores the Reply when it comes. A Reply
+  /// that reaches the actor before the cancellation does wins the race and is returned. The
+  /// backend still finishes the request; cancelling only stops waiting.
   public func request(_ method: String, _ args: [JSONValue] = []) async throws -> JSONValue {
     if stopped { throw BackendError.stopped }
     try Task.checkCancellation()
@@ -105,8 +106,18 @@ public actor BackendClient {
     } catch let error as BackendError {
       eventContinuation.yield(.error(error.localizedDescription))
       return
+    } catch let error as DecodingError {
+      // The coding path names protocol fields only. The description can quote a value, which can
+      // be the person's own text, so it stays private.
+      Self.log.error(
+        "A backend line could not be decoded at \(Self.codingPath(of: error), privacy: .public): \(String(describing: error), privacy: .private)"
+      )
+      eventContinuation.yield(.error(BackendError.unreadable("A line could not be decoded.").localizedDescription))
+      return
     } catch {
-      Self.log.error("A backend line could not be decoded: \(String(describing: error), privacy: .public)")
+      Self.log.error(
+        "A backend line could not be decoded: \(String(describing: type(of: error)), privacy: .public): \(String(describing: error), privacy: .private)"
+      )
       eventContinuation.yield(.error(BackendError.unreadable("A line could not be decoded.").localizedDescription))
       return
     }
@@ -125,6 +136,21 @@ public actor BackendClient {
       send(answer: id, choice: -1)
       eventContinuation.yield(.error(BackendError.unreadable("An Ask could not be decoded.").localizedDescription))
     }
+  }
+
+  /// Where in the line a decoding error happened, such as `event.view.items.0.kind`.
+  private static func codingPath(of error: DecodingError) -> String {
+    let path: [any CodingKey]
+    switch error {
+    case .typeMismatch(_, let context), .valueNotFound(_, let context), .dataCorrupted(let context):
+      path = context.codingPath
+    case .keyNotFound(let key, let context):
+      path = context.codingPath + [key]
+    @unknown default:
+      path = []
+    }
+    let names = path.map { $0.intValue.map(String.init) ?? $0.stringValue }
+    return names.isEmpty ? "(top level)" : names.joined(separator: ".")
   }
 
   /// Sends the person's choice. A choice that names no button cancels.

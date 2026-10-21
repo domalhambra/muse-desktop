@@ -57,7 +57,8 @@ public final class ProcessTransport: Transport, Sendable {
     errorReader = PipeReader(
       errors.fileHandleForReading,
       received: { data in
-        FileHandle.standardError.write(data)
+        // `write(_:)` raises an Objective-C exception on a closed pipe; this throws instead.
+        try? FileHandle.standardError.write(contentsOf: data)
         tail.append(data)
       },
       ended: {})
@@ -149,11 +150,21 @@ final class ErrorTail: @unchecked Sendable {
   func append(_ chunk: Data) {
     lock.withLock {
       data.append(chunk)
-      if data.count > limit { data.removeFirst(data.count - limit) }
+      // A copy, not `removeFirst`: a slice keeps every byte it ever held.
+      if data.count > limit { data = Data(data.suffix(limit)) }
     }
   }
 
+  /// The buffer's first index, so a test can check that the buffer is a copy, not a slice.
+  var bufferStartIndex: Int { lock.withLock { data.startIndex } }
+
+  /// The kept bytes as text. A cut can fall inside a character, so the text starts after any
+  /// leading UTF-8 continuation bytes (0x80 to 0xBF), and never with U+FFFD.
   var text: String {
-    lock.withLock { String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
+    lock.withLock {
+      let start = data.firstIndex { $0 & 0xC0 != 0x80 } ?? data.endIndex
+      return String(decoding: data[start...], as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
   }
 }
