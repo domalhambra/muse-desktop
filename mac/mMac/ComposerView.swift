@@ -60,7 +60,7 @@ struct ComposerView: View {
         Text(footnote)
           .font(.caption)
           .foregroundStyle(.secondary)
-          .frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityIdentifier("composer-footnote")
       }
     }
     .padding(12)

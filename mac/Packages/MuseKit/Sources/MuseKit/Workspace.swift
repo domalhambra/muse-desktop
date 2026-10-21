@@ -138,7 +138,7 @@ public final class Workspace {
         let page = try await client.sessions(cursor: cursor)
         guard sequence == refreshSequence else { return }
         var known = before.merging(Self.byId(sessions)) { _, now in now }
-        if let open = view?.session { known[open.sessionId] = open }
+        if let open = view?.session { known[open.sessionId] = Self.keepingKnownLabels(open, from: known) }
         for session in page.sessions {
           if merged[session.sessionId] == nil { order.append(session.sessionId) }
           merged[session.sessionId] = Self.keepingKnownLabels(session, from: known)
@@ -163,7 +163,7 @@ public final class Workspace {
 
   /// `session/list` lags a live conversation. Just after a turn it can leave out the name, the title
   /// and the first prompt that session events already gave. Keep each one the list leaves out; a
-  /// value in the list wins. The CLI itself lowercases ASCII letters in names.
+  /// value in the list wins. (The CLI lowercases ASCII letters in names.)
   static func keepingKnownLabels(_ session: Session, from known: [String: Session]) -> Session {
     guard let old = known[session.sessionId] else { return session }
     var kept = session

@@ -105,6 +105,25 @@ import Testing
   #expect(workspace.sessions[0].firstUserPrompt == "Fix the bug")
 }
 
+@MainActor @Test func theOpenConversationFillsOnlyWhatTheRowLacks() async throws {
+  // The open view has no title. The first list gives the row one, the second lags and omits it.
+  let lists = Counter()
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": return [reply(id, viewJSON(sessionJSON("s1")))]
+    case "sessions":
+      let row = lists.next() == 1 ? sessionJSON("s1", title: "Fix it") : sessionJSON("s1")
+      return [reply(id, #"{"sessions":[\#(row)],"nextCursor":null}"#)]
+    default: return []
+    }
+  }
+  await workspace.open("s1")
+  await workspace.refreshSessions()
+  #expect(workspace.sessions[0].title == "Fix it")
+  await workspace.refreshSessions()
+  #expect(workspace.sessions[0].title == "Fix it")
+}
+
 @MainActor @Test func aTitleOrPromptFromTheListReplacesTheKnownOne() async throws {
   let (workspace, _) = await makeWorkspace { method, _, id in
     switch method {
