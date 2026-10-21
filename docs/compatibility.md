@@ -31,6 +31,13 @@ Preference updates are independently validated: changing reasoning effort preser
 - MCP server changes take effect when Desktop reconnects to Muse. The tab offers **Reconnect** and never reconnects during your work on its own. Remote servers that need OAuth sign in through `muse mcp login`, which opens in Terminal.
 - The diff view shows hunk revert buttons for working-tree changes only. Staged changes have none.
 
+## mMac
+
+mMac M1 was tested on macOS 27.2 Apple Silicon with Muse Code 1.4.11 and the echo provider, on October 21, 2026. It has not run against a real model yet.
+
+- Markdown footnotes are not drawn. A footnote with a sentence of text shows as typed. A footnote whose text is one word or a URL disappears: cmark reads it as a link definition, and its reference can become a link.
+- Images in replies never load. They show as `[Image: <alt>]`, as in Electron.
+
 ## Voice
 
 The installed CLI must provide `muse voice transcribe <FILE>`. Option–V or the microphone button starts and stops recording; Escape cancels. Audio is mixed to mono 16 kHz PCM WAV and passed to that command using the discovered CLI environment. Temporary directories and clips have private permissions and are removed on completion, failure, cancellation, or normal app shutdown. A two-minute recording limit and ninety-second transcription timeout keep requests bounded. Audio may be sent to the service configured by Muse Code; this is not offline transcription.

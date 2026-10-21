@@ -4,7 +4,7 @@ Chartered 2026-10-20.
 
 ## What it is
 
-Dom's fork of robzilla1738's Muse Desktop, the unofficial Electron app for Meta's Muse Code CLI. The fork adds four things upstream lacks: diff review in the inspector, conversations in Muse-created worktrees, an MCP servers tab, and two bridges that let another agent, such as the Muse app, ask Muse Code to work. It also holds mMac, a native SwiftUI app in `mac/` over the same core. mMac's M0 was built on 2026-10-21. It sits in `40-49 Outside Work` and is not a Plateworks property.
+Dom's fork of robzilla1738's Muse Desktop, the unofficial Electron app for Meta's Muse Code CLI. The fork adds four things upstream lacks: diff review in the inspector, conversations in Muse-created worktrees, an MCP servers tab, and two bridges that let another agent, such as the Muse app, ask Muse Code to work. It also holds mMac, a native SwiftUI app in `mac/` over the same core. mMac's M0 and M1 were built on 2026-10-21. It sits in `40-49 Outside Work` and is not a Plateworks property.
 
 ## Why
 
@@ -17,7 +17,7 @@ Dom wants to run Muse Desktop on his Mac and keep adding features to it. The ext
 
 ## Status (2026-10-21)
 
-The extensions are on `extensions`, draft PR 1. Every gate command in `docs/changing-things.md` ("Prove a change") passes on macOS 27.2 with Muse Code 1.4.11 and the echo provider. mMac M0, the headless backend and a bare window, is on `mac-app`. A real model, approvals and the Muse app's reach to the MCP bridge are not verified yet.
+The extensions are on `extensions`, draft PR 1. Every gate command in `docs/changing-things.md` ("Prove a change") passes on macOS 27.2 with Muse Code 1.4.11 and the echo provider. mMac M0, the headless backend and a bare window, is on `mac-app`. mMac M1, the core loop, is built on `mac-m1`, with its PR into `extensions` pending. A real model, approvals and the Muse app's reach to the MCP bridge are not verified yet.
 
 ## Boundaries
 
