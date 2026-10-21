@@ -1,5 +1,6 @@
 import Foundation
 import MuseBackend
+import Observation
 import Testing
 @testable import MuseKit
 
@@ -155,13 +156,22 @@ import Testing
 }
 
 @MainActor @Test func aSecondSessionsChangedDoesNotCancelARunningRefresh() async throws {
-  // Muse never answers, so the first refresh is still loading when the second event comes.
-  let (workspace, backend) = await makeWorkspace()
+  // Muse answers only when the test pushes a reply, so the first refresh is still loading when the
+  // second event comes. Its reply lands during the second pause, before the second refresh starts.
+  let (workspace, backend) = await makeWorkspace(refreshDebounce: .milliseconds(100))
   workspace.apply(.sessionsChanged)
   try await eventually { backend.messages.filter { $0["method"] == "sessions" }.count == 1 }
   workspace.apply(.sessionsChanged)
+  guard case .number(let id)? = backend.messages.first(where: { $0["method"] == "sessions" })?["id"] else {
+    Issue.record("No first refresh request")
+    return
+  }
+  backend.push(reply(Int(id), #"{"sessions":[\#(sessionJSON("s1"))],"nextCursor":null}"#))
+  // A cancelled first refresh would never write its reply.
+  try await eventually { workspace.sessions.map(\.sessionId) == ["s1"] }
   try await eventually { backend.messages.filter { $0["method"] == "sessions" }.count == 2 }
   try await Task.sleep(for: .milliseconds(20))
+  #expect(workspace.sessions.map(\.sessionId) == ["s1"])
   #expect(workspace.historyError == nil)
 }
 
@@ -233,4 +243,59 @@ import Testing
   workspace.selectProject("/other")
   #expect(workspace.view == nil)
   #expect(workspace.project == "/other")
+}
+
+@MainActor @Test func aRefreshClearsTheLastHistoryErrorWhenItStarts() async throws {
+  // The first refresh fails; the second gets no answer until the test pushes one.
+  let calls = Counter()
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    guard method == "sessions" else { return [] }
+    return calls.next() == 1 ? [failure(id, "boom")] : []
+  }
+  await workspace.refreshSessions()
+  #expect(workspace.historyError == "boom")
+  let again = Task { await workspace.refreshSessions() }
+  try await eventually { backend.messages.filter { $0["method"] == "sessions" }.count == 2 }
+  #expect(workspace.historyError == nil)
+  guard case .number(let id)? = backend.messages.last(where: { $0["method"] == "sessions" })?["id"] else {
+    Issue.record("No second refresh request")
+    return
+  }
+  backend.push(reply(Int(id), #"{"sessions":[],"nextCursor":null}"#))
+  await again.value
+  #expect(workspace.historyError == nil)
+}
+
+@MainActor @Test func historyShowsLoadingOnlyBeforeTheFirstSuccess() async throws {
+  // Every refresh after the first gets no answer until the test pushes one.
+  let calls = Counter()
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    guard method == "sessions" else { return [] }
+    return calls.next() == 1 ? [reply(id, #"{"sessions":[],"nextCursor":null}"#)] : []
+  }
+  await workspace.refreshSessions()
+  #expect(workspace.historyLoading == false)
+  let again = Task { await workspace.refreshSessions() }
+  try await eventually { backend.messages.filter { $0["method"] == "sessions" }.count == 2 }
+  #expect(workspace.historyLoading == false)
+  guard case .number(let id)? = backend.messages.last(where: { $0["method"] == "sessions" })?["id"] else {
+    Issue.record("No second refresh request")
+    return
+  }
+  backend.push(reply(Int(id), #"{"sessions":[],"nextCursor":null}"#))
+  await again.value
+}
+
+@MainActor @Test func anUnchangedSessionEventLeavesTheHistoryUntouched() async throws {
+  // Every streamed update sends a session event; the sidebar redraws only when a row changes.
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "sessions" ? [reply(id, #"{"sessions":[\#(sessionJSON("s1"))],"nextCursor":null}"#)] : []
+  }
+  await workspace.refreshSessions()
+  let changes = Counter()
+  withObservationTracking { _ = workspace.sessions } onChange: { changes.next() }
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1")))))
+  #expect(changes.value == 0)
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "running")))))
+  #expect(changes.value == 1)
 }

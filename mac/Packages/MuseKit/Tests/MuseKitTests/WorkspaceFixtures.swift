@@ -1,6 +1,7 @@
 import Foundation
 import MuseBackend
 import MuseBackendTesting
+import Synchronization
 import Testing
 @testable import MuseKit
 
@@ -30,6 +31,7 @@ func decodeView(_ json: String) throws -> SessionView {
 func makeWorkspace(
   preferences: Preferences = Preferences(recentProjects: ["/p"]),
   status: ConnectionStatus = ConnectionStatus(state: "ready", version: "1.4.11"),
+  refreshDebounce: Duration = .milliseconds(10),
   script: @escaping @Sendable (String, [JSONValue], Int) -> [String] = { _, _, _ in [] }
 ) async -> (Workspace, ScriptedBackend) {
   let backend = ScriptedBackend { message in
@@ -42,7 +44,7 @@ func makeWorkspace(
   await client.run()
   let workspace = Workspace(
     client: client, started: Started(preferences: preferences, status: status),
-    refreshDebounce: .milliseconds(10))
+    refreshDebounce: refreshDebounce)
   return (workspace, backend)
 }
 
@@ -62,4 +64,12 @@ func eventually(_ condition: () -> Bool) async throws {
     try await Task.sleep(for: .milliseconds(5))
   }
   Issue.record("Timed out waiting for a condition")
+}
+
+/// A count that scripts and observation callbacks can share across threads.
+final class Counter: Sendable {
+  private let count = Mutex(0)
+  /// Adds one and returns the new count.
+  @discardableResult func next() -> Int { count.withLock { $0 += 1; return $0 } }
+  var value: Int { count.withLock { $0 } }
 }

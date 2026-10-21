@@ -45,7 +45,9 @@ public final class Workspace {
 
   let client: BackendClient
   var drafts: [String: String] = [:]
-  private var openSequence = 0
+  /// Counts `open` and `startNew` calls. An action that awaits the backend compares it after the
+  /// await, so a reply for a conversation the person has left does not change the one shown.
+  private(set) var openSequence = 0
   private var refreshSequence = 0
   private var refreshDelay: Task<Void, Never>?
   /// The pause before a `sessions-changed` event refreshes history. Electron waits 250 ms.
@@ -198,8 +200,11 @@ public final class Workspace {
   public func open(_ sessionId: String, force: Bool = false) async {
     if !force, sessionId == view?.session.sessionId {
       // Already shown. Drop any other open still in flight, so it does not replace this one.
-      openSequence += 1
-      openingSessionId = nil
+      // With nothing opening the click changes nothing, so a pending reply for this one still lands.
+      if openingSessionId != nil {
+        openSequence += 1
+        openingSessionId = nil
+      }
       return
     }
     openSequence += 1
