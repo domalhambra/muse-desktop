@@ -19,6 +19,8 @@ const askAnswerSchema = z.object({
   choice: z.number().int().min(-1),
 })
 
+const BAD_REQUEST = 'mMac sent a request the backend could not read.'
+
 export type Method = (...args: unknown[]) => unknown
 
 /** A native alert in mMac. The last button cancels. */
@@ -43,6 +45,7 @@ function encode(message: Outgoing) {
 export class Wire {
   private asks = new Map<number, (choice: number) => void>()
   private nextAsk = 1
+  private closed = false
   private inFlight = new Set<Promise<void>>()
 
   constructor(
@@ -56,6 +59,7 @@ export class Wire {
 
   /** Shows a native alert in mMac and resolves with the chosen button's index. */
   ask(ask: Ask): Promise<number> {
+    if (this.closed) return Promise.resolve(-1)
     const id = this.nextAsk++
     return new Promise((resolve) => {
       this.asks.set(id, resolve)
@@ -63,8 +67,12 @@ export class Wire {
     })
   }
 
-  /** Answers every open Ask with -1, the cancel choice. Used on quit. */
+  /**
+   * Answers every open Ask with -1, the cancel choice. Used on quit. Every later
+   * Ask also resolves with -1 at once, without writing a line.
+   */
   cancelAsks() {
+    this.closed = true
     for (const [id, resolve] of this.asks) {
       this.asks.delete(id)
       resolve(-1)
@@ -73,7 +81,7 @@ export class Wire {
 
   /** Handles one line from mMac. Never rejects. */
   receive(line: string): Promise<void> {
-    const work = this.handle(line)
+    const work = this.handle(line).catch(() => {})
     this.inFlight.add(work)
     void work.finally(() => this.inFlight.delete(work))
     return work
@@ -106,7 +114,12 @@ export class Wire {
     }
     const request = requestSchema.safeParse(value)
     if (!request.success) {
-      this.emit({ type: 'error', message: 'mMac sent a request the backend could not read.' })
+      const id = (value as { id?: unknown } | null)?.id
+      if (typeof id === 'number' && Number.isInteger(id) && id >= 0) {
+        this.write(encode({ id, ok: false, error: BAD_REQUEST }))
+        return
+      }
+      this.emit({ type: 'error', message: BAD_REQUEST })
       return
     }
     const { id, method, args } = request.data

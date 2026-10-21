@@ -80,6 +80,37 @@ describe('headless wire', () => {
     await expect(second).resolves.toBe(-1)
   })
 
+  it('resolves an Ask asked after quit with -1 and writes nothing', async () => {
+    const { wire, lines } = harness()
+    wire.cancelAsks()
+    await expect(
+      wire.ask({ kind: 'confirm', title: 'C', message: 'C', buttons: ['OK', 'Cancel'] }),
+    ).resolves.toBe(-1)
+    expect(lines).toEqual([])
+  })
+
+  it('replies with an error when a request has a readable id but is otherwise invalid', async () => {
+    const { wire, sent } = harness()
+    await wire.receive(JSON.stringify({ id: 4, method: '', args: [] }))
+    expect(sent()).toEqual([
+      { id: 4, ok: false, error: 'mMac sent a request the backend could not read.' },
+    ])
+  })
+
+  it('lets a method wait on an Ask that mMac answers later', async () => {
+    const { wire, sent } = harness({
+      trust: () =>
+        wire.ask({ kind: 'confirm', title: 'T', message: 'T', buttons: ['OK', 'Cancel'] }),
+    })
+    void wire.receive(JSON.stringify({ id: 1, method: 'trust' }))
+    await wire.receive(JSON.stringify({ answer: 1, choice: 0 }))
+    await wire.drain()
+    expect(sent()).toEqual([
+      { ask: 1, kind: 'confirm', title: 'T', message: 'T', buttons: ['OK', 'Cancel'] },
+      { id: 1, ok: true, value: 0 },
+    ])
+  })
+
   it('drains requests still in flight', async () => {
     let finish = () => {}
     const { wire, sent } = harness({
