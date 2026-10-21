@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// mMac's side of the backend protocol: Requests and Replies, Events, and Asks.
 public actor BackendClient {
@@ -11,6 +12,8 @@ public actor BackendClient {
   private var nextId = 1
   private var reader: Task<Void, Never>?
   private var stopped = false
+
+  private static let log = Logger(subsystem: "com.domalhambra.mmac", category: "backend")
 
   /// `answerAsk` shows the Ask and returns the chosen button's index, or -1.
   public init(transport: any Transport, answerAsk: @escaping @Sendable (Ask) async -> Int) {
@@ -30,22 +33,42 @@ public actor BackendClient {
     }
   }
 
-  /// Sends a Request and returns the Reply's value.
+  /// Sends a Request and returns the Reply's value. If the calling task is cancelled, this throws
+  /// `CancellationError` at once and ignores the Reply when it comes. The backend still finishes
+  /// the request; cancelling only stops waiting.
   public func request(_ method: String, _ args: [JSONValue] = []) async throws -> JSONValue {
     if stopped { throw BackendError.stopped }
+    try Task.checkCancellation()
     let id = nextId
     nextId += 1
     let line = try JSONEncoder().encode(OutgoingRequest(id: id, method: method, args: args))
-    return try await withCheckedThrowingContinuation { continuation in
-      pending[id] = continuation
-      do {
-        try transport.send(line)
-      } catch {
-        pending.removeValue(forKey: id)
-        continuation.resume(throwing: BackendError.stopped)
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        // Cancelled between the check above and here: the handler found nothing to cancel.
+        if Task.isCancelled {
+          continuation.resume(throwing: CancellationError())
+          return
+        }
+        pending[id] = continuation
+        do {
+          try transport.send(line)
+        } catch {
+          pending.removeValue(forKey: id)
+          continuation.resume(throwing: BackendError.stopped)
+        }
       }
+    } onCancel: {
+      Task { await self.abandon(id) }
     }
   }
+
+  /// Stops waiting for a request whose caller was cancelled.
+  private func abandon(_ id: Int) {
+    pending.removeValue(forKey: id)?.resume(throwing: CancellationError())
+  }
+
+  /// Stops the backend at once. Used when a second Quit finds it never answered `shutdown`.
+  public nonisolated func forceStop() { transport.forceStop() }
 
   /// Sends a Request and decodes the Reply's value as `T`.
   public func call<T: Decodable>(_ method: String, _ args: [JSONValue] = []) async throws -> T {
@@ -83,6 +106,7 @@ public actor BackendClient {
       eventContinuation.yield(.error(error.localizedDescription))
       return
     } catch {
+      Self.log.error("A backend line could not be decoded: \(String(describing: error), privacy: .public)")
       eventContinuation.yield(.error(BackendError.unreadable("A line could not be decoded.").localizedDescription))
       return
     }
