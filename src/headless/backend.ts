@@ -2,7 +2,9 @@ import { mkdir, realpath, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { z } from 'zod'
 import {
+  answerSchema,
   effortSchema,
+  preferencesPatchSchema,
   preferencesSchema,
   type AppEvent,
   type Preferences,
@@ -30,6 +32,13 @@ export type Muse = Pick<
   | 'cancel'
   | 'getSession'
   | 'hasActiveTurns'
+  | 'rename'
+  | 'models'
+  | 'setModel'
+  | 'approve'
+  | 'answer'
+  | 'cancelQuestion'
+  | 'readOutput'
 >
 
 export type BackendDeps = {
@@ -256,6 +265,42 @@ export function createBackend({ muse, ask, emit, version, quitting, quit }: Back
   })
 
   method('cancel', (value) => muse.cancel(id.parse(value)))
+
+  method('preferences', (value) => savePreferences(preferencesPatchSchema.parse(value)))
+
+  method('rename', async (session, name) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.rename(sessionId, z.string().trim().min(1).max(200).parse(name))
+  })
+
+  method('models', (session) => muse.models(z.string().optional().parse(session)))
+
+  method('set-model', async (session, model) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.setModel(sessionId, id.parse(model))
+  })
+
+  method('approve', async (session, approval, choice) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.approve(sessionId, id.parse(approval), id.parse(choice))
+  })
+
+  method('answer', async (session, question, answers) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.answer(sessionId, id.parse(question), z.array(answerSchema).parse(answers))
+  })
+
+  method('cancel-question', async (session, question) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.cancelQuestion(sessionId, id.parse(question))
+  })
+
+  method('output', (session, item) => muse.readOutput(id.parse(session), id.parse(item)))
 
   method('shutdown', async () => {
     if (muse.hasActiveTurns()) {

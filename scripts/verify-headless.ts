@@ -235,6 +235,39 @@ try {
   assert(listed.sessions.some((session) => session.sessionId === sessionId))
   console.log('PASS · The new conversation is in the session list')
 
+  // M1 methods against the real CLI. The echo provider has no models and no stored output.
+  // session/list does not carry a session's name, and the CLI normalizes it (the name comes
+  // back lowercased), so the rename shows in the pushed session event and in open.
+  const models = await backend.request('models', sessionId)
+  assert(Array.isArray(models), 'models should reply with a list')
+  await backend.request('rename', sessionId, '  mMac check  ')
+  const renamedTo = (name?: string) => name?.trim().toLowerCase() === 'mmac check'
+  await until(
+    () =>
+      backend.events.some(
+        (event) => event.type === 'session' && renamedTo((event.view as SessionView).session.name),
+      ),
+    'the new name in a session event',
+  )
+  const reopened = (await backend.request('open', sessionId)) as SessionView
+  assert(
+    renamedTo(reopened.session.name),
+    `open should show the new name: ${reopened.session.name}`,
+  )
+  const saved = (await backend.request('preferences', { reasoningEffort: 'low' })) as {
+    reasoningEffort: string
+  }
+  assert.equal(saved.reasoningEffort, 'low')
+  await assert.rejects(backend.request('preferences', { trustedProjects: [] }))
+  const replyItem = backend.events
+    .filter((event) => event.type === 'session')
+    .map((event) => event.view as SessionView)
+    .at(-1)
+    ?.items.find((item) => item.kind === 'agentMessage')?.itemId
+  assert(replyItem, 'the echo reply should have an item id')
+  await assert.rejects(backend.request('output', sessionId, replyItem), /no stored output/)
+  console.log('PASS · Rename, models, preferences and the stored-output error')
+
   // Only the trust Ask, before and after shutdown: an unexpected Ask must not be quietly confirmed.
   assert.equal(backend.asks.length, 1, 'Only the trust Ask was expected before shutdown.')
   backend.recordServes()

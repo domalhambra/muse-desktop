@@ -51,6 +51,22 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     cancel: vi.fn(async () => {}),
     getSession: vi.fn(() => session()),
     hasActiveTurns: vi.fn(() => false),
+    rename: vi.fn(async () => {}),
+    models: vi.fn(async () => [
+      {
+        modelId: 'm1',
+        displayLabel: 'Model One',
+        providerId: 'p',
+        isDefault: true,
+        isActive: true,
+        contextLimit: null,
+      },
+    ]),
+    setModel: vi.fn(async () => {}),
+    approve: vi.fn(async () => {}),
+    answer: vi.fn(async () => {}),
+    cancelQuestion: vi.fn(async () => {}),
+    readOutput: vi.fn(async () => 'stored output'),
     ...overrides,
   } satisfies Muse
 }
@@ -215,5 +231,79 @@ describe('headless backend', () => {
     expect(await call('shutdown')).toBe(true)
     expect(quit).toHaveBeenCalledWith(0)
     expect(asks[0].buttons).toEqual(['Quit', 'Keep working'])
+  })
+})
+
+describe('headless backend, M1 methods', () => {
+  async function trustedSession() {
+    const project = await folder('project')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const h = harness(muse, [0])
+    await h.start()
+    return { ...h, muse }
+  }
+
+  it('patches preferences, but never the project lists', async () => {
+    const { call, start, lastPreferences } = harness()
+    await start()
+    const saved = (await call('preferences', { reasoningEffort: 'low', cliPath: '/opt/muse' })) as {
+      reasoningEffort: string
+    }
+    expect(saved.reasoningEffort).toBe('low')
+    expect(lastPreferences()?.preferences.cliPath).toBe('/opt/muse')
+    await expect(call('preferences', { trustedProjects: ['/x'] })).rejects.toThrow()
+    await expect(call('preferences', { recentProjects: ['/x'] })).rejects.toThrow()
+  })
+
+  it('renames after the trust check, trimming the name', async () => {
+    const { call, muse, asks } = await trustedSession()
+    await call('rename', 's1', '  New name  ')
+    expect(muse.rename).toHaveBeenCalledWith('s1', 'New name')
+    expect(asks).toHaveLength(1)
+    await expect(call('rename', 's1', '   ')).rejects.toThrow()
+  })
+
+  it('lists models with or without a session', async () => {
+    const { call, muse } = await trustedSession()
+    expect(await call('models')).toHaveLength(1)
+    await call('models', 's1')
+    expect(muse.models).toHaveBeenNthCalledWith(1, undefined)
+    expect(muse.models).toHaveBeenNthCalledWith(2, 's1')
+  })
+
+  it('sets the model after the trust check', async () => {
+    const { call, muse, asks } = await trustedSession()
+    await call('set-model', 's1', 'm1')
+    expect(muse.setModel).toHaveBeenCalledWith('s1', 'm1')
+    expect(asks).toHaveLength(1)
+  })
+
+  it('passes an approval choice through after the trust check', async () => {
+    const { call, muse } = await trustedSession()
+    await call('approve', 's1', 'a1', 'c1')
+    expect(muse.approve).toHaveBeenCalledWith('s1', 'a1', 'c1')
+  })
+
+  it('checks answers against the answer schema', async () => {
+    const { call, muse } = await trustedSession()
+    const answers = [{ questionId: 'q', selectedLabel: 'Yes' }]
+    await call('answer', 's1', 'u1', answers)
+    expect(muse.answer).toHaveBeenCalledWith('s1', 'u1', answers)
+    await expect(
+      call('answer', 's1', 'u1', [{ questionId: 'q', freeText: 'x'.repeat(501) }]),
+    ).rejects.toThrow()
+  })
+
+  it('cancels a question after the trust check', async () => {
+    const { call, muse } = await trustedSession()
+    await call('cancel-question', 's1', 'u1')
+    expect(muse.cancelQuestion).toHaveBeenCalledWith('s1', 'u1')
+  })
+
+  it('reads stored output without a trust check', async () => {
+    const { call, start, asks } = harness()
+    await start()
+    expect(await call('output', 's1', 'i1')).toBe('stored output')
+    expect(asks).toHaveLength(0)
   })
 })
