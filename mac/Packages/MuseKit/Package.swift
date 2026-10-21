@@ -11,6 +11,9 @@ let package = Package(
     .package(path: "../MuseBackend"),
     // Apple's Markdown parser, on cmark-gfm. Pinned exactly: update it on purpose.
     .package(url: "https://github.com/swiftlang/swift-markdown.git", exact: "0.9.0"),
+    // swift-markdown's own parser, used directly to measure nesting before swift-markdown
+    // converts it recursively. Pinned to the version swift-markdown 0.9.0 resolves.
+    .package(url: "https://github.com/swiftlang/swift-cmark.git", exact: "0.9.0"),
   ],
   targets: [
     .target(
@@ -18,6 +21,8 @@ let package = Package(
       dependencies: [
         .product(name: "MuseBackend", package: "MuseBackend"),
         .product(name: "Markdown", package: "swift-markdown"),
+        .product(name: "cmark-gfm", package: "swift-cmark"),
+        .product(name: "cmark-gfm-extensions", package: "swift-cmark"),
       ]),
     .testTarget(
       name: "MuseKitTests",

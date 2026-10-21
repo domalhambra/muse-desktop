@@ -20,17 +20,25 @@ public enum MarkdownBlock: Equatable, Sendable {
   case table(header: [AttributedString], rows: [[AttributedString]])
   case rule
 
+  /// Markdown nested deeper than this shows as plain text. A 10-level list is about 23.
+  static let maximumDepth = 32
+
   /// Parses GitHub-flavoured Markdown, as Electron's react-markdown with remark-gfm does.
   /// Smart punctuation is off, as in react-markdown: `--flag` and `"quotes"` stay as typed.
+  /// Past `maximumDepth` the whole source is one plain paragraph, so it stays readable and
+  /// selectable and swift-markdown's recursive conversion cannot overflow the stack.
   public static func parse(_ source: String) -> [MarkdownBlock] {
-    blocks(in: Document(parsing: source, options: .disableSmartOpts))
+    guard MarkdownDepth.deepest(in: source) <= maximumDepth else {
+      return [.paragraph(AttributedString(source))]
+    }
+    return blocks(in: Document(parsing: source, options: .disableSmartOpts))
   }
 
   static func blocks(in container: Markup) -> [MarkdownBlock] {
-    container.children.compactMap(block)
+    container.children.map(block)
   }
 
-  static func block(_ markup: Markup) -> MarkdownBlock? {
+  static func block(_ markup: Markup) -> MarkdownBlock {
     if let heading = markup as? Heading { return .heading(level: heading.level, text: inline(heading)) }
     if let paragraph = markup as? Paragraph { return .paragraph(inline(paragraph)) }
     if let code = markup as? CodeBlock {
@@ -55,7 +63,8 @@ public enum MarkdownBlock: Equatable, Sendable {
     if let html = markup as? HTMLBlock {
       return .paragraph(AttributedString(html.rawHTML.trimmingCharacters(in: .newlines)))
     }
-    return nil
+    // A block type this code does not know, say from a swift-markdown update: keep its text.
+    return .paragraph(AttributedString(markup.format()))
   }
 
   static func item(_ item: ListItem) -> MarkdownListItem {
@@ -73,10 +82,21 @@ public enum MarkdownBlock: Equatable, Sendable {
     -> AttributedString
   {
     var result = AttributedString()
+    // cmark splits text at delimiters such as `_`, so adjacent text nodes are joined before
+    // bare URLs are found: `https://a.com/x_y_z` links whole.
+    var pending = ""
+    func flush() {
+      guard !pending.isEmpty else { return }
+      result += link == nil ? autolinked(pending, intent) : styled(pending, intent, link)
+      pending = ""
+    }
     for child in markup.children {
       if let text = child as? Markdown.Text {
-        result += styled(text.string, intent, link)
-      } else if let code = child as? InlineCode {
+        pending += text.string
+        continue
+      }
+      flush()
+      if let code = child as? InlineCode {
         result += styled(code.code, intent.union(.code), link)
       } else if child is Emphasis {
         result += inline(child, intent: intent.union(.emphasized), link: link)
@@ -95,11 +115,39 @@ public enum MarkdownBlock: Equatable, Sendable {
         result += styled("\n", intent, link)
       } else if let html = child as? InlineHTML {
         result += styled(html.rawHTML, intent, link)
+      } else if let attributes = child as? InlineAttributes {
+        // `^[text](attrs)` is swift-markdown's extension, not GFM: show it as typed.
+        result += styled("^[", intent, link)
+        result += inline(child, intent: intent, link: link)
+        result += styled("](\(attributes.attributes))", intent, link)
       } else {
         result += inline(child, intent: intent, link: link)
       }
     }
+    flush()
     return result
+  }
+
+  /// One detector for every parse. NSDataDetector is documented as thread-safe.
+  static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+  /// `string` with its bare web URLs linked, as remark-gfm's autolink literals: only text that
+  /// starts with `http://`, `https://` or `www.`, so `example.org` alone stays text.
+  static func autolinked(_ string: String, _ intent: InlinePresentationIntent) -> AttributedString {
+    var text = styled(string, intent, nil)
+    guard let linkDetector else { return text }
+    let whole = NSRange(string.startIndex..., in: string)
+    for match in linkDetector.matches(in: string, range: whole) {
+      guard let found = Range(match.range, in: string), let range = Range(match.range, in: text)
+      else { continue }
+      let candidate = String(string[found])
+      let lower = candidate.lowercased()
+      let destination =
+        lower.hasPrefix("http://") || lower.hasPrefix("https://")
+        ? candidate : lower.hasPrefix("www.") ? "https://" + candidate : nil
+      if let url = webURL(destination) { text[range].link = url }
+    }
+    return text
   }
 
   static func styled(_ string: String, _ intent: InlinePresentationIntent, _ link: URL?)
@@ -121,31 +169,37 @@ public enum MarkdownBlock: Equatable, Sendable {
 }
 
 /// Parsed Markdown per transcript item, so a streamed update re-parses only the item that changed.
+/// Keyed by item id, with at most `limit` items.
 @MainActor
 public final class MarkdownCache {
   public static let shared = MarkdownCache()
 
-  struct Key: Hashable {
-    let id: String
+  struct Entry {
     let text: String
+    let blocks: [MarkdownBlock]
   }
 
-  private var entries: [Key: [MarkdownBlock]] = [:]
-  private var order: [Key] = []
+  /// One entry per item id. A streamed item replaces its own entry as its text grows.
+  private var entries: [String: Entry] = [:]
+  /// Item ids, oldest first, for eviction past `limit`.
+  private var order: [String] = []
   private let limit = 400
   /// How many times `blocks(id:text:)` parsed. Tests read it.
   private(set) var parseCount = 0
 
   public init() {}
 
+  var count: Int { entries.count }
+
   public func blocks(id: String, text: String) -> [MarkdownBlock] {
-    let key = Key(id: id, text: text)
-    if let cached = entries[key] { return cached }
+    if let entry = entries[id], entry.text == text { return entry.blocks }
     let parsed = MarkdownBlock.parse(text)
     parseCount += 1
-    entries[key] = parsed
-    order.append(key)
-    if order.count > limit { entries[order.removeFirst()] = nil }
+    if entries[id] == nil {
+      order.append(id)
+      if order.count > limit { entries[order.removeFirst()] = nil }
+    }
+    entries[id] = Entry(text: text, blocks: parsed)
     return parsed
   }
 }
