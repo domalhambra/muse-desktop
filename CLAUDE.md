@@ -6,16 +6,17 @@ This file routes and does not restate. Every document is indexed at `docs/README
 
 ## Read this before changing that
 
-| Changing                                                                  | Read first                                                         |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Anything, for the first time                                              | `README.md`, then `docs/architecture.md`                           |
-| Any task: a feature, an upstream sync, a bridge, a CLI update, a decision | `docs/changing-things.md`                                          |
-| A Muse CLI behavior the extensions rely on                                | `docs/superpowers/plans/2026-10-20-discovery.md`                   |
-| A bridge request, tool or security rule                                   | `docs/bridge.md`                                                   |
-| A CLI or SDK version                                                      | `docs/compatibility.md`                                            |
-| Themes, layout or copy                                                    | `docs/design.md`, `CONTRIBUTING.md`                                |
-| Something that looks like a past decision                                 | `docs/decisions.md`                                                |
-| How this repo is documented                                               | `docs/superpowers/specs/2026-10-20-documentation-layout-design.md` |
+| Changing                                                                  | Read first                                                                     |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Anything, for the first time                                              | `README.md`, then `docs/architecture.md`                                       |
+| Any task: a feature, an upstream sync, a bridge, a CLI update, a decision | `docs/changing-things.md`                                                      |
+| A Muse CLI behavior the extensions rely on                                | `docs/superpowers/plans/2026-10-20-discovery.md`                               |
+| A bridge request, tool or security rule                                   | `docs/bridge.md`                                                               |
+| A CLI or SDK version                                                      | `docs/compatibility.md`                                                        |
+| Themes, layout or copy                                                    | `docs/design.md`, `CONTRIBUTING.md`                                            |
+| Something that looks like a past decision                                 | `docs/decisions.md`                                                            |
+| How this repo is documented                                               | `docs/superpowers/specs/2026-10-20-documentation-layout-design.md`             |
+| mMac, the planned SwiftUI app, or its headless backend                    | `docs/superpowers/specs/2026-10-21-mac-app-design.md` (planned; not built yet) |
 
 ## Invariants
 

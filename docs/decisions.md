@@ -42,6 +42,13 @@ Dates are Dom's local time (Pacific). The cloud session's commits carry UTC time
 | The fork's own files are new files: `CLAUDE.md`, `AGENTS.md`, `PROJECT_CHARTER.md`, `docs/README.md`, `docs/decisions.md`, `docs/changing-things.md`, `docs/superpowers/`, `scripts/docs_check.py` and `tests/unit/docs.test.ts`. | New files never conflict with upstream.                                                         | Layout spec                                                        |
 | The discovery record moved from the old plans folder under `docs/` to `docs/superpowers/plans/`.                                                                                                                                  | The standard keeps plans there. The file is the fork's own.                                     | Layout spec                                                        |
 
+## 2026-10-21: mMac, a native Mac app
+
+| Decision                                                                                                                     | Why                                                                                                                                                             | Source                                                |
+| ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Build mMac: a SwiftUI app over the fork's backend, run as one Node process, with parity to the fork plus the four extensions | Electron's feel and weight both bother Dom. The backend is plain Node apart from `src/main/index.ts` and `src/main/updates.ts`, so only the UI needs rewriting. | `docs/superpowers/specs/2026-10-21-mac-app-design.md` |
+| Keep the official SDK in the backend instead of writing a Swift protocol client                                              | Dom chose reuse over owning a client that must follow every Muse release                                                                                        | Same spec, Decisions                                  |
+
 ## Rejected and deferred
 
 | Item                                                                          | Status   | Why                                                                                                                                                                                                                         |

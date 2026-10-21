@@ -16,6 +16,7 @@ Every document under `docs/`, with when to read it. The router is `CLAUDE.md` at
 | `release-readiness.md`                                        | You need what upstream verified for 0.2.0. Upstream's file.                                                                    |
 | `superpowers/plans/2026-10-20-discovery.md`                   | You need a Muse CLI fact behind the extensions, or a place where the build differs from the plan.                              |
 | `superpowers/specs/2026-10-20-documentation-layout-design.md` | You change how this repo is documented.                                                                                        |
+| `superpowers/specs/2026-10-21-mac-app-design.md`              | You work on mMac, the planned SwiftUI app, or its headless backend. Draft for Dom's review.                                    |
 
 The extensions plan itself was attached to the cloud session's first message and was never committed. The discovery record holds every difference from it.
 
