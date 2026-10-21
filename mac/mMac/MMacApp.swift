@@ -27,12 +27,19 @@ private struct FileCommands: View {
   let controller: AppController
 
   var body: some View {
-    Button("New conversation") { controller.workspace?.startNew() }
-      .keyboardShortcut("n")
-      .disabled(controller.workspace == nil)
-    Button("Open project…") { Task { await controller.openProject() } }
-      .keyboardShortcut("o")
-      .disabled(controller.workspace == nil)
+    // Both open the window first when it is closed, so the result has somewhere to show.
+    Button("New conversation") {
+      controller.revealWindow()
+      controller.workspace?.startNew()
+    }
+    .keyboardShortcut("n")
+    .disabled(controller.workspace == nil)
+    Button("Open project…") {
+      controller.revealWindow()
+      Task { await controller.openProject() }
+    }
+    .keyboardShortcut("o")
+    .disabled(controller.workspace == nil)
   }
 }
 
