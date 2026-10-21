@@ -22,6 +22,7 @@ import { HEADLESS_PROTOCOL, Wire, type Method } from './wire'
 // stdout carries only protocol lines. Anything a library logs goes to stderr.
 const writeOut = process.stdout.write.bind(process.stdout)
 for (const name of ['log', 'info', 'debug', 'warn'] as const) console[name] = console.error
+console.dir = (value: unknown) => console.error(value)
 
 const { version } = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
@@ -29,10 +30,13 @@ const { version } = JSON.parse(
 const id = z.string().min(1).max(200)
 const pathSchema = z.string().min(1).max(4096)
 const methods = new Map<string, Method>()
+// Set when stdout fails (mMac died). Later writes are skipped, so nothing throws.
+let stdoutBroken = false
 const wire = new Wire((line) => {
-  writeOut(line)
+  if (!stdoutBroken) writeOut(line)
 }, methods)
 let greeted = false
+let starting = false
 let preferences: Preferences | undefined
 let preferencePath = ''
 let preferenceWrites: Promise<void> = Promise.resolve()
@@ -117,19 +121,28 @@ async function sessionProject(sessionId: string) {
 
 /** Waits for every queued stdout write, then exits. */
 function exit(code: number) {
-  process.stdout.write('', () => process.exit(code))
+  // A broken stdout never calls the write callback, so do not wait for it.
+  if (stdoutBroken) process.exit(code)
+  else process.stdout.write('', () => process.exit(code))
 }
 
 async function quit(code: number) {
   if (quitting) return
   quitting = true
   wire.cancelAsks()
-  try {
-    // Closing Muse makes waiting requests fail, so drain() cannot wait forever.
-    await Promise.all([muse.close(), preferenceWrites, wire.drain()])
-  } catch (error) {
+  const failed = (error: unknown) => {
     console.error(`The mMac backend did not shut down cleanly: ${messageOf(error)}`)
     code ||= 1
+  }
+  // Closing Muse makes waiting requests fail, so drain() cannot wait forever.
+  const results = await Promise.allSettled([muse.close(), preferenceWrites, wire.drain()])
+  for (const result of results) if (result.status === 'rejected') failed(result.reason)
+  try {
+    // A connect that was in progress during the first close has finished by now,
+    // and only then does MuseHost hold a host to close.
+    await muse.close()
+  } catch (error) {
+    failed(error)
   }
   exit(code)
 }
@@ -147,16 +160,25 @@ method('hello', (value) => {
 })
 
 method('start', async (value) => {
-  if (preferences) throw new Error('The backend has already started.')
-  const { dataFolder } = z.object({ dataFolder: pathSchema }).parse(value)
-  await mkdir(dataFolder, { recursive: true, mode: 0o700 })
-  preferencePath = join(dataFolder, 'preferences.json')
-  preferences = await readPreferences(preferencePath)
+  if (quitting) throw new Error('The backend is quitting.')
+  if (starting || preferences) throw new Error('The backend has already started.')
+  starting = true
+  try {
+    const { dataFolder } = z.object({ dataFolder: pathSchema }).parse(value)
+    await mkdir(dataFolder, { recursive: true, mode: 0o700 })
+    preferencePath = join(dataFolder, 'preferences.json')
+    preferences = await readPreferences(preferencePath)
+  } catch (error) {
+    starting = false
+    throw error
+  }
+  if (quitting) throw new Error('The backend is quitting.')
   const status = await muse.connect(preferences.cliPath)
   return { preferences, status }
 })
 
 method('connect', async () => {
+  if (quitting) throw new Error('The backend is quitting.')
   if (muse.hasActiveTurns()) {
     const choice = await wire.ask({
       kind: 'confirm',
@@ -167,6 +189,7 @@ method('connect', async () => {
     })
     if (choice !== 0) return muse.status
   }
+  if (quitting) throw new Error('The backend is quitting.')
   return muse.connect(current().cliPath)
 })
 
@@ -275,3 +298,7 @@ lines.on('line', (line) => {
 // mMac closed stdin, quit or crashed.
 lines.on('close', () => void quit(0))
 process.on('SIGTERM', () => void quit(0))
+process.stdout.on('error', () => {
+  stdoutBroken = true
+  void quit(0)
+})
