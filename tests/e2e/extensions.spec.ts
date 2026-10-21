@@ -222,3 +222,63 @@ test('the folder bridge runs a request as a Muse conversation', async () => {
     await rm(sandbox, { recursive: true, force: true })
   }
 })
+
+test('the MCP bridge lets an MCP client ask Muse through Desktop', async () => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
+  const { StreamableHTTPClientTransport } =
+    await import('@modelcontextprotocol/sdk/client/streamableHttp.js')
+  const sandbox = await realpath(await mkdtemp(join(tmpdir(), 'muse-desktop-mcpbridge-')))
+  const project = join(sandbox, 'served')
+  await mkdir(project)
+  const port = 40000 + Math.floor(Math.random() * 20000)
+  let app: ElectronApplication | undefined
+  try {
+    const launched = await launch(sandbox, project)
+    app = launched.app
+    const page = launched.page
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('button', { name: 'Bridges', exact: true }).click()
+    await page.getByLabel('Port').fill(String(port))
+    await page.getByLabel('Port').press('Enter')
+    await page.getByRole('button', { name: 'Make token' }).click()
+    const token = await page.getByLabel('New token, shown once').inputValue()
+    expect(token).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    await page.getByRole('checkbox', { name: /MCP bridge/ }).click()
+    await expect(
+      page.getByText(/A local MCP server for agents that speak MCP\. Running/),
+    ).toBeVisible()
+    await expect(page.getByText(`http://127.0.0.1:${port}/mcp`)).toBeVisible()
+
+    const url = new URL(`http://127.0.0.1:${port}/mcp`)
+    expect((await fetch(url, { method: 'POST', body: '{}' })).status).toBe(401)
+    const client = new Client({ name: 'e2e', version: '0.0.0' })
+    await client.connect(
+      new StreamableHTTPClientTransport(url, {
+        requestInit: { headers: { Authorization: `Bearer ${token}` } },
+      }),
+    )
+    const projects = await client.callTool({ name: 'list_projects', arguments: {} })
+    expect(JSON.stringify(projects.content)).toContain(project)
+    const asked = await client.callTool({
+      name: 'ask_muse',
+      arguments: { project, prompt: 'Hello over MCP.', effort: 'low', wait_seconds: 20 },
+    })
+    const job = JSON.parse((asked.content as { text: string }[])[0].text)
+    expect(job.status).toBe('done')
+    expect(job.reply).toContain('Hello over MCP.')
+    await client.close()
+
+    page.once('dialog', (dialog) => void dialog.accept())
+    await page.getByRole('button', { name: 'Make new token' }).click()
+    await expect(page.getByLabel('New token, shown once')).not.toHaveValue(token)
+    const stale = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: '{}',
+    })
+    expect(stale.status).toBe(401)
+  } finally {
+    await app?.close()
+    await rm(sandbox, { recursive: true, force: true })
+  }
+})

@@ -40,6 +40,7 @@ import { recordMuseTrust } from './muse-config'
 import { publish } from './event-bus'
 import { AgentApi } from './agent-api'
 import { FileBridge } from './bridge-files'
+import { McpBridge } from './bridge-mcp'
 import { readToken, regenerateToken, type TokenCipher } from './bridge-token'
 import {
   addServer,
@@ -134,6 +135,7 @@ const tokenCipher: TokenCipher = {
   decrypt: (value) => safeStorage.decryptString(value),
 }
 let fileBridge: FileBridge | undefined
+let mcpBridge: { bridge: McpBridge; port: number; token: string } | undefined
 const bridgeErrors: { files?: string; mcp?: string } = {}
 let bridgeSync: Promise<void> = Promise.resolve()
 
@@ -154,6 +156,35 @@ function syncBridges() {
       await fileBridge.stop().catch(() => {})
       fileBridge = undefined
     }
+    if (!wantFiles) delete bridgeErrors.files
+    const wantMcp = preferences.bridgeMcpEnabled && !quitting
+    const token = wantMcp ? await readToken(tokenPath, tokenCipher) : ''
+    const port = preferences.bridgeMcpPort
+    if (mcpBridge && (!wantMcp || mcpBridge.port !== port || mcpBridge.token !== token)) {
+      await mcpBridge.bridge.stop().catch(() => {})
+      mcpBridge = undefined
+    }
+    if (wantMcp && !mcpBridge) {
+      const bridge = new McpBridge(agentApi, {
+        port,
+        token,
+        projects: () =>
+          preferences.recentProjects.filter((project) =>
+            preferences.trustedProjects.includes(project),
+          ),
+      })
+      try {
+        await bridge.start()
+        mcpBridge = { bridge, port, token }
+        delete bridgeErrors.mcp
+      } catch (error) {
+        await bridge.stop().catch(() => {})
+        bridgeErrors.mcp =
+          error instanceof Error && 'code' in error && error.code === 'EADDRINUSE'
+            ? `Port ${port} is in use. Choose another port.`
+            : messageOf(error)
+      }
+    } else if (!wantMcp) delete bridgeErrors.mcp
   })
   return bridgeSync
 }
@@ -169,7 +200,7 @@ async function bridgeStatus(): Promise<BridgeStatus> {
     },
     mcp: {
       enabled: preferences.bridgeMcpEnabled,
-      running: false,
+      running: Boolean(mcpBridge),
       url: `http://127.0.0.1:${preferences.bridgeMcpPort}/mcp`,
       hasToken: Boolean(await readToken(tokenPath, tokenCipher)),
       ...(bridgeErrors.mcp ? { error: bridgeErrors.mcp } : {}),
@@ -487,7 +518,11 @@ function setupIPC() {
     const error = await shell.openPath(bridgeRoot)
     if (error) throw new Error(error)
   })
-  handle('bridge-token', () => regenerateToken(tokenPath, tokenCipher))
+  handle('bridge-token', async () => {
+    const token = await regenerateToken(tokenPath, tokenCipher)
+    await syncBridges() // A running MCP bridge restarts so the old token stops working.
+    return token
+  })
   handle('bridge-copy-token', async () => {
     const token = await readToken(tokenPath, tokenCipher)
     if (!token) throw new Error('Make a token first.')
