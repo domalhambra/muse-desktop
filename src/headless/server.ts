@@ -21,6 +21,7 @@ const { version } = JSON.parse(
 let stdoutBroken = false
 let quitting = false
 
+// emit and ask use wire, which is built below; nothing emits before the first stdin line, so this is safe.
 function emit(event: AppEvent) {
   publish(event)
   wire.emit(event)
@@ -41,6 +42,7 @@ const wire = new Wire((line) => {
 
 /** Waits for every queued stdout write, then exits. */
 function exit(code: number) {
+  process.exitCode = code
   if (stdoutBroken) process.exit(code)
   // A stdout that breaks while this write waits may never call back. Do not hang on it.
   setTimeout(() => process.exit(code), 2000).unref()

@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AppEvent,
   ConnectionStatus,
@@ -14,6 +14,9 @@ import { HEADLESS_PROTOCOL, type Ask } from '../../src/headless/wire'
 let dir = ''
 beforeEach(async () => {
   dir = await realpath(await mkdtemp(join(tmpdir(), 'mmac-backend-')))
+})
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true })
 })
 
 function session(overrides: Partial<MuseSession> = {}): MuseSession {
