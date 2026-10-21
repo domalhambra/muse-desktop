@@ -2,6 +2,8 @@
 
 Verified locally on macOS Apple Silicon with Muse Code **1.4.7 (1.4.7-R6101.1)** and the official TypeScript SDK **1.4.7**, on October 12, 2026.
 
+The extensions (diff review, worktrees, MCP servers, bridges) were developed and tested on Linux x64 with Muse Code **1.4.11 (1.4.11-R6667.1)** and the SDK **1.4.7**, on October 20 and 21, 2026: unit, integration and Playwright suites with the echo provider. They have not run on macOS or against a real model yet.
+
 The GUI requires the Muse Session Protocol exposed by `muse serve`. Protocol fingerprint mismatches are visible in Settings; they are not treated as proof that every capability is compatible. Re-run integration checks after updating the CLI or SDK.
 
 ## Supported desktop workflows
@@ -11,7 +13,7 @@ Automatic CLI discovery across macOS, Windows, and Linux; custom CLI path; sessi
 ## Practical limits
 
 - A live session owned by a separate CLI process may be leased. Finish or close it there before resuming in Desktop. The app shows the CLI's rejection and does not force ownership.
-- Account setup, plugin/skill administration, advanced permission-profile editing, worktree creation, goals/workflow administration, and CLI-specific slash commands remain CLI tasks. Open **Project inspector → Muse Code** for the full interactive CLI. The composer handles /clear, /new, /voice, /model, /effort, /compact, /rename, /stop, /settings, and /help. Other slash commands explain the CLI handoff without sending them as model messages.
+- Account setup, plugin/skill administration, advanced permission-profile editing, goals/workflow administration, and CLI-specific slash commands remain CLI tasks. Open **Project inspector → Muse Code** for the full interactive CLI. The composer handles /clear, /new, /voice, /model, /effort, /compact, /rename, /stop, /settings, and /help. Other slash commands explain the CLI handoff without sending them as model messages.
 - Existing session lists are paged automatically. If the CLI omits inline transcript history, Desktop reads and folds the durable view pages. Muse Code 1.4.7 can reject live subscriptions to unloaded sessions; these remain readable as saved history and are resumed only for a mutating action. Reopen a conversation to refresh its saved history.
 - Tool output preview is limited to 1 MB. File preview is limited to 512 KB. Attachments allow five files, 2 MB per file, 200 KB per text file, and approximately 4 MB per message including encoded image data.
 - Remote images embedded in model Markdown are not fetched. Ordinary web links open in your default browser after a click.
@@ -21,6 +23,13 @@ Automatic CLI discovery across macOS, Windows, and Linux; custom CLI path; sessi
 - Intel builds are configured but have not been run on Intel hardware. Signed and notarized release verification requires the maintainer's Apple Developer credentials.
 
 Preference updates are independently validated: changing reasoning effort preserves themes, background intensity, the executable path, text size, pins, and archives. With saved conversations, the sidebar uses a compact mascot; short windows switch navigation to labeled icon buttons so conversation history retains scroll space.
+
+## Extensions
+
+- Worktree conversations use Muse's experimental MSP surface (`session/start` `worktree`, `worktree/list`). When the CLI does not grant it, the worktree toggle is hidden and the inspector lists no worktrees. Desktop records the project in Muse's `trust.json` before a worktree session starts, from the window or a bridge, the same record the TUI writes when you trust a folder.
+- Merge refuses a worktree with uncommitted changes, and aborts a merge with conflicts so the main checkout stays unchanged. Remove keeps the worktree's branch.
+- MCP server changes take effect when Desktop reconnects to Muse. The tab offers **Reconnect** and never reconnects during your work on its own. Remote servers that need OAuth sign in through `muse mcp login`, which opens in Terminal.
+- The diff view shows hunk revert buttons for working-tree changes only. Staged changes have none.
 
 ## Voice
 

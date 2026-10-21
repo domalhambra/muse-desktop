@@ -21,6 +21,10 @@ A desktop home for Muse Code across macOS, Windows, and Linux. Your installed CL
 - Opens and resumes CLI sessions, with naming, grouped `⌘ K` / `Ctrl K` search, pinning, local archiving, and Markdown export.
 - Presents the CLI's exact approval choices and agent questions. Supports cancellation, queued follow-ups, and steering.
 - Opens local projects with Git branch and working-tree status badges, previews files with breadcrumbs and file-type icons, supports inline `@file` mentions and drag-and-drop file context, and shows line-numbered Git diffs in the project inspector.
+- Reviews Muse's changes in the project inspector: revert one hunk, revert a file, or stage a file.
+- Starts a conversation in its own Git worktree, created by Muse Code itself under `.muse/worktrees/`. The inspector lists the project's Muse worktrees and merges or removes them.
+- Manages the MCP servers in Muse Code's own `settings.json` in **Settings → MCP servers**, including OAuth sign-in through `muse mcp login`.
+- Lets another agent, such as Meta's Muse app, ask Muse Code to work through Desktop, with a folder bridge and a local MCP bridge. See [bridges](docs/bridge.md).
 - Includes five themes: **Muse**, **Daylight**, **Moonlight**, **Grove**, and **Plush**, plus system appearance matching, text size, reduced motion, and optional completion notifications.
 - Preserves the clean, frameless macOS traffic-light window chrome across macOS, Windows, and Linux, with native file pickers, keyboard shortcuts, project trust dialogs, and theme-matched in-app menus.
 - Records voice with the microphone button or **Option–V** / **Alt–V** with live waveform metering, transcribes through `muse voice transcribe`, and inserts text into the draft for review.

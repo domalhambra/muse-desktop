@@ -130,7 +130,7 @@ prompt below it:
 
 | Field    | Required | Values |
 | -------- | -------- | ------ |
-| project  | yes, unless session is given | A project already opened and trusted in Muse Desktop |
+| project  | yes, unless session is given | A trusted project from the Muse Desktop project list |
 | session  | no | An existing Muse session id, to continue that conversation |
 | effort   | no | none, minimal, low, medium (default), high, xhigh, max, ultra |
 | mode     | no | queue (default) or steer, for a session that is already working |
@@ -164,13 +164,19 @@ Muse is waiting for. Write decisions/<job id>.md with one of these frontmatters:
     cancel: true
     ---
 
+An answer that matches an option label selects that option. Separate labels with
+commas for a multiple-choice question. Other text goes to Muse as free text.
+Handled decisions move to decisions/processed/. A decision that fails leaves
+decisions/<job id>.error.txt with the reason.
+
 The Muse Desktop window shows the same approvals and questions. Either place works.
 
 ## Limits
 
-Only projects opened and trusted in Muse Desktop are accepted. A request that
-fails is moved to inbox/rejected/ with a .error.txt file that explains why.
-Handled requests move to inbox/processed/.
+Only trusted projects from the Muse Desktop project list are accepted. Muse
+Desktop moves each request to inbox/processed/ as soon as it reads it. A request
+that cannot start moves to inbox/rejected/ with a .error.txt file that explains
+why.
 `
 
 type BridgeApi = Pick<AgentApi, 'ask' | 'get' | 'approve' | 'answer' | 'cancel'>

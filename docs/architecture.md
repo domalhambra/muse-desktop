@@ -8,8 +8,14 @@ flowchart LR
     CLI --> Credentials[Existing CLI credentials and configuration]
     CLI --> Sessions[Existing durable sessions]
     CLI --> Tools[Models, tools, hooks and skills]
-    Main --> Files[Selected project files and read-only Git]
+    Main --> Files[Selected project files and Git]
     Main --> Preferences[Desktop preferences]
+    Main --> MuseConfig[Muse settings.json and trust.json]
+    Agent[Other agent] -->|Markdown files| FileBridge[Folder bridge]
+    Agent -->|MCP over localhost HTTP| McpBridge[MCP bridge]
+    FileBridge --> AgentApi[AgentApi]
+    McpBridge --> AgentApi
+    AgentApi -->|Same session commands as the window| Main
     UI -->|Explicit microphone input| Audio[PCM WAV]
     Audio -->|Bounded IPC| Main
     Main -->|Temporary private audio file| Voice[muse voice transcribe]
@@ -17,7 +23,7 @@ flowchart LR
 
 ## Stack choice
 
-Electron runs the official Node SDK directly, supports macOS, Windows, and Linux desktop integration with a unified Mac-style frameless window chrome, and gives contributors a TypeScript stack across the protocol boundary and UI. React is responsible only for presentation and interaction. Vite handles the three build targets: main, sandboxed preload, and renderer. This trades a larger application bundle for a direct, maintainable SDK integration. There is no local HTTP server in packaged builds and no application backend service.
+Electron runs the official Node SDK directly, supports macOS, Windows, and Linux desktop integration with a unified Mac-style frameless window chrome, and gives contributors a TypeScript stack across the protocol boundary and UI. React is responsible only for presentation and interaction. Vite handles the three build targets: main, sandboxed preload, and renderer. This trades a larger application bundle for a direct, maintainable SDK integration. There is no application backend service. The only local HTTP server is the MCP bridge, which is off by default and listens on `127.0.0.1`.
 
 ## CLI lifecycle
 
@@ -27,17 +33,32 @@ The conversation list is paged automatically, and valid project directories are 
 
 Commands use SDK-generated command IDs with one attempt. The app does not blindly retry a mutating command after a lost acknowledgement. Reconnect reads durable history instead. A closed host produces a visible connection error. Closing the Mac window hides it; quitting closes the owned CLI host. Active work prompts before quit or reconnect.
 
+## Muse features exposed
+
+Desktop exposes Muse Code features instead of building its own where the CLI has one.
+
+- `muse-host.ts` initializes with `experimentalApi: true`. Muse then grants the experimental surface, and `ConnectionStatus.experimental` reports the grant. Worktree features need it.
+- Worktrees: `session/start` with `worktree: { mode: 'create' }` makes Muse create `<project>/.muse/worktrees/<name>` on a `muse/session-<id>` branch and exclude the folder in `.git/info/exclude`. `worktree/list` feeds the inspector. `worktrees.ts` adds only merge and remove, limited to paths under `.muse/worktrees/`. Muse requires the repository in its `trust.json`, so `MuseHost.create` records it there through `muse-config.ts` before every worktree session, from the window or a bridge. `src/shared/worktree.ts` maps a worktree path to its project, so trust, recent projects and sidebar grouping treat a worktree as part of its project.
+- MCP servers: Muse 1.4.11 has no MSP method that writes MCP entries, and `mcpServer/list` returns no rows from `muse serve`. `mcp-config.ts` edits the `mcpServers` entries in Muse's `settings.json` one at a time and keeps every other key. OAuth sign-in runs `muse mcp login <name>` in Terminal. Changes apply when Desktop reconnects to Muse.
+- Diff review: Muse has no revert method, so `git.ts` reverts hunks and files with Git.
+
+## Bridges
+
+`event-bus.ts` copies every `AppEvent` to main-process listeners. `agent-api.ts` turns a prompt into a job: one turn in one session, followed through those events. A job is done only after its turn was seen running. Its transcript holds only the items its turn produced. A session has one active job at a time. Jobs use `session/start`, `turn/start`, `approval/decide`, `userInput/answer` and `turn/cancel` through `MuseHost`, so a bridge job is a normal conversation in the window.
+
+`bridge-files.ts` watches `inbox/` and `decisions/` in the bridge folder with chokidar and writes `outbox/`. `bridge-mcp.ts` serves the same operations as MCP tools over streamable HTTP. Both accept only projects that Desktop knows and trusts. `bridge-token.ts` keeps the MCP bearer token outside the preferences, encrypted with `safeStorage` when available. `index.ts` starts the bridges after Muse connects, follows preference and token changes, and stops them on quit. See [bridges](bridge.md).
+
 ## State ownership
 
-- CLI: authentication, tools, approval policies, model configuration, durable conversations, and output blobs.
-- Electron main: trusted projects, recent projects, appearance, pins, archives, temporary attachment handles, session views, native dialogs, and file/Git previews.
+- CLI: authentication, tools, approval policies, model configuration, MCP server entries, workspace trust for worktrees, worktrees, durable conversations, and output blobs.
+- Electron main: trusted projects, recent projects, appearance, pins, archives, bridge switches and port, the bridge token, bridge jobs in memory, temporary attachment handles, session views, native dialogs, and file/Git previews and edits.
 - React: selected page and conversation, dialogs, scroll-follow state, and unsent drafts in memory.
 
 No transcript mirror, credential database, or telemetry service is introduced. Pending approval cards carry the current requirement token, including staged requirements. Server labels and choices remain authoritative.
 
 ## Verification
 
-Unit coverage checks file containment, symlink rejection, binary and size limits, Git filename parsing, preference persistence, approval freshness, streaming revisions, gap recovery, question answers, follow-up modes, cancellation dispatch, paged transcript recovery, and bounded voice encoding. The integration script exercises the real CLI with its echo provider across a process restart. Playwright drives the real Electron application and real echo CLI, including themes, native bridge rejection cases, project browsing, search, sending, renaming, fresh-install history discovery, themed menu keyboard behavior, and simulated microphone capture/cancellation/draft insertion.
+Unit coverage checks file containment, symlink rejection, binary and size limits, Git filename parsing, preference persistence, approval freshness, streaming revisions, gap recovery, question answers, follow-up modes, cancellation dispatch, paged transcript recovery, and bounded voice encoding. It also covers hunk and file revert, worktree merge and remove, Muse trust and MCP settings edits, the job lifecycle, both bridges, and the bridge token. The integration script exercises the real CLI with its echo provider across a process restart. It also checks Muse-created worktree sessions, that `muse mcp` resolves the MCP entries Desktop writes, and bridge jobs. Playwright drives the real Electron application and real echo CLI, including themes, native bridge rejection cases, project browsing, search, sending, renaming, fresh-install history discovery, themed menu keyboard behavior, and simulated microphone capture/cancellation/draft insertion. `tests/e2e/extensions.spec.ts` covers diff review, a worktree conversation and its merge, the MCP servers tab, the folder bridge, and the MCP bridge with a real MCP client.
 
 These checks do not replace testing authenticated model tool execution or Developer ID signing on a release candidate.
 
