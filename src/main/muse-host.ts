@@ -15,7 +15,8 @@ import {
   type TranscriptItem,
 } from '../shared/protocol'
 import { discoverCli } from './cli'
-import { museConfigDir } from './muse-config'
+import { museConfigDir, recordMuseTrust } from './muse-config'
+import { projectRoot } from '../shared/worktree'
 
 const sessionResultSchema = z.object({
   session: sessionSchema,
@@ -175,14 +176,22 @@ export class MuseHost {
     return museConfigDir(this.environment)
   }
 
+  /**
+   * Starts a session. With `worktree`, Muse creates a worktree of the project
+   * (the parent project when `project` is itself a Muse worktree). Muse's
+   * worktree methods need the repository in its trust.json, so callers must
+   * pass only projects Desktop already trusts.
+   */
   async create(project: string, modelId?: string, options: { worktree?: boolean } = {}) {
     if (options.worktree && !this.experimental)
       throw new Error('This Muse Code version does not offer worktree sessions.')
+    const workspaceRoot = options.worktree ? projectRoot(project) : project
+    if (options.worktree) await recordMuseTrust(this.configDir(), workspaceRoot)
     const result = sessionResultSchema.parse(
       await this.connection.command(
         'session/start',
         {
-          workspaceRoot: project,
+          workspaceRoot,
           ...(modelId ? { modelId } : {}),
           ...(options.worktree ? { worktree: { mode: 'create' } } : {}),
         },

@@ -36,7 +36,6 @@ import { MuseHost, messageOf } from './muse-host'
 import { readPreferences, writePreferences } from './preferences'
 import { getGitDiff, getGitStatus, getRawDiff, revertFile, revertHunk, stageFile } from './git'
 import { listProjectFiles, readProjectFile } from './files'
-import { recordMuseTrust } from './muse-config'
 import { publish } from './event-bus'
 import { AgentApi } from './agent-api'
 import { FileBridge } from './bridge-files'
@@ -470,11 +469,7 @@ function setupIPC() {
     await trustProject(root)
     const { worktree } =
       z.object({ worktree: z.boolean().optional() }).optional().parse(options) ?? {}
-    // Muse's worktree methods need the repository recorded in its own trust.json.
-    if (worktree) await recordMuseTrust(muse.configDir(), projectRoot(root))
-    return muse.create(worktree ? projectRoot(root) : root, z.string().optional().parse(modelId), {
-      worktree,
-    })
+    return muse.create(root, z.string().optional().parse(modelId), { worktree })
   })
   const mcpFile = () => settingsFile(muse.configDir())
   const mcpName = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)

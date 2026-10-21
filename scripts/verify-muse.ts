@@ -7,7 +7,6 @@ import { join } from 'node:path'
 import { MuseHost } from '../src/main/muse-host'
 import type { AppEvent, SessionView } from '../src/shared/protocol'
 import { discoverCli } from '../src/main/cli'
-import { recordMuseTrust } from '../src/main/muse-config'
 import { addServer, setServerEnabled, settingsFile } from '../src/main/mcp-config'
 import { AgentApi } from '../src/main/agent-api'
 import { publish } from '../src/main/event-bus'
@@ -147,8 +146,7 @@ try {
     'init',
   )
   assert.equal(host.status.experimental, true, 'Muse should grant the experimental API')
-  // Written after the host started, as Desktop does on the first worktree request.
-  await recordMuseTrust(host.configDir(), repository)
+  // MuseHost records the repository in Muse's trust.json itself, after the host started.
   const isolated = await host.create(repository, undefined, { worktree: true })
   const worktreePath = isolated.session.workspaceRoot ?? ''
   assert.equal(worktreeParent(worktreePath), repository)
@@ -213,6 +211,22 @@ try {
   })
   await waitFor(() => agent.get(followUp.id)?.status === 'done')
   assert.doesNotMatch(agent.get(followUp.id)!.transcript, /Hello from the bridge/)
+  const fresh = join(temporary, 'bridged-repository')
+  await mkdir(fresh)
+  execFileSync('git', ['init', '-q'], { cwd: fresh })
+  execFileSync(
+    'git',
+    ['-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'i'],
+    { cwd: fresh },
+  )
+  const isolatedJob = await agent.ask({
+    project: fresh,
+    prompt: 'Hello from a bridge worktree.',
+    effort: 'low',
+    worktree: true,
+  })
+  await waitFor(() => agent.get(isolatedJob.id)?.status === 'done')
+  assert.equal(worktreeParent(agent.get(isolatedJob.id)!.project), fresh)
   agent.dispose()
   console.log('PASS · Bridge jobs run to completion and stay scoped to their own turn')
 } finally {

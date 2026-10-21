@@ -8,6 +8,11 @@ const wire = vi.hoisted(() => ({
   initializeResult: { experimentalApi: true } as Record<string, unknown>,
   receive: (_notification: { method: string; params: Record<string, unknown> }) => {},
 }))
+const trust = vi.hoisted(() => ({ record: vi.fn(async () => true) }))
+vi.mock('../../src/main/muse-config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/muse-config')>()),
+  recordMuseTrust: trust.record,
+}))
 vi.mock('../../src/main/cli', () => ({
   discoverCli: async () => ({ path: '/test/muse', version: '1.4.7', environment: {} }),
 }))
@@ -297,11 +302,20 @@ describe('Muse worktrees', () => {
     expect((await host.connect('/test/muse')).experimental).toBe(true)
     await host.create('/project')
     expect(wire.command.mock.calls.at(-1)?.[1]).toEqual({ workspaceRoot: '/project' })
+    expect(trust.record).not.toHaveBeenCalled()
     await host.create('/project', undefined, { worktree: true })
     expect(wire.command.mock.calls.at(-1)?.[1]).toEqual({
       workspaceRoot: '/project',
       worktree: { mode: 'create' },
     })
+    expect(trust.record).toHaveBeenLastCalledWith(expect.any(String), '/project')
+  })
+  it('makes a new worktree from the parent project when started inside a worktree', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('/test/muse')
+    await host.create('/project/.muse/worktrees/20261020-ab12', undefined, { worktree: true })
+    expect(wire.command.mock.calls.at(-1)?.[1]).toMatchObject({ workspaceRoot: '/project' })
+    expect(trust.record).toHaveBeenLastCalledWith(expect.any(String), '/project')
   })
   it('refuses worktree sessions when the CLI withholds experimental methods', async () => {
     wire.initializeResult = { experimentalApi: false }
