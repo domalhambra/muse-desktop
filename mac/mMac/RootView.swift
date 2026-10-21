@@ -3,6 +3,7 @@ import SwiftUI
 
 struct RootView: View {
   let controller: AppController
+  @Environment(\.openWindow) private var openWindow
 
   var body: some View {
     Group {
@@ -28,6 +29,8 @@ struct RootView: View {
     .sheet(item: Binding(get: { controller.asks.current }, set: { _ in })) { pending in
       AskSheet(ask: pending.ask) { controller.asks.answer($0, to: pending.id) }
     }
+    // The controller reopens this window for an Ask or a Dock click after it was closed.
+    .onAppear { controller.showWindow = { [openWindow] in openWindow(id: MMacApp.mainWindow) } }
   }
 }
 

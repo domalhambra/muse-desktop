@@ -25,6 +25,11 @@ final class AppController {
   private var quitting = false
   /// Set by a second Quit. mMac then quits whatever the backend answers.
   private var forced = false
+  /// A backend that stopped while a Quit waited. If the person then keeps working, mMac shows
+  /// the stopped screen rather than a window on a dead backend.
+  private var stoppedWhileQuitting: BackendClient?
+  /// Opens the main window. RootView sets it, because only SwiftUI can open a scene's window.
+  @ObservationIgnored var showWindow: (@MainActor () -> Void)?
 
   /// Starts a backend. Does nothing while one is starting or running.
   func start() async {
@@ -33,6 +38,7 @@ final class AppController {
     defer { launching = false }
     phase = .starting
     workspace = nil
+    stoppedWhileQuitting = nil
     var launched: ProcessTransport?
     do {
       let repository = try Self.repository()
@@ -42,8 +48,12 @@ final class AppController {
       }.value
       launched = transport
       self.transport = transport
-      let asks = self.asks
-      let client = BackendClient(transport: transport, answerAsk: { ask in await asks.present(ask) })
+      // Asks are tied to this backend's generation: one that arrives after the queue was
+      // cancelled for it gets -1 at once, and shows no sheet.
+      let generation = asks.generation
+      let client = BackendClient(
+        transport: transport,
+        answerAsk: { [weak self] ask in await self?.present(ask, generation: generation) ?? -1 })
       self.client = client
       await client.run()
       Task {
@@ -73,15 +83,26 @@ final class AppController {
   func quit() async -> Bool {
     guard let client, phase == .running else { return true }
     quitting = true
+    let quit: Bool
     do {
-      // A forced stop can still answer false: the backend's SIGTERM path cancels its Ask, and
-      // "Keep working" is the cancel choice.
-      if try await client.shutdown() || forced { return true }
-      quitting = false
-      return false
+      quit = try await client.shutdown()
     } catch {
+      quit = true
+    }
+    if forced {
+      // A forced stop can still answer false: the backend's SIGTERM path cancels its Ask, and
+      // "Keep working" is the cancel choice. Wait for the process to end, so mMac does not exit
+      // before forceStop's SIGKILL.
+      await client.waitForExit(timeout: .seconds(3))
       return true
     }
+    if quit { return true }
+    quitting = false
+    if let stopped = stoppedWhileQuitting {
+      stoppedWhileQuitting = nil
+      await backendStopped(stopped)
+    }
+    return false
   }
 
   /// A second Quit while the first waits: stop the backend now, so the first Quit's wait ends.
@@ -95,7 +116,10 @@ final class AppController {
     // A client dropped after a failed start ends too. It must not cancel a newer backend's Asks.
     guard client === stopped else { return }
     asks.cancelAll()
-    guard !quitting else { return }
+    guard !quitting else {
+      stoppedWhileQuitting = stopped
+      return
+    }
     let details = await Self.errorOutput(of: transport)
     guard client === stopped, !quitting else { return }
     client = nil
@@ -112,6 +136,24 @@ final class AppController {
     guard let transport else { return "" }
     try? await Task.sleep(for: .milliseconds(250))
     return transport.recentErrorOutput
+  }
+
+  /// Shows an Ask from the backend of `generation`, opening the window first if it is closed,
+  /// so a Quit's "Quit while Muse is working?" always has a window to show in.
+  private func present(_ ask: Ask, generation: Int) async -> Int {
+    guard generation == asks.generation else { return -1 }
+    revealWindow()
+    return await asks.present(ask, generation: generation)
+  }
+
+  /// Opens the main window when no mMac window is visible. Returns false if it cannot.
+  @discardableResult
+  func revealWindow() -> Bool {
+    if NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) { return true }
+    guard let showWindow else { return false }
+    showWindow()
+    NSApp.activate()
+    return true
   }
 
   // MARK: Panels
@@ -150,6 +192,13 @@ final class AppController {
     panel.canChooseFiles = false
     panel.canChooseDirectories = true
     guard panel.runModal() == .OK, let url = panel.url else { return }
+    // A folder that is not a checkout is refused, and the saved choice stays as it was.
+    do {
+      _ = try Self.checkout(at: url.path)
+    } catch {
+      phase = .setupFailed(message: error.localizedDescription, details: "")
+      return
+    }
     UserDefaults.standard.set(url.path, forKey: Self.repositoryKey)
     await start()
   }
@@ -170,6 +219,11 @@ final class AppController {
     guard let path = chosen ?? built else {
       throw SetupError("This mMac build does not name a Muse Desktop checkout. Choose one.")
     }
+    return try checkout(at: path)
+  }
+
+  /// `path` as a checkout URL, if it holds the backend.
+  static func checkout(at path: String) throws -> URL {
     let repository = URL(fileURLWithPath: path).standardizedFileURL
     guard FileManager.default.fileExists(atPath: repository.appending(path: "src/headless/server.ts").path) else {
       throw SetupError("mMac could not find src/headless/server.ts in \(repository.path). Choose the Muse Desktop checkout.")

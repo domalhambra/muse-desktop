@@ -15,10 +15,14 @@ final class AskQueue {
 
   private(set) var current: Pending?
   private var waiting: [Pending] = []
+  /// Bumped by `cancelAll`. A backend's Asks carry the generation it started in.
+  private(set) var generation = 0
 
   /// Shows `ask` when every earlier one is answered, and returns the chosen button's index.
-  func present(_ ask: Ask) async -> Int {
-    await withCheckedContinuation { continuation in
+  /// An Ask from an older generation, whose backend the queue was cancelled for, returns -1.
+  func present(_ ask: Ask, generation: Int) async -> Int {
+    guard generation == self.generation else { return -1 }
+    return await withCheckedContinuation { continuation in
       let pending = Pending(ask: ask, continuation: continuation)
       if current == nil { current = pending } else { waiting.append(pending) }
     }
@@ -34,6 +38,7 @@ final class AskQueue {
 
   /// Answers every waiting Ask with -1, the cancel choice. Used when the backend stops.
   func cancelAll() {
+    generation += 1
     let all = (current.map { [$0] } ?? []) + waiting
     current = nil
     waiting = []

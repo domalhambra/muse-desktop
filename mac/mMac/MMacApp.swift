@@ -4,10 +4,11 @@ import SwiftUI
 @main
 struct MMacApp: App {
   @NSApplicationDelegateAdaptor private var delegate: AppDelegate
+  static let mainWindow = "main"
 
   var body: some Scene {
     // One window. The backend belongs to the app, so closing this window keeps it.
-    Window("mMac", id: "main") {
+    Window("mMac", id: Self.mainWindow) {
       RootView(controller: delegate.controller)
         .frame(minWidth: 820, minHeight: 560)
         // Muse and Moonlight, the two kept themes, are both dark. Themes arrive in M3.
@@ -45,7 +46,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     Task { await controller.start() }
   }
 
-  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+  /// Closing the window keeps mMac and its backend running, so a turn is never cut off unasked.
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+  /// A Dock click with no window open reopens it.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    if flag { return true }
+    return !controller.revealWindow()
+  }
 
   /// Quits after the backend has closed `muse serve`, or when the person chose to keep working.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
