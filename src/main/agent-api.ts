@@ -82,6 +82,7 @@ export interface AgentHost {
   approve(sessionId: string, approvalId: string, choiceId: string): Promise<void>
   answer(sessionId: string, userInputId: string, answers: QuestionAnswer[]): Promise<void>
   cancel(sessionId: string): Promise<void>
+  models(sessionId?: string): Promise<unknown[]>
   list(cursor?: string): Promise<{ sessions: SessionView['session'][]; nextCursor: string | null }>
 }
 
@@ -91,6 +92,25 @@ export interface AgentPolicy {
 }
 
 const MAX_JOBS = 200
+
+// An answer that names the question's options selects them; anything else is free text.
+export function toAnswer(
+  job: Job | undefined,
+  decision: { userInputId: string; questionId: string; answer: string },
+): QuestionAnswer {
+  const question = job?.questions
+    .find((input) => input.userInputId === decision.userInputId)
+    ?.questions.find((entry) => entry.id === decision.questionId)
+  const options = question?.options ?? []
+  if (question?.mode === 'multiple') {
+    const labels = decision.answer.split(',').map((label) => label.trim())
+    if (labels.every((label) => options.includes(label)))
+      return { questionId: decision.questionId, selectedLabels: labels }
+  } else if (options.includes(decision.answer)) {
+    return { questionId: decision.questionId, selectedLabel: decision.answer }
+  }
+  return { questionId: decision.questionId, freeText: decision.answer }
+}
 
 export function renderTranscript(items: TranscriptItem[]): string {
   const blocks: string[] = []
@@ -235,6 +255,10 @@ export class AgentApi {
 
   listSessions(cursor?: string) {
     return this.host.list(cursor)
+  }
+
+  listModels() {
+    return this.host.models()
   }
 
   get activeCount() {

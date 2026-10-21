@@ -2,8 +2,8 @@ import { watch, type FSWatcher } from 'chokidar'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
-import { effortSchema, type QuestionAnswer } from '../shared/protocol'
-import type { AgentApi, AskInput, Job } from './agent-api'
+import { effortSchema } from '../shared/protocol'
+import { toAnswer, type AgentApi, type AskInput, type Job } from './agent-api'
 
 // A folder-based bridge: another agent writes a Markdown request into inbox/,
 // Muse Desktop runs it as a Muse Code turn through AgentApi, and keeps
@@ -172,25 +172,6 @@ Only projects opened and trusted in Muse Desktop are accepted. A request that
 fails is moved to inbox/rejected/ with a .error.txt file that explains why.
 Handled requests move to inbox/processed/.
 `
-
-// An answer that names the question's options selects them; anything else is free text.
-export function toAnswer(
-  job: Job | undefined,
-  decision: { userInputId: string; questionId: string; answer: string },
-): QuestionAnswer {
-  const question = job?.questions
-    .find((input) => input.userInputId === decision.userInputId)
-    ?.questions.find((entry) => entry.id === decision.questionId)
-  const options = question?.options ?? []
-  if (question?.mode === 'multiple') {
-    const labels = decision.answer.split(',').map((label) => label.trim())
-    if (labels.every((label) => options.includes(label)))
-      return { questionId: decision.questionId, selectedLabels: labels }
-  } else if (options.includes(decision.answer)) {
-    return { questionId: decision.questionId, selectedLabel: decision.answer }
-  }
-  return { questionId: decision.questionId, freeText: decision.answer }
-}
 
 type BridgeApi = Pick<AgentApi, 'ask' | 'get' | 'approve' | 'answer' | 'cancel'>
 

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { FileBridge, parseFrontmatter, parseRequest, toAnswer } from '../../src/main/bridge-files'
+import { FileBridge, parseFrontmatter, parseRequest } from '../../src/main/bridge-files'
+import { toAnswer } from '../../src/main/agent-api'
 import type { AskInput, Job } from '../../src/main/agent-api'
 
 let dir: string

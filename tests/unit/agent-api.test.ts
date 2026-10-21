@@ -49,6 +49,7 @@ function fakeHost(existing: SessionView['items'] = []) {
     cancel: async (...args) => {
       calls.push(['cancel', ...args])
     },
+    models: async () => [],
     list: async () => ({ sessions: [], nextCursor: null }),
   }
   return host
