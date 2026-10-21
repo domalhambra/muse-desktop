@@ -235,11 +235,12 @@ try {
   assert(listed.sessions.some((session) => session.sessionId === sessionId))
   console.log('PASS · The new conversation is in the session list')
 
-  // Only the trust Ask so far: shutdown must not quietly confirm an unexpected one.
+  // Only the trust Ask, before and after shutdown: an unexpected Ask must not be quietly confirmed.
   assert.equal(backend.asks.length, 1, 'Only the trust Ask was expected before shutdown.')
   backend.recordServes()
   assert.equal(await backend.request('shutdown'), true)
   assert.equal(await exitWithin(backend), 0)
+  assert.equal(backend.asks.length, 1, 'Shutdown should not raise an Ask.')
   await until(() => ownedGone(backend), 'muse serve to stop after shutdown')
   console.log('PASS · shutdown exits 0 and leaves no muse process')
 
@@ -294,10 +295,14 @@ try {
       each.recordServes()
       each.child.kill('SIGKILL')
     }
+    // Kill a recorded PID only while it still runs a serve command, so a PID that
+    // macOS reused for another process is left alone.
+    const running = pgrep(['-f', servePattern])
     for (const pid of each.serves) {
+      if (!alive(pid) || !running.includes(pid)) continue
       try {
         process.kill(pid, 'SIGKILL')
-      } catch {} // Already gone.
+      } catch {} // Gone since the check.
     }
     await exitWithin(each, 5000).catch(() => {})
   }
