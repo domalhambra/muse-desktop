@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from 'chokidar'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { effortSchema } from '../shared/protocol'
@@ -181,8 +181,13 @@ why.
 
 type BridgeApi = Pick<AgentApi, 'ask' | 'get' | 'approve' | 'answer' | 'cancel'>
 
+// A file counts as fully written once it has not changed for this long.
+const STABLE_MS = 250
+
 export class FileBridge {
   private watcher?: FSWatcher
+  private sweeper?: ReturnType<typeof setInterval>
+  private claiming = new Set<string>()
   private timers = new Map<string, ReturnType<typeof setInterval>>()
   private written = new Map<string, string>()
   readonly inbox: string
@@ -214,7 +219,7 @@ export class FileBridge {
     this.watcher = watch([this.inbox, this.decisions], {
       depth: 0,
       ignoreInitial: false,
-      awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 50 },
+      awaitWriteFinish: { stabilityThreshold: STABLE_MS, pollInterval: 50 },
     })
     // Handled files are moved away at once, so a file reappearing under the same
     // name is new work. chokidar reports a quick delete-and-recreate as a change.
@@ -227,9 +232,44 @@ export class FileBridge {
     this.watcher.on('add', arrive)
     this.watcher.on('change', arrive)
     await new Promise<void>((resolve) => this.watcher!.once('ready', () => resolve()))
+    // The watcher can miss a file: on macOS, chokidar reports ready before
+    // fs.watch is live, and a file written in that gap gives no event. The
+    // folders are the record of pending work, so sweep them as well.
+    this.sweeper = setInterval(() => void this.sweep(arrive), this.pollMs)
+  }
+
+  private async sweep(arrive: (path: string) => void) {
+    for (const folder of [this.inbox, this.decisions]) {
+      const entries = await readdir(folder, { withFileTypes: true }).catch(() => [])
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue
+        const path = join(folder, entry.name)
+        const stats = await stat(path).catch(() => undefined)
+        if (!this.sweeper) return
+        if (stats && Date.now() - stats.mtimeMs >= STABLE_MS) arrive(path)
+      }
+    }
+  }
+
+  // Read a file and move it out of its folder. A watcher event and a sweep can
+  // both see the same file, so only one claim per path runs at a time.
+  private async claim(path: string, to: string): Promise<string | undefined> {
+    if (this.claiming.has(path)) return undefined
+    this.claiming.add(path)
+    try {
+      const text = await readFile(path, 'utf8')
+      await rename(path, to)
+      return text
+    } catch {
+      return undefined
+    } finally {
+      this.claiming.delete(path)
+    }
   }
 
   async stop() {
+    clearInterval(this.sweeper)
+    this.sweeper = undefined
     for (const timer of this.timers.values()) clearInterval(timer)
     this.timers.clear()
     await this.watcher?.close()
@@ -239,13 +279,8 @@ export class FileBridge {
   private async handleRequest(path: string) {
     const name = basename(path, '.md')
     const processed = join(this.inbox, 'processed', `${name}.md`)
-    let text: string
-    try {
-      text = await readFile(path, 'utf8')
-      await rename(path, processed)
-    } catch {
-      return
-    }
+    const text = await this.claim(path, processed)
+    if (text === undefined) return
     try {
       const job = await this.api.ask(parseRequest(text))
       await this.writeOut(name, job)
@@ -276,15 +311,13 @@ export class FileBridge {
 
   private async handleDecision(path: string) {
     const jobId = basename(path, '.md')
-    let text: string
-    try {
-      // Claim the file before acting, so a decision written next under the
-      // same name arrives as a new file instead of being swept away with this one.
-      text = await readFile(path, 'utf8')
-      await rename(path, join(this.decisions, 'processed', `${jobId}-${Date.now()}.md`))
-    } catch {
-      return
-    }
+    // Claim the file before acting, so a decision written next under the
+    // same name arrives as a new file instead of being swept away with this one.
+    const text = await this.claim(
+      path,
+      join(this.decisions, 'processed', `${jobId}-${Date.now()}.md`),
+    )
+    if (text === undefined) return
     try {
       const decision = decisionSchema.parse(parseFrontmatter(text).fields)
       if ('approvalId' in decision)
