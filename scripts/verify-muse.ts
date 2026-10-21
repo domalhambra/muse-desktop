@@ -9,6 +9,8 @@ import type { AppEvent, SessionView } from '../src/shared/protocol'
 import { discoverCli } from '../src/main/cli'
 import { recordMuseTrust } from '../src/main/muse-config'
 import { addServer, setServerEnabled, settingsFile } from '../src/main/mcp-config'
+import { AgentApi } from '../src/main/agent-api'
+import { publish } from '../src/main/event-bus'
 import { worktreeParent } from '../src/shared/worktree'
 
 const binary = (await discoverCli(process.env.MUSE_BIN)).path
@@ -28,6 +30,7 @@ const updates: SessionView[] = []
 const errors: string[] = []
 let changed: (() => void) | undefined
 const host = new MuseHost((event: AppEvent) => {
+  publish(event)
   if (event.type === 'session') {
     updates.push(event.view)
     changed?.()
@@ -197,6 +200,21 @@ try {
   await host.close()
   assert.equal((await host.connect(binary)).state, 'ready', 'Muse should start with these entries')
   console.log('PASS · MCP entries written by Desktop resolve in Muse and keep the host starting')
+
+  const agent = new AgentApi(host, { resolveProject: async (path) => path })
+  const job = await agent.ask({ project, prompt: 'Hello from the bridge.', effort: 'low' })
+  await waitFor(() => agent.get(job.id)?.status === 'done')
+  assert.match(agent.get(job.id)!.reply, /Hello from the bridge/)
+  assert.match(agent.get(job.id)!.transcript, /\*\*You:\*\* Hello from the bridge/)
+  const followUp = await agent.ask({
+    sessionId: job.sessionId,
+    prompt: 'And a follow-up.',
+    effort: 'low',
+  })
+  await waitFor(() => agent.get(followUp.id)?.status === 'done')
+  assert.doesNotMatch(agent.get(followUp.id)!.transcript, /Hello from the bridge/)
+  agent.dispose()
+  console.log('PASS · Bridge jobs run to completion and stay scoped to their own turn')
 } finally {
   await host.close()
   process.env = original
