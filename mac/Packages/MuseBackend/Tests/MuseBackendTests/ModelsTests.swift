@@ -99,3 +99,10 @@ let fullViewJSON = #"""
     ["create", ["/p"]],
   ])
 }
+
+@Test func aReasoningSummaryWithGapsKeepsItsStrings() throws {
+  // muse-host.ts fills summary by index, so a skipped index arrives as null.
+  let line = #"{"itemId":"r1","kind":"reasoning","revision":1,"status":"inProgress","summary":["One",null,"Three"]}"#
+  let item = try JSONDecoder().decode(TranscriptItem.self, from: Data(line.utf8))
+  #expect(item.summary == ["One", "Three"])
+}

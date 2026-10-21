@@ -180,6 +180,41 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
   }
 }
 
+extension TranscriptItem {
+  /// The synthesized decoding, except `summary`: muse-host.ts fills it by index, so a skipped
+  /// index arrives as null. Those are dropped rather than failing the whole session view.
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    itemId = try c.decode(String.self, forKey: .itemId)
+    kind = try c.decode(String.self, forKey: .kind)
+    revision = try c.decode(Int.self, forKey: .revision)
+    status = try c.decode(String.self, forKey: .status)
+    text = try c.decodeIfPresent(String.self, forKey: .text)
+    displayText = try c.decodeIfPresent(String.self, forKey: .displayText)
+    summary = try c.decodeIfPresent([String?].self, forKey: .summary)?.compactMap { $0 }
+    tool = try c.decodeIfPresent(String.self, forKey: .tool)
+    args = try c.decodeIfPresent(String.self, forKey: .args)
+    visibleOutput = try c.decodeIfPresent(String.self, forKey: .visibleOutput)
+    commandText = try c.decodeIfPresent(String.self, forKey: .commandText)
+    fallbackText = try c.decodeIfPresent(String.self, forKey: .fallbackText)
+    statusLine = try c.decodeIfPresent(String.self, forKey: .statusLine)
+    failureReason = try c.decodeIfPresent(String.self, forKey: .failureReason)
+    objective = try c.decodeIfPresent(String.self, forKey: .objective)
+    role = try c.decodeIfPresent(String.self, forKey: .role)
+    label = try c.decodeIfPresent(String.self, forKey: .label)
+    finalSummary = try c.decodeIfPresent(String.self, forKey: .finalSummary)
+    recordedAt = try c.decodeIfPresent(String.self, forKey: .recordedAt)
+    reminderAgentId = try c.decodeIfPresent(String.self, forKey: .reminderAgentId)
+    durationMs = try c.decodeIfPresent(Double.self, forKey: .durationMs)
+    truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated)
+    retracted = try c.decodeIfPresent(Bool.self, forKey: .retracted)
+    blocking = try c.decodeIfPresent(Bool.self, forKey: .blocking)
+    outputRef = try c.decodeIfPresent(OutputRef.self, forKey: .outputRef)
+    patchSummary = try c.decodeIfPresent(PatchSummary.self, forKey: .patchSummary)
+    result = try c.decodeIfPresent(ToolResult.self, forKey: .result)
+  }
+}
+
 public struct Approval: Codable, Equatable, Sendable, Identifiable {
   public struct Subject: Codable, Equatable, Sendable {
     public let kind: String

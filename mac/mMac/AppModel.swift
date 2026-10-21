@@ -113,7 +113,7 @@ final class AppModel {
       if view.session.sessionId == selected?.session.sessionId { selected = view }
     case .sessionsChanged: Task { await refreshSessions() }
     case .error(let message): errorMessage = message
-    case .other: break
+    case .other, .preferences: break
     }
   }
 
