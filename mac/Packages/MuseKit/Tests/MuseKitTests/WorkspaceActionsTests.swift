@@ -435,3 +435,34 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(workspace.draft == "hi")
   #expect(workspace.errorMessage == "boom")
 }
+
+// Drafts across a backend restart. AppController makes a new Workspace for each backend, and
+// passes it the old one's drafts.
+
+@MainActor @Test func aNewWorkspaceShowsTheOldOnesDrafts() async throws {
+  let (old, _) = await makeWorkspace(script: openScript())
+  old.draft = "a new one"
+  await old.open("s1")
+  old.draft = "a long prompt"
+  let (next, _) = await makeWorkspace(drafts: old.drafts, script: openScript())
+  #expect(next.draft == "a new one")
+  await next.open("s1")
+  #expect(next.draft == "a long prompt")
+}
+
+@MainActor @Test func aSendCutOffByABackendStopKeepsTheDraft() async throws {
+  let (old, backend) = await makeWorkspace(script: openScript { method, _, _ in
+    method == "send" ? [] : nil
+  })
+  await old.open("s1")
+  old.draft = "a long prompt"
+  let sending = Task { await old.send() }
+  try await eventually { backend.messages.contains { $0["method"] == "send" } }
+  #expect(old.draft == "")
+  backend.close()
+  #expect(await sending.value == .notSent)
+  #expect(old.draft == "a long prompt")
+  let (next, _) = await makeWorkspace(drafts: old.drafts, script: openScript())
+  await next.open("s1")
+  #expect(next.draft == "a long prompt")
+}

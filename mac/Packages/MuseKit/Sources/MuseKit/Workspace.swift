@@ -44,7 +44,8 @@ public final class Workspace {
   public internal(set) var loadingOutput: Set<String> = []
 
   let client: BackendClient
-  var drafts: [String: String] = [:]
+  /// Unsent text by `draftKey`. AppController passes them to the next backend's Workspace.
+  public internal(set) var drafts: [String: String] = [:]
   /// Counts `open` and `startNew` calls. An action that awaits the backend compares it after the
   /// await, so a reply for a conversation the person has left does not change the one shown.
   private(set) var openSequence = 0
@@ -53,10 +54,13 @@ public final class Workspace {
   /// The pause before a `sessions-changed` event refreshes history. Electron waits 250 ms.
   private let refreshDebounce: Duration
 
+  /// `drafts` are an earlier Workspace's, so a backend restart keeps what the person typed.
   public init(
-    client: BackendClient, started: Started, refreshDebounce: Duration = .milliseconds(250)
+    client: BackendClient, started: Started, drafts: [String: String] = [:],
+    refreshDebounce: Duration = .milliseconds(250)
   ) {
     self.client = client
+    self.drafts = drafts
     status = started.status
     preferences = started.preferences
     project = started.preferences.recentProjects.first ?? ""
@@ -71,7 +75,7 @@ public final class Workspace {
   public var effort: String { preferences.reasoningEffort }
 
   /// The composer text for the open conversation, or for a new one in the current project.
-  /// Drafts live in memory only, as in Electron.
+  /// Drafts live in memory only, as in Electron, and outlast a backend restart.
   public var draft: String {
     get { drafts[draftKey] ?? "" }
     set { drafts[draftKey] = newValue }

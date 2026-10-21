@@ -18,6 +18,8 @@ final class AppController {
 
   private(set) var phase: Phase = .starting
   private(set) var workspace: Workspace?
+  /// The last Workspace's unsent drafts, for the next backend's Workspace.
+  private var drafts: [String: String] = [:]
   let asks = AskQueue()
   private var client: BackendClient?
   private var transport: ProcessTransport?
@@ -37,7 +39,7 @@ final class AppController {
     launching = true
     defer { launching = false }
     phase = .starting
-    workspace = nil
+    dropWorkspace()
     stoppedWhileQuitting = nil
     var launched: ProcessTransport?
     do {
@@ -64,7 +66,7 @@ final class AppController {
       }
       _ = try await client.hello()
       let started = try await client.start(dataFolder: Self.dataFolder())
-      let workspace = Workspace(client: client, started: started)
+      let workspace = Workspace(client: client, started: started, drafts: drafts)
       self.workspace = workspace
       phase = .running
       await workspace.begin()
@@ -124,10 +126,17 @@ final class AppController {
     guard client === stopped, !quitting else { return }
     client = nil
     transport = nil
-    workspace = nil
+    dropWorkspace()
     phase = .stopped(
       message: "The backend process ended. Restart it to continue. Your conversations are saved in Muse Code.",
       details: details)
+  }
+
+  /// Drops the Workspace and keeps its drafts. A send the stop cut off has put its text back by
+  /// now: `BackendError.stopped` reaches it before the event stream ends this backend.
+  private func dropWorkspace() {
+    if let workspace { drafts = workspace.drafts }
+    workspace = nil
   }
 
   /// The backend's last stderr output. stderr is read on its own queue, so the last lines of a
