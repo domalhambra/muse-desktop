@@ -65,6 +65,25 @@ private func question(mode: String, min: Int? = nil, max: Int? = nil) throws -> 
   #expect(form.freeText(in: "q2").count == 500)
 }
 
+@Test func freeTextCountsUTF16UnitsAsTheBackendDoes() throws {
+  // Each of these emoji is two UTF-16 units, so 250 of them fill the backend's 500.
+  var form = QuestionForm(try question(mode: "single"))
+  form.write(String(repeating: "😀", count: 300), in: "q2")
+  #expect(form.freeText(in: "q2") == String(repeating: "😀", count: 250))
+  #expect(form.freeText(in: "q2").utf16.count == 500)
+}
+
+@Test func aUTF16LimitCutsOnlyBetweenCharacters() {
+  // A family emoji is one character of eight UTF-16 units: it goes whole or not at all.
+  let family = "👨‍👩‍👧"
+  #expect(family.utf16.count == 8)
+  #expect((String(repeating: "x", count: 495) + family).prefix(utf16Units: 500) == String(repeating: "x", count: 495))
+  #expect(("x" + family).prefix(utf16Units: 9) == "x" + family)
+  // An odd limit does not split a surrogate pair.
+  #expect("😀😀".prefix(utf16Units: 3) == "😀")
+  #expect("abc".prefix(utf16Units: 0) == "")
+}
+
 @Test func approvalButtonsFollowElectron() throws {
   let json = #"""
     [{"choiceId":"c1","label":"Allow once","decision":"approved","scope":"once"},

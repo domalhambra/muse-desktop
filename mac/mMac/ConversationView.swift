@@ -92,7 +92,7 @@ struct RenameSheet: View {
         TextField("Conversation name", text: $name)
           .textFieldStyle(.roundedBorder)
           .onChange(of: name) {
-            if name.utf16.count > Self.limit { name = Self.limited(name) }
+            if name.utf16.count > Self.limit { name = name.prefix(utf16Units: Self.limit) }
             error = nil
           }
         if let error {
@@ -126,17 +126,5 @@ struct RenameSheet: View {
       workspace.errorMessage = nil
       saving = false
     }
-  }
-
-  /// `text` cut to `limit` UTF-16 units, at a whole character.
-  static func limited(_ text: String) -> String {
-    var count = 0
-    var end = text.startIndex
-    for index in text.indices {
-      count += text[index].utf16.count
-      if count > limit { break }
-      end = text.index(after: index)
-    }
-    return String(text[..<end])
   }
 }

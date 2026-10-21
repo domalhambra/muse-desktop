@@ -22,9 +22,13 @@ public struct QuestionForm: Equatable, Sendable {
     }
   }
 
-  /// Writes free text, up to 500 characters. Writing clears any selection for that prompt.
+  /// The backend's free-text limit, in UTF-16 units.
+  public static let freeTextLimit = 500
+
+  /// Writes free text, up to the limit. Writing clears any selection for that prompt.
   public mutating func write(_ text: String, in promptId: String) {
-    answers[promptId] = QuestionAnswer(questionId: promptId, freeText: String(text.prefix(500)))
+    answers[promptId] = QuestionAnswer(
+      questionId: promptId, freeText: text.prefix(utf16Units: Self.freeTextLimit))
   }
 
   public func isChosen(_ label: String, in promptId: String) -> Bool {
