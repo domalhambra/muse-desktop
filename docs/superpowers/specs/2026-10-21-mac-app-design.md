@@ -39,12 +39,12 @@ The Mac app never loads Electron or Chromium. At runtime it is the SwiftUI app p
 
 ### Units
 
-| Unit                    | Path                                           | Owns                                                                             | Depends on                  |
-| ----------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------- |
-| The core                | `src/main/` except `index.ts` and `updates.ts` | Everything the backend does today                                                | Node, `@muse-code/sdk`, Git |
-| The headless front door | `src/headless/server.ts`                       | Reading requests, calling the core, writing replies, events and Asks             | The core                    |
-| The backend client      | `mac/Packages/MuseBackend/`                    | Starting `server.ts`, the four message kinds, typed requests and events in Swift | Node on the Mac             |
-| The app                 | `mac/mMac.xcodeproj`, `mac/mMac/`              | All UI and every native service                                                  | `MuseBackend`               |
+| Unit                    | Path                                                                  | Owns                                                                             | Depends on                  |
+| ----------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------- |
+| The core                | `src/main/` except `index.ts` and `updates.ts`                        | Everything the backend does today                                                | Node, `@muse-code/sdk`, Git |
+| The headless front door | `src/headless/server.ts`                                              | Reading requests, calling the core, writing replies, events and Asks             | The core                    |
+| The backend client      | `mac/Packages/MuseBackend/`                                           | Starting `server.ts`, the four message kinds, typed requests and events in Swift | Node on the Mac             |
+| The app                 | `mac/project.yml` (XcodeGen generates the Xcode project), `mac/mMac/` | All UI and every native service                                                  | `MuseBackend`               |
 
 `MuseBackend` has no UI, and the app never writes JSON itself.
 
@@ -60,6 +60,8 @@ One JSON object per line, in both directions.
 | Ask     | backend → app, then answered | `{"ask": 3, "kind": "confirm", "title": "…", "message": "…", "detail": "…", "buttons": ["…", "…"]}`, answered with `{"answer": 3, "choice": 0}` |
 
 Method names and reply shapes are today's IPC channels (`src/preload/index.ts`) and the `{ ok, value | error }` replies that `handle()` in `src/main/index.ts` writes. The first request is `hello`, which carries the build identifier. A mismatch stops the connection with a clear error. The second request, `start`, carries the data folder and the bridge token.
+
+A request the backend cannot read, but whose `id` it can read, gets an `ok: false` Reply, so mMac's call never waits forever. A line with no readable `id` becomes an error Event. mMac answers an Ask it cannot read with `-1`, the cancel choice.
 
 ### What moves from the backend to the app
 
@@ -96,17 +98,17 @@ Every test points `HOME`, `XDG_CONFIG_HOME` and `MUSE_HOME` at a temporary folde
 | `MuseBackend` | Every message kind is encoded, decoded and routed                                     | `swift test` against a scripted fake backend                                                                                          |
 | The app       | The main flows work end to end                                                        | UI tests through `xcodebuild test`, driving the real app, backend and echo CLI                                                        |
 
-The gate is today's six commands plus `swift test` and `xcodebuild test`.
+The gate is in "Prove a change" in `docs/changing-things.md`: today's six commands, `npm run test:headless`, `swift test` and an `xcodebuild` build. `xcodebuild test` joins it when the UI tests exist.
 
 ## Milestones
 
-| Milestone     | Done when                                                                                                                                                             |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M0: spike     | `server.ts` and a bare window connect to Muse, list conversations and stream one echo turn. `verify-headless.ts` passes.                                              |
-| M1: core loop | Projects, sidebar, conversation list, streamed transcripts with Markdown and code blocks, composer (send, stop, queue, steer), approvals, questions, model and effort |
-| M2: inspector | Native resizable inspector: file previews, Git status and diffs, diff review with a labeled **Revert hunk** button on each hunk, worktrees                            |
-| M3: Settings  | A macOS Settings window: Muse Code path, MCP servers, bridges, appearance, notifications                                                                              |
-| M4: the rest  | Everything else on the parity checklist                                                                                                                               |
+| Milestone     | Done when                                                                                                                                                                   |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0: spike     | Done 2026-10-21. `server.ts` and a bare window connect to Muse, list conversations and stream one echo turn. `npm run test:headless` (`scripts/verify-headless.ts`) passes. |
+| M1: core loop | Projects, sidebar, conversation list, streamed transcripts with Markdown and code blocks, composer (send, stop, queue, steer), approvals, questions, model and effort       |
+| M2: inspector | Native resizable inspector: file previews, Git status and diffs, diff review with a labeled **Revert hunk** button on each hunk, worktrees                                  |
+| M3: Settings  | A macOS Settings window: Muse Code path, MCP servers, bridges, appearance, notifications                                                                                    |
+| M4: the rest  | Everything else on the parity checklist                                                                                                                                     |
 
 Each milestone is one PR into the fork's `main` from the `mac-app` branch, and Dom merges.
 

@@ -72,7 +72,7 @@ Daily checks are opt-in, automatic installation and system profiling are disable
 
 ## Module map
 
-The Test column names the unit test that covers a file. A dash means no unit test does. `tests/e2e/desktop.spec.ts`, `tests/e2e/extensions.spec.ts` and `tests/e2e/setup.spec.ts` drive the whole app on top of these, and `scripts/verify-muse.ts` (`npm run test:integration`) drives the real CLI.
+The Test column names the unit test that covers a file. A dash means no unit test does. `tests/e2e/desktop.spec.ts`, `tests/e2e/extensions.spec.ts` and `tests/e2e/setup.spec.ts` drive the whole app on top of these, and `scripts/verify-muse.ts` (`npm run test:integration`) drives the real CLI. `scripts/verify-headless.ts` (`npm run test:headless`) drives `src/headless/server.ts` the same way.
 
 | File                                             | Owns                                                                                                 | Test                                                        |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -92,6 +92,8 @@ The Test column names the unit test that covers a file. A dash means no unit tes
 | `src/main/bridge-files.ts`                       | The folder bridge: `<bridge folder>/inbox/`, `<bridge folder>/decisions/`, `<bridge folder>/outbox/` | `tests/unit/bridge-files.test.ts`                           |
 | `src/main/bridge-mcp.ts`                         | The MCP bridge on `127.0.0.1`                                                                        | `tests/unit/bridge-mcp.test.ts`                             |
 | `src/main/bridge-token.ts`                       | The MCP bridge's bearer token                                                                        | `tests/unit/bridge-token.test.ts`                           |
+| `src/headless/wire.ts`                           | mMac's line protocol: Requests, Replies, Events and Asks                                             | `tests/unit/headless-wire.test.ts`                          |
+| `src/headless/server.ts`                         | mMac's backend: the core over stdin and stdout, and its quit path                                    | `tests/unit/headless-parity.test.ts`                        |
 | `src/preload/index.ts`                           | The renderer's narrow typed API                                                                      | —                                                           |
 | `src/shared/protocol.ts`                         | IPC and preference schemas                                                                           | `tests/unit/files.test.ts`                                  |
 | `src/shared/voice.ts`                            | WAV encoding limits and the encoder                                                                  | `tests/unit/voice.test.ts`                                  |
