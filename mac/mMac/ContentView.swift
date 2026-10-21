@@ -63,7 +63,9 @@ struct ContentView: View {
 
   private var statusLine: String {
     guard let status = model.status else { return "Connecting to Muse…" }
-    if status.state == "ready" { return "Connected to Muse Code \(status.version ?? "")" }
+    if status.state == "ready" {
+      return ["Connected to Muse Code", status.version].compactMap { $0 }.joined(separator: " ")
+    }
     return status.message ?? status.state
   }
 }

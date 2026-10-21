@@ -80,8 +80,15 @@ final class AppModel {
   func send() async {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let client, let sessionId = selected?.session.sessionId, !text.isEmpty else { return }
+    let unsent = draft
     draft = ""
-    await run { try await client.send(sessionId: sessionId, text: text) }
+    do {
+      try await client.send(sessionId: sessionId, text: text)
+    } catch {
+      // A failed send, such as a cancelled trust Ask, keeps the text unless the person typed again.
+      if draft.isEmpty { draft = unsent }
+      errorMessage = error.localizedDescription
+    }
   }
 
   /// Returns true when mMac may quit.
@@ -128,7 +135,18 @@ final class AppModel {
     for title in ask.buttons { alert.addButton(withTitle: title) }
     alert.buttons.first?.keyEquivalent = ""
     alert.buttons.last?.keyEquivalent = "\r"
-    return alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+    // Electron's cancelId is the last button too, so Escape must choose it. A button holds one key
+    // equivalent and the last one holds Return, so NSAlert maps Escape nowhere. This monitor, live
+    // only while the alert runs, ends the alert with the last button's response on Escape.
+    let first = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+    let cancel = NSApplication.ModalResponse(rawValue: first + max(alert.buttons.count - 1, 0))
+    let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+      guard event.keyCode == 53 else { return event }
+      NSApp.stopModal(withCode: cancel)
+      return nil
+    }
+    defer { if let escape { NSEvent.removeMonitor(escape) } }
+    return alert.runModal().rawValue - first
   }
 
   private struct SetupError: LocalizedError {

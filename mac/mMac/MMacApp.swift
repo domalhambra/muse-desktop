@@ -7,7 +7,8 @@ struct MMacApp: App {
   @State private var model = AppModel()
 
   var body: some Scene {
-    WindowGroup("mMac") {
+    // One window: Cmd-N must not open a second window over the same model.
+    Window("mMac", id: "main") {
       ContentView(model: model)
         .frame(minWidth: 760, minHeight: 520)
         .task {
