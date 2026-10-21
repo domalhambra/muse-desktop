@@ -8,6 +8,8 @@
 
 **Unofficial community software by [Robert Courson (@robzilla1738)](https://github.com/robzilla1738). Not affiliated with, endorsed by, sponsored by, or supported by Meta.** Muse Code is a separate product of Meta. This repository provides the desktop companion, not the CLI or a Meta account.
 
+**This is Dom Alhambra's fork, with extensions.** Contributors start at `CLAUDE.md`, and every document is indexed in `docs/README.md`.
+
 A desktop home for Muse Code across macOS, Windows, and Linux. Your installed CLI, existing sign-in, project settings, and saved conversations—with a unified Mac-inspired desktop interface built around the way you work.
 
 ![Muse Desktop in the default blue theme](docs/screenshots/muse.png)
@@ -22,8 +24,8 @@ A desktop home for Muse Code across macOS, Windows, and Linux. Your installed CL
 - Presents the CLI's exact approval choices and agent questions. Supports cancellation, queued follow-ups, and steering.
 - Opens local projects with Git branch and working-tree status badges, previews files with breadcrumbs and file-type icons, supports inline `@file` mentions and drag-and-drop file context, and shows line-numbered Git diffs in the project inspector.
 - Reviews Muse's changes in the project inspector: revert one hunk, revert a file, or stage a file.
-- Starts a conversation in its own Git worktree, created by Muse Code itself under `.muse/worktrees/`. The inspector lists the project's Muse worktrees and merges or removes them.
-- Manages the MCP servers in Muse Code's own `settings.json` in **Settings → MCP servers**, including OAuth sign-in through `muse mcp login`.
+- Starts a conversation in its own Git worktree, created by Muse Code itself under `<project>/.muse/worktrees/`. The inspector lists the project's Muse worktrees and merges or removes them.
+- Manages the MCP servers in Muse Code's own `~/.config/muse/settings.json` in **Settings → MCP servers**, including OAuth sign-in through `muse mcp login`.
 - Lets another agent, such as Meta's Muse app, ask Muse Code to work through Desktop, with a folder bridge and a local MCP bridge. See [bridges](docs/bridge.md).
 - Includes five themes: **Muse**, **Daylight**, **Moonlight**, **Grove**, and **Plush**, plus system appearance matching, text size, reduced motion, and optional completion notifications.
 - Preserves the clean, frameless macOS traffic-light window chrome across macOS, Windows, and Linux, with native file pickers, keyboard shortcuts, project trust dialogs, and theme-matched in-app menus.
@@ -62,6 +64,8 @@ Requires macOS 13+, Windows 10/11, or Linux, Node.js 22.12 or newer, and Muse Co
 npm ci
 npm run dev
 ```
+
+On macOS, `npm run dev:isolated` keeps development preferences, the bridge token and recent projects in `~/Library/Application Support/muse-desktop-dev`, so a dev build never changes an installed app's data. Set `MUSE_DESKTOP_USER_DATA` to use another folder. It still uses your real Muse Code configuration in `~/.config/muse`.
 
 Open the packaged application when testing a standalone build. Opening the development Electron binary by itself displays Electron’s launcher. Renderer changes reload during development; restart `npm run dev` after changes to the main process or preload bridge.
 
@@ -104,7 +108,7 @@ The app is built with **Electron, React, TypeScript, electron-vite, and the offi
 
 ## Data and permissions
 
-The CLI remains responsible for credentials, model requests, tools, sandboxing, and session storage. Desktop does not rewrite CLI settings, store an additional copy of credentials, or add analytics. Model requests still reach the provider configured in Muse Code; “Local project” describes your files, not offline inference.
+The CLI remains responsible for credentials, model requests, tools, sandboxing, and session storage. Desktop changes the CLI's configuration in two places only, each on your action: a worktree conversation adds its project to `~/.config/muse/trust.json`, and **Settings → MCP servers** edits the MCP entries in `~/.config/muse/settings.json`. Every other key stays as it was. Desktop does not store an additional copy of credentials or add analytics. Model requests still reach the provider configured in Muse Code; “Local project” describes your files, not offline inference.
 
 Desktop stores appearance, recent projects, project trust, pins, and archives in its Electron application-support directory. Voice audio goes only through your installed CLI and its transcription service. Temporary audio is deleted after completion or cancellation; voice text is never sent as a message automatically. Draft text is kept in memory and is not restored after quitting. Archiving only hides a conversation in Desktop; it does not delete the CLI session. Removing Desktop does not remove your CLI or its conversations.
 

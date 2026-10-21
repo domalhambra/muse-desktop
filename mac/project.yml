@@ -1,0 +1,40 @@
+name: mMac
+options:
+  bundleIdPrefix: com.domalhambra
+  deploymentTarget:
+    macOS: '15.0'
+packages:
+  MuseBackend:
+    path: Packages/MuseBackend
+targets:
+  mMac:
+    type: application
+    platform: macOS
+    sources: [mMac]
+    dependencies:
+      - package: MuseBackend
+    info:
+      path: mMac/Info.plist
+      properties:
+        CFBundleDisplayName: mMac
+        # XcodeGen writes 1.0 and 1 unless these name the build settings.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        # The checkout mMac starts the backend from. M0 runs from the repo only.
+        MMacRepository: $(SRCROOT)/..
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.domalhambra.mmac
+        PRODUCT_NAME: mMac
+        SWIFT_VERSION: '6.0'
+        MARKETING_VERSION: '0.1.0'
+        CURRENT_PROJECT_VERSION: '1'
+        CODE_SIGN_IDENTITY: '-'
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+schemes:
+  mMac:
+    build:
+      targets:
+        mMac: all
