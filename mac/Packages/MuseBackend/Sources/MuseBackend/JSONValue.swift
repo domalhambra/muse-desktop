@@ -42,6 +42,11 @@ public enum JSONValue: Codable, Equatable, Sendable {
   func decode<T: Decodable>(_ type: T.Type) throws -> T {
     try JSONDecoder().decode(type, from: JSONEncoder().encode(self))
   }
+
+  /// The JSON form of any encodable value, for request arguments.
+  public init<T: Encodable>(encoding value: T) throws {
+    self = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
+  }
 }
 
 extension JSONValue: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral,

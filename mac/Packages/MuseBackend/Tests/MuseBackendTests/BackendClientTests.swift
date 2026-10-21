@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import MuseBackendTesting
 @testable import MuseBackend
 
 private let viewJSON = #"""
@@ -34,7 +35,7 @@ private let viewJSON = #"""
   backend.push(#"{"event":{"type":"connection","status":{"state":"ready","version":"1.4.11"}}}"#)
   backend.push(#"{"event":{"type":"session","view":\#(viewJSON)}}"#)
   backend.push(#"{"event":{"type":"sessions-changed"}}"#)
-  backend.push(#"{"event":{"type":"preferences","preferences":{}}}"#)
+  backend.push(#"{"event":{"type":"menu","action":"new"}}"#)
   backend.push(#"{"event":{"type":"error","message":"Could not read a Muse update."}}"#)
   var received: [AppEvent] = []
   for await event in client.events {
@@ -45,7 +46,7 @@ private let viewJSON = #"""
   guard case .session(let view) = received[1] else { Issue.record("Expected a session event"); return }
   #expect(view.items.first?.text == "Hello")
   #expect(received[2] == .sessionsChanged)
-  #expect(received[3] == .other("preferences"))
+  #expect(received[3] == .other("menu"))
   #expect(received[4] == .error("Could not read a Muse update."))
 }
 
