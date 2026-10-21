@@ -42,9 +42,6 @@ struct ComposerView: View {
         }
         .fixedSize()
         Spacer()
-        if let footnote {
-          Text(footnote).font(.caption).foregroundStyle(.secondary)
-        }
         Text("↵ Send · ⇧ ↵ New line").font(.caption).foregroundStyle(.tertiary)
         Button(action: submit) {
           if workspace.submitting {
@@ -57,6 +54,13 @@ struct ComposerView: View {
         .disabled(!canSend)
         .accessibilityLabel(workspace.isRunning ? "Send follow-up" : "Send message")
         .help(workspace.isRunning ? "Send follow-up" : "Send message")
+      }
+      // On its own line, so a long note does not squeeze the row.
+      if let footnote {
+        Text(footnote)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
     .padding(12)
