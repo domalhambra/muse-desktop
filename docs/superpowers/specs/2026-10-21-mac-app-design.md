@@ -1,6 +1,6 @@
 # mMac: design
 
-Status: draft for Dom's review. Designed with Dom on 2026-10-21, one section at a time; Dom approved each section.
+Status: approved. Designed with Dom on 2026-10-21, one section at a time; Dom approved each section and then the written spec.
 
 ## Goal
 
