@@ -6,6 +6,26 @@ import { FileBridge, parseFrontmatter, parseRequest } from '../../src/main/bridg
 import { toAnswer } from '../../src/main/agent-api'
 import type { AskInput, Job } from '../../src/main/agent-api'
 
+// On macOS, chokidar can report ready before its fs.watch is live, and a file
+// written in that gap never produces an event. A deaf watcher drops every file
+// event, so a test can prove the bridge still finds the file.
+const watcher = vi.hoisted(() => ({ deaf: false }))
+vi.mock('chokidar', async (importOriginal) => {
+  const chokidar = await importOriginal<typeof import('chokidar')>()
+  return {
+    ...chokidar,
+    watch: (...args: Parameters<typeof chokidar.watch>) => {
+      const real = chokidar.watch(...args)
+      if (watcher.deaf) {
+        const on = real.on.bind(real)
+        real.on = ((event: string, listener: (...a: unknown[]) => void) =>
+          event === 'add' || event === 'change' ? real : on(event, listener)) as typeof real.on
+      }
+      return real
+    },
+  }
+})
+
 let dir: string
 let bridge: FileBridge | undefined
 beforeEach(async () => {
@@ -14,6 +34,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await bridge?.stop()
   bridge = undefined
+  watcher.deaf = false
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -124,6 +145,20 @@ describe('FileBridge', () => {
     bridge = new FileBridge(dir, api, 50)
     await bridge.start()
     await vi.waitFor(() => expect(api.asked).toHaveLength(1))
+  })
+  it('finds requests and decisions that the watcher never reports', async () => {
+    watcher.deaf = true
+    api = fakeApi({ job: job() })
+    bridge = new FileBridge(dir, api, 50)
+    await bridge.start()
+    await writeFile(join(dir, 'inbox', 'missed.md'), '---\nproject: /p\n---\nmissed\n')
+    await writeFile(join(dir, 'decisions', 'j1.md'), '---\ncancel: true\n---\n')
+    await vi.waitFor(async () => {
+      expect(await readFile(join(dir, 'outbox', 'missed.md'), 'utf8')).toContain('status: running')
+      expect(api.cancel).toHaveBeenCalledWith('j1')
+    })
+    expect(api.asked).toHaveLength(1)
+    expect(await readdir(join(dir, 'inbox', 'processed'))).toEqual(['missed.md'])
   })
   it('moves an invalid request to rejected with the reason', async () => {
     api = fakeApi({ job: job() })
