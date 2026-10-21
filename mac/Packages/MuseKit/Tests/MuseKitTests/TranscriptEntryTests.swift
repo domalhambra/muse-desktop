@@ -62,6 +62,14 @@ private func message(_ id: String, _ kind: String = "agentMessage") -> Transcrip
   #expect(ToolPresentation.formattedArgs("{not json") == "{not json")
 }
 
+@Test func emptyToolInputPrintsOnOneLine() {
+  // JSON.stringify(value, null, 2) writes {} and []; Foundation spreads them over three lines.
+  #expect(ToolPresentation.formattedArgs("{}") == "{}")
+  #expect(ToolPresentation.formattedArgs("[]") == "[]")
+  #expect(ToolPresentation.formattedArgs(#"{"a":{},"b":[],"c":"{\n}"}"#)
+    == "{\n  \"a\" : {},\n  \"b\" : [],\n  \"c\" : \"{\\n}\"\n}")
+}
+
 @Test func durationsRoundAsToFixedDoes() {
   func footer(_ ms: Double) -> String {
     ToolPresentation.footer(TranscriptItem(itemId: "a", kind: "toolCall", status: "completed", durationMs: ms))

@@ -95,8 +95,15 @@ public enum ToolPresentation {
     guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(args.utf8)),
       let pretty = try? argsEncoder.encode(value)
     else { return args }
-    return String(decoding: pretty, as: UTF8.self)
+    let text = String(decoding: pretty, as: UTF8.self)
+    // Foundation writes an empty object or array over three lines; JSON.stringify writes {} and [].
+    // The encoder escapes every newline inside a string, so a bare newline is always layout.
+    return emptyContainer.stringByReplacingMatches(
+      in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1$2")
   }
+
+  // Built once. NSRegularExpression is immutable and documented as thread-safe.
+  static let emptyContainer = try! NSRegularExpression(pattern: #"([{\[])\n\s*([}\]])"#)
 
   static let argsEncoder: JSONEncoder = {
     let encoder = JSONEncoder()
