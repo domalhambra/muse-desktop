@@ -72,6 +72,7 @@ private let viewJSON = #"""
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
   let reply = Task { try await client.sessions() }
+  try await waitFor { backend.messages.count == 1 }  // The request is really pending.
   backend.close()
   await #expect(throws: BackendError.stopped) { _ = try await reply.value }
   for await _ in client.events {}  // The stream finishes instead of hanging.
@@ -85,6 +86,78 @@ private let viewJSON = #"""
   await client.run()
   #expect(try await client.shutdown(timeout: .milliseconds(200)))
   #expect(backend.forceStopped)
+}
+
+@Test(.timeLimit(.minutes(1))) func shutdownReturnsFalseWhenThePersonKeepsWorking() async throws {
+  let backend = ScriptedBackend { message in
+    message["method"] == "shutdown" ? [#"{"id":1,"ok":true,"value":false}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  #expect(try await client.shutdown(timeout: .milliseconds(200)) == false)
+  #expect(!backend.forceStopped)
+}
+
+@Test(.timeLimit(.minutes(1))) func shutdownDoesNotForceStopABackendThatExits() async throws {
+  let backend = ScriptedBackend { message in
+    message["method"] == "shutdown" ? [#"{"id":1,"ok":true,"value":true}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let quitting = Task { try await client.shutdown(timeout: .seconds(10)) }
+  try await waitFor { backend.messages.count == 1 }
+  backend.close()
+  #expect(try await quitting.value)
+  #expect(!backend.forceStopped)
+}
+
+@Test(.timeLimit(.minutes(1))) func aChoiceThatNamesNoButtonCancels() async throws {
+  let backend = ScriptedBackend { message in
+    if message["method"] == "create" {
+      return [#"{"ask":3,"kind":"confirm","title":"Trust this project?","message":"Work with Muse in “p”?","buttons":["Trust project","Cancel"]}"#]
+    }
+    if message["answer"] == 3 { return [#"{"id":1,"ok":true,"value":\#(viewJSON)}"#] }
+    return []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in 7 })
+  await client.run()
+  _ = try await client.create(project: "/p")
+  #expect(backend.messages.contains { $0 == ["answer": 3, "choice": -1] })
+}
+
+@Test(.timeLimit(.minutes(1))) func anUnreadableAskIsCancelled() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in 0 })
+  await client.run()
+  backend.push(#"{"ask":4,"kind":"confirm","title":"No buttons"}"#)
+  var events = client.events.makeAsyncIterator()
+  #expect(await events.next() == .error(BackendError.unreadable("An Ask could not be decoded.").localizedDescription))
+  #expect(backend.messages == [["answer": 4, "choice": -1]])
+}
+
+@Test(.timeLimit(.minutes(1))) func badLinesBecomeErrorEvents() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  backend.push(#"{"id":1e300,"ok":true,"value":null}"#)
+  backend.push("not JSON")
+  var events = client.events.makeAsyncIterator()
+  #expect(await events.next() == .error(BackendError.unreadable("A reply had an id that is not a whole number.").localizedDescription))
+  #expect(await events.next() == .error(BackendError.unreadable("A line could not be decoded.").localizedDescription))
+}
+
+@Test func aReplyOfTheWrongShapeIsUnreadable() async throws {
+  let backend = ScriptedBackend { _ in [#"{"id":1,"ok":true,"value":"not a hello"}"#] }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  await #expect(throws: BackendError.unreadable("The hello reply did not match what mMac expects.")) {
+    _ = try await client.hello()
+  }
+}
+
+/// Polls `condition` until it holds. The test's time limit ends a wait that never does.
+private func waitFor(_ condition: () -> Bool) async throws {
+  while !condition() { try await Task.sleep(for: .milliseconds(5)) }
 }
 
 @Test func lineSplitterJoinsALineSplitAcrossReads() {

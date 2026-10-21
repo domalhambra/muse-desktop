@@ -2,7 +2,7 @@ import Foundation
 
 /// mMac's side of the backend protocol: Requests and Replies, Events, and Asks.
 public actor BackendClient {
-  /// Every `AppEvent` from the backend. It finishes when the backend stops.
+  /// Every `AppEvent` from the backend. It finishes when the backend stops. Read it from one place only.
   public nonisolated let events: AsyncStream<AppEvent>
   private let eventContinuation: AsyncStream<AppEvent>.Continuation
   private let transport: any Transport
@@ -49,7 +49,12 @@ public actor BackendClient {
 
   /// Sends a Request and decodes the Reply's value as `T`.
   public func call<T: Decodable>(_ method: String, _ args: [JSONValue] = []) async throws -> T {
-    try await request(method, args).decode(T.self)
+    let value = try await request(method, args)
+    do {
+      return try value.decode(T.self)
+    } catch is DecodingError {
+      throw BackendError.unreadable("The \(method) reply did not match what mMac expects.")
+    }
   }
 
   /// Waits for the backend to exit. Force-stops it after `timeout`.
@@ -74,8 +79,11 @@ public actor BackendClient {
     let incoming: Incoming
     do {
       incoming = try Incoming.decode(line)
+    } catch let error as BackendError {
+      eventContinuation.yield(.error(error.localizedDescription))
+      return
     } catch {
-      eventContinuation.yield(.error(BackendError.unreadable("\(error)").localizedDescription))
+      eventContinuation.yield(.error(BackendError.unreadable("A line could not be decoded.").localizedDescription))
       return
     }
     switch incoming {
@@ -84,11 +92,25 @@ public actor BackendClient {
     case .event(let event):
       eventContinuation.yield(event)
     case .ask(let ask):
-      Task { [answerAsk, transport] in
+      Task { [answerAsk] in
         let choice = await answerAsk(ask)
-        try? transport.send(JSONEncoder().encode(OutgoingAnswer(answer: ask.ask, choice: choice)))
+        self.answer(ask, choice: choice)
       }
+    case .unreadableAsk(let id):
+      // Cancel it, as wire.ts replies to a malformed request with a readable id.
+      send(answer: id, choice: -1)
+      eventContinuation.yield(.error(BackendError.unreadable("An Ask could not be decoded.").localizedDescription))
     }
+  }
+
+  /// Sends the person's choice. A choice that names no button cancels.
+  private func answer(_ ask: Ask, choice: Int) {
+    send(answer: ask.ask, choice: (-1..<ask.buttons.count).contains(choice) ? choice : -1)
+  }
+
+  private func send(answer id: Int, choice: Int) {
+    guard !stopped else { return }
+    try? transport.send(JSONEncoder().encode(OutgoingAnswer(answer: id, choice: choice)))
   }
 
   private func finish() {

@@ -17,14 +17,15 @@ final class ScriptedBackend: Transport, @unchecked Sendable {
     self.script = script
   }
 
-  /// Every message mMac sent, decoded.
+  /// Every message mMac sent, decoded. A message is recorded after its replies are pushed,
+  /// so a test that sees it can rely on them being on their way.
   var messages: [[String: JSONValue]] { lock.withLock { received } }
   var forceStopped: Bool { lock.withLock { stopped } }
 
   func send(_ line: Data) throws {
     let message = try JSONDecoder().decode([String: JSONValue].self, from: line)
-    lock.withLock { received.append(message) }
     for reply in script(message) { push(reply) }
+    lock.withLock { received.append(message) }
   }
 
   /// Sends one line to mMac, as the backend would.

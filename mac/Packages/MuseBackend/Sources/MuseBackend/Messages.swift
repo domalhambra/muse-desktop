@@ -45,19 +45,28 @@ enum Incoming {
   case reply(id: Int, result: Result<JSONValue, BackendError>)
   case event(AppEvent)
   case ask(Ask)
+  /// An Ask with a readable id but an unreadable body. mMac answers it with -1.
+  case unreadableAsk(id: Int)
 
   private struct EventLine: Decodable { let event: AppEvent }
 
   static func decode(_ line: Data) throws -> Incoming {
     let decoder = JSONDecoder()
     let object = try decoder.decode([String: JSONValue].self, from: line)
-    if case .number(let id)? = object["id"] {
-      if object["ok"] == .bool(true) { return .reply(id: Int(id), result: .success(object["value"] ?? .null)) }
-      if case .string(let message)? = object["error"] { return .reply(id: Int(id), result: .failure(.backend(message))) }
-      return .reply(id: Int(id), result: .failure(.unreadable("A reply had no result.")))
+    if case .number(let number)? = object["id"] {
+      guard let id = Int(exactly: number) else {
+        throw BackendError.unreadable("A reply had an id that is not a whole number.")
+      }
+      if object["ok"] == .bool(true) { return .reply(id: id, result: .success(object["value"] ?? .null)) }
+      if case .string(let message)? = object["error"] { return .reply(id: id, result: .failure(.backend(message))) }
+      return .reply(id: id, result: .failure(.unreadable("A reply had no result.")))
     }
     if object["event"] != nil { return .event(try decoder.decode(EventLine.self, from: line).event) }
-    if object["ask"] != nil { return .ask(try decoder.decode(Ask.self, from: line)) }
+    if object["ask"] != nil {
+      if let ask = try? decoder.decode(Ask.self, from: line) { return .ask(ask) }
+      if case .number(let number)? = object["ask"], let id = Int(exactly: number) { return .unreadableAsk(id: id) }
+      throw BackendError.unreadable("An Ask had an id that is not a whole number.")
+    }
     throw BackendError.unreadable("A line was of no known kind.")
   }
 }

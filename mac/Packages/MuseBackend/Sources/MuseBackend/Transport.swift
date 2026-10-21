@@ -8,6 +8,6 @@ public protocol Transport: Sendable {
   func send(_ line: Data) throws
   /// Ends the backend's input. The backend then quits on its own.
   func close()
-  /// Stops a backend that did not quit in time.
+  /// Stops a backend that did not quit in time. It must end `lines`, or `waitForExit` waits forever.
   func forceStop()
 }
