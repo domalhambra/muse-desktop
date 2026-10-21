@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:integration": "tsx scripts/verify-muse.ts",
+    "test:headless": "tsx scripts/verify-headless.ts",
     "test:e2e": "playwright test",
     "package": "npm run build && electron-builder --mac --dir",
     "package:win": "npm run build && electron-builder --win --dir",
