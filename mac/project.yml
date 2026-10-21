@@ -6,6 +6,8 @@ options:
 packages:
   MuseBackend:
     path: Packages/MuseBackend
+  MuseKit:
+    path: Packages/MuseKit
 targets:
   mMac:
     type: application
@@ -13,6 +15,7 @@ targets:
     sources: [mMac]
     dependencies:
       - package: MuseBackend
+      - package: MuseKit
     info:
       path: mMac/Info.plist
       properties:
@@ -21,7 +24,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.developer-tools
-        # The checkout mMac starts the backend from. M0 runs from the repo only.
+        # The checkout this build came from. A checkout chosen in the app (the MMacRepository user default) wins.
         MMacRepository: $(SRCROOT)/..
     settings:
       base:
