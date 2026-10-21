@@ -63,6 +63,8 @@ npm ci
 npm run dev
 ```
 
+On macOS, `npm run dev:isolated` keeps development preferences, the bridge token and recent projects in `~/Library/Application Support/muse-desktop-dev`, so a dev build never changes an installed app's data. Set `MUSE_DESKTOP_USER_DATA` to use another folder. It still uses your real Muse Code configuration in `~/.config/muse`.
+
 Open the packaged application when testing a standalone build. Opening the development Electron binary by itself displays Electron’s launcher. Renderer changes reload during development; restart `npm run dev` after changes to the main process or preload bridge.
 
 Open a project, review its trust prompt, and send a message. Existing sessions and their project folders appear automatically. If detection fails, select the executable in **Settings → Muse Code** and reconnect.
