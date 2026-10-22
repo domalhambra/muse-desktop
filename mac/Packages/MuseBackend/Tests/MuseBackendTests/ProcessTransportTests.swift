@@ -58,12 +58,29 @@ private func shell(_ script: String) throws -> ProcessTransport {
 }
 
 @Test(.timeLimit(.minutes(1))) func onlyTheBackendsPipeIsMarkedNotStderr() async throws {
-  // fd 2 may be shared with other writers, so the transport leaves it as it found it.
+  // fd 2 may be shared with other writers, so the transport leaves it as it found it. The flag
+  // is cleared first, so a mark this process inherited cannot fail the test.
+  _ = fcntl(FileHandle.standardError.fileDescriptor, F_SETNOSIGPIPE, 0)
   let before = fcntl(FileHandle.standardError.fileDescriptor, F_GETNOSIGPIPE)
   let transport = try shell("exit 0")
   for await _ in transport.lines {}
   #expect(fcntl(FileHandle.standardError.fileDescriptor, F_GETNOSIGPIPE) == before)
   #expect(before == 0)
+}
+
+@Test func stderrIsCopiedOnlyWhereAWriteCannotRaiseSIGPIPE() throws {
+  let pipe = Pipe()
+  #expect(!ProcessTransport.copyingIsSafe(to: pipe.fileHandleForWriting.fileDescriptor))
+  let null = open("/dev/null", O_WRONLY)
+  try #require(null >= 0)
+  defer { close(null) }
+  #expect(ProcessTransport.copyingIsSafe(to: null))
+  let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  try Data().write(to: file)
+  defer { try? FileManager.default.removeItem(at: file) }
+  let handle = try FileHandle(forWritingTo: file)
+  defer { try? handle.close() }
+  #expect(ProcessTransport.copyingIsSafe(to: handle.fileDescriptor))
 }
 
 @Test(.timeLimit(.minutes(1))) func theTransportKeepsTheChildsLastErrorOutput() async throws {

@@ -33,8 +33,8 @@ public enum Launcher {
 
   static var loginShell: String { ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh" }
 
-  /// Runs `process` and returns its stdout once stdout closes, or after `timeout` seconds. No
-  /// thread waits meanwhile.
+  /// Runs `process` and returns its stdout once stdout closes, or after `timeout` seconds. It
+  /// returns nil when the process is still running at the deadline. No thread waits meanwhile.
   static func output(of process: Process, timeout: TimeInterval) async -> Data? {
     let pipe = Pipe()
     let state = OutputState()
