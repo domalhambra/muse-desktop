@@ -6,6 +6,8 @@ import XCTest
 @MainActor
 final class MMacUITests: XCTestCase {
   private var temporary: URL!
+  /// The fake backend's request log, while a test runs on the fake.
+  private var fakeLog: URL?
 
   /// The repository root: this file is `mac/mMacUITests/MMacUITests.swift`.
   private let repository = URL(fileURLWithPath: #filePath)
@@ -55,6 +57,8 @@ final class MMacUITests: XCTestCase {
       "-MMacRepository", repository.path, "-NSQuitAlwaysKeepsWindows", "NO", "-ApplePersistenceIgnoreState", "YES",
     ]
     app.launch()
+    XCTAssertTrue(
+      app.windows["main"].waitForExistence(timeout: 15), "No main window after launch: \(app.debugDescription)")
     // A test that fails partway still stops the app, and with it the backend, before tearDown
     // deletes the temporary folder.
     addTeardownBlock { @MainActor in
@@ -71,7 +75,8 @@ final class MMacUITests: XCTestCase {
 
   /// Launches mMac on the fake backend, which logs to `log`.
   private func launchFake(log: URL) throws -> XCUIApplication {
-    try launch(
+    fakeLog = log
+    return try launch(
       cliPath: "",
       extra: [
         "MMAC_BACKEND_SCRIPT": repository.appending(path: "mac/Fixtures/fake-backend.mjs").path,
@@ -82,7 +87,11 @@ final class MMacUITests: XCTestCase {
   /// Waits until the sidebar's status, a button that opens Settings, reads "Connected to Muse Code".
   private func waitUntilConnected(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
     let status = app.buttons["Muse Code settings"]
-    XCTAssertTrue(status.waitForExistence(timeout: 30), file: file, line: line)
+    // On the fake, a failure shows how far the backend got: hello, start, sessions. The message
+    // is read only on failure, after the wait.
+    XCTAssertTrue(
+      status.waitForExistence(timeout: 30),
+      "The sidebar status did not appear. The fake's requests: \(fakeRequests())", file: file, line: line)
     waitForValue(status, "Connected to Muse Code", timeout: 30, file: file, line: line)
   }
 
@@ -137,7 +146,7 @@ final class MMacUITests: XCTestCase {
 
   /// Checks that the log holds `expected`, and prints the log when it does not.
   private func assertLogged(
-    _ entries: [NSDictionary?], _ expected: NSDictionary, file: StaticString = #filePath, line: UInt = #line
+    _ entries: [NSDictionary], _ expected: NSDictionary, file: StaticString = #filePath, line: UInt = #line
   ) {
     XCTAssertTrue(
       entries.contains { $0 == expected }, "\(expected) is not in the log: \(entries)", file: file, line: line)
@@ -161,14 +170,26 @@ final class MMacUITests: XCTestCase {
 
   /// The fake's logged requests for `method`.
   private nonisolated static func requests(_ log: URL, _ method: String) throws -> [NSDictionary] {
-    try logged(log).compactMap { $0 }.filter { $0["method"] as? String == method }
+    try logged(log).filter { $0["method"] as? String == method }
   }
 
-  /// The logged requests and answers of the fake backend.
-  private nonisolated static func logged(_ log: URL) throws -> [NSDictionary?] {
+  /// The logged requests and answers of the fake backend. A line that does not parse is skipped:
+  /// the fake may still be writing it.
+  private nonisolated static func logged(_ log: URL) throws -> [NSDictionary] {
     try String(contentsOf: log, encoding: .utf8)
       .split(separator: "\n")
-      .map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? NSDictionary }
+      .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? NSDictionary }
+  }
+
+  /// The fake's request log as text, for failure messages.
+  private func fakeRequests() -> String {
+    guard let fakeLog else { return "(not the fake)" }
+    return (try? String(contentsOf: fakeLog, encoding: .utf8)) ?? "(no log yet)"
+  }
+
+  /// The composer of the conversation shown.
+  private func composer(_ app: XCUIApplication) -> XCUIElement {
+    app.descendants(matching: .any)["composer"]
   }
 
   func testAnEchoConversationEndToEnd() throws {
@@ -178,7 +199,7 @@ final class MMacUITests: XCTestCase {
     let app = try launch(cliPath: muse)
     waitUntilConnected(app)
 
-    let composer = app.descendants(matching: .any)["composer"]
+    let composer = self.composer(app)
     XCTAssertTrue(composer.waitForExistence(timeout: 5))
     // Typing backticks once took 20 seconds and timed the test out. A paste is instant. The
     // pasteboard is Dom's, so its text goes back afterwards.
@@ -263,7 +284,7 @@ final class MMacUITests: XCTestCase {
     assertLogged(
       entries, ["method": "answer", "args": ["fake-1", "ask-1", [["questionId": "color", "selectedLabel": "Blue"]]]])
     assertLogged(entries, ["method": "set-model", "args": ["fake-1", "fake-two"]])
-    XCTAssertTrue(entries.contains { $0?["method"] as? String == "shutdown" })
+    XCTAssertTrue(entries.contains { $0["method"] as? String == "shutdown" })
   }
 
   func testTheInspectorReviewsChangesAgainstTheFakeBackend() throws {
@@ -293,6 +314,7 @@ final class MMacUITests: XCTestCase {
     let revertHunk = app.buttons["Revert hunk 1"]
     // Its visible title, "Revert hunk", is not readable here: SwiftUI exposes only the label.
     XCTAssertTrue(revertHunk.exists)
+    XCTAssertEqual(revertHunk.label, "Revert hunk 1")
     revertHunk.click()
     // The hunk's text goes with its index, so the backend can refuse a hunk changed outside mMac.
     let hunk = "@@ -1,3 +1,3 @@\n let a = 1\n-let b = 2\n+let b = 3\n let c = 4"
@@ -336,7 +358,7 @@ final class MMacUITests: XCTestCase {
     XCTAssertTrue((preview.value as? String)?.contains("let b = 3") == true)
     XCTAssertTrue(app.staticTexts["4 lines"].exists)
     app.buttons["Ask Muse"].firstMatch.click()
-    let composer = app.descendants(matching: .any)["composer"]
+    let composer = self.composer(app)
     XCTAssertTrue(
       (composer.value as? String)?.contains(#"Please look at the project file: "src/app.swift""#) == true)
 
@@ -397,7 +419,16 @@ final class MMacUITests: XCTestCase {
     let settings = settingsWindow(app)
     XCTAssertTrue(settings.waitForExistence(timeout: 10), app.debugDescription)
 
-    // Appearance: each choice saves on its own.
+    try checkAppearance(settings, log: log)
+    checkMuseCode(settings)
+    try checkMcpServers(settings, log: log)
+    try checkBridges(app, settings, log: log)
+
+    quit(app)
+  }
+
+  /// Appearance: each choice saves on its own.
+  private func checkAppearance(_ settings: XCUIElement, log: URL) throws {
     pane(settings, "Appearance").click()
     let moonlight = settings.buttons["theme-moonlight"]
     XCTAssertTrue(moonlight.waitForExistence(timeout: 10), settings.debugDescription)
@@ -407,16 +438,22 @@ final class MMacUITests: XCTestCase {
     waitUntilLogged(log, ["method": "preferences", "args": [["fontSize": "large"]]])
     let saved = try Self.requests(log, "preferences").suffix(2).map { $0["args"] as? NSArray }
     XCTAssertEqual(saved, [[["theme": "moonlight"]], [["fontSize": "large"]]])
+  }
 
-    // Muse Code: its path field sits in a `LabeledContent`, and reading the pane's elements must
-    // not loop the field's label.
+  /// Muse Code: the connection's path, and the custom path field. Both sit in a `LabeledContent`,
+  /// and reading the pane's elements must not loop a label.
+  private func checkMuseCode(_ settings: XCUIElement) {
     pane(settings, "Muse Code").click()
     let cliPath = settings.textFields["cli-path"]
     XCTAssertTrue(cliPath.waitForExistence(timeout: 10))
     XCTAssertEqual(cliPath.label, "Custom executable path")
     XCTAssertTrue(settings.buttons["Reconnect to Muse Code"].exists)
+    // The fake's `ready` status names this path.
+    XCTAssertTrue(settings.staticTexts["/usr/local/bin/muse"].waitForExistence(timeout: 5), settings.debugDescription)
+  }
 
-    // MCP servers: add a local server.
+  /// MCP servers: add a local server, then remove it, cancelling once.
+  private func checkMcpServers(_ settings: XCUIElement, log: URL) throws {
     pane(settings, "MCP servers").click()
     let add = settings.buttons["mcp-add-server"]
     XCTAssertTrue(add.waitForExistence(timeout: 10))
@@ -448,7 +485,6 @@ final class MMacUITests: XCTestCase {
     let row = settings.staticTexts["files"]
     XCTAssertTrue(row.waitForExistence(timeout: 10))
 
-    // Remove asks first. Cancel keeps the server.
     settings.buttons["Remove files"].click()
     XCTAssertTrue(settings.sheets.buttons["Cancel"].waitForExistence(timeout: 5))
     settings.sheets.buttons["Cancel"].click()
@@ -460,11 +496,15 @@ final class MMacUITests: XCTestCase {
     settings.sheets.buttons["Remove"].click()
     waitUntilLogged(log, ["method": "mcp-remove", "args": ["files"]])
     XCTAssertTrue(row.waitForNonExistence(timeout: 10))
+  }
 
-    // Bridges: a token, shown once, then the MCP bridge on.
+  /// Bridges: a token, shown once, then the MCP bridge on, then a refused port left unsaved.
+  private func checkBridges(_ app: XCUIApplication, _ settings: XCUIElement, log: URL) throws {
     pane(settings, "Bridges").click()
     let makeToken = settings.buttons["bridge-make-token"]
     XCTAssertTrue(makeToken.waitForExistence(timeout: 10))
+    // As Electron: Copy token shows only once a token exists.
+    XCTAssertFalse(settings.buttons["bridge-copy-token"].exists)
     makeToken.click()
     waitUntilLogged(log, ["method": "bridge-token", "args": []])
     let token = settings.staticTexts["bridge-new-token"]
@@ -481,7 +521,8 @@ final class MMacUITests: XCTestCase {
       .matching(NSPredicate(format: "value CONTAINS %@", "agents that speak MCP. Running")).firstMatch
     XCTAssertTrue(running.waitForExistence(timeout: 10), settings.debugDescription)
 
-    // A refused port typed without Return, then left by switching panes, raises no alert.
+    // A refused port typed without Return, then left by switching panes, raises no alert and
+    // saves nothing. The field shows the saved port again.
     let port = settings.textFields["bridge-port"]
     XCTAssertEqual(port.value as? String, "7735")
     port.click()
@@ -492,17 +533,19 @@ final class MMacUITests: XCTestCase {
     let alert = app.staticTexts["Use a port between 1024 and 65535."]
     XCTAssertFalse(alert.waitForExistence(timeout: 3), app.debugDescription)
     XCTAssertFalse(settings.sheets.firstMatch.exists)
-    XCTAssertTrue(
-      try Self.requests(log, "preferences").allSatisfy { (($0["args"] as? NSArray)?.firstObject as? NSDictionary)?["bridgeMcpPort"] == nil })
-
-    quit(app)
+    let savedPorts = try Self.requests(log, "preferences")
+      .compactMap { (($0["args"] as? NSArray)?.firstObject as? NSDictionary)?["bridgeMcpPort"] }
+    XCTAssertTrue(savedPorts.isEmpty, "\(savedPorts)")
+    pane(settings, "Bridges").click()
+    XCTAssertTrue(port.waitForExistence(timeout: 5))
+    waitForValue(port, "7735")
   }
 
   func testARestartReopensTheConversationWithItsDraft() throws {
     let log = temporary.appending(path: "requests.jsonl")
     let app = try launchFake(log: log)
     openFakeConversation(app)
-    let composer = app.descendants(matching: .any)["composer"]
+    let composer = self.composer(app)
 
     // A draft in the second conversation.
     app.staticTexts["Second fake conversation"].firstMatch.click()
@@ -514,7 +557,7 @@ final class MMacUITests: XCTestCase {
     // The third conversation sends the message that stops the fake.
     app.staticTexts["Third fake conversation"].firstMatch.click()
     XCTAssertTrue(app.staticTexts["The third conversation says hello."].waitForExistence(timeout: 10))
-    XCTAssertEqual(composer.value as? String, "")
+    waitForValue(composer, "")
     composer.click()
     composer.typeText("crash now")
     composer.typeKey(.return, modifierFlags: [])
@@ -528,10 +571,13 @@ final class MMacUITests: XCTestCase {
     waitUntilConnected(app)
     XCTAssertTrue(app.staticTexts["The third conversation says hello."].waitForExistence(timeout: 10))
     XCTAssertEqual(try Self.requests(log, "start").count, 2)
-    XCTAssertEqual(try Self.requests(log, "open").last?["args"] as? NSArray, ["fake-3"])
+    // Opened once before the restart and once by the new backend.
+    let opens = try Self.requests(log, "open").map { $0["args"] as? NSArray }
+    XCTAssertEqual(opens.filter { $0 == ["fake-3"] }.count, 2, "\(opens)")
+    XCTAssertEqual(opens.last, ["fake-3"])
     app.staticTexts["Second fake conversation"].firstMatch.click()
     XCTAssertTrue(app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10))
-    XCTAssertEqual(composer.value as? String, "A draft to keep")
+    waitForValue(composer, "A draft to keep")
 
     quit(app)
   }

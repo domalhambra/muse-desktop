@@ -210,7 +210,7 @@ const view = (sessionId = 'fake-1') => {
 }
 // Sends the changed first conversation shortly after a reply, as MuseHost does.
 const update = () => setTimeout(() => write({ event: { type: 'session', view: view() } }), 50)
-const ready = { state: 'ready', version: 'fake' }
+const ready = { state: 'ready', version: 'fake', path: '/usr/local/bin/muse' }
 
 const methods = {
   // As backend.ts does: a client that speaks another protocol gets an error reply.
