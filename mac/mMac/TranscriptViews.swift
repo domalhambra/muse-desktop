@@ -182,7 +182,8 @@ struct AgentMessageView: View {
       if text.isEmpty, item.status == "inProgress" {
         Text("…").foregroundStyle(.secondary)
       } else {
-        MarkdownView(blocks: MarkdownCache.shared.blocks(id: item.itemId, text: text))
+        MarkdownView(
+          blocks: MarkdownCache.shared.blocks(id: item.itemId, text: text, final: item.status != "inProgress"))
       }
     }
   }

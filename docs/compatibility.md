@@ -35,7 +35,7 @@ Preference updates are independently validated: changing reasoning effort preser
 
 mMac M1 was tested on macOS 27.2 Apple Silicon with Muse Code 1.4.11 and the echo provider, on October 21, 2026. It has not run against a real model yet.
 
-- Markdown footnotes are not drawn. A footnote with a sentence of text shows as typed. A footnote whose text is one word or a URL disappears: cmark reads it as a link definition, and its reference can become a link.
+- Markdown footnotes are drawn as superscript numbers with the notes in a numbered list at the end. mMac rewrites them before parsing, because swift-markdown does not parse them. A definition must start a line; indented lines continue it.
 - Images in replies never load. They show as `[Image: <alt>]`, as in Electron.
 
 ## Voice

@@ -73,7 +73,7 @@ private func intent(of word: String, in text: AttributedString) -> InlinePresent
 }
 
 @Test func tablesKeepHeaderAndRows() {
-  guard case .table(let header, let rows) = MarkdownBlock.parse("| A | B |\n|---|---|\n| 1 | 2 |").first else {
+  guard case .table(let header, let rows, _) = MarkdownBlock.parse("| A | B |\n|---|---|\n| 1 | 2 |").first else {
     Issue.record("Expected a table")
     return
   }
@@ -183,4 +183,97 @@ private func intent(of word: String, in text: AttributedString) -> InlinePresent
   _ = cache.blocks(id: "streaming", text: "aaaaa")
   #expect(cache.parseCount == before + 1)
   #expect(cache.count == 400)
+}
+
+@Test func blocksAreIdentifiedByPositionAndKind() {
+  let paragraph = MarkdownBlock.identified(MarkdownBlock.parse("Intro\n\n- one"))
+  let list = MarkdownBlock.identified(MarkdownBlock.parse("- intro\n\n- one"))
+  #expect(paragraph.map(\.id) == ["0:p", "1:ul"])
+  #expect(list.first?.id == "0:ul")
+  let short = MarkdownBlock.identified(MarkdownBlock.parse("```swift\nlet a = 1\n"))
+  let long = MarkdownBlock.identified(MarkdownBlock.parse("```swift\nlet a = 1\nlet b = 2\n```"))
+  #expect(short.first?.id == long.first?.id)
+}
+
+@Test func aBareURLDropsAnUnbalancedClosingParenthesis() {
+  func links(_ source: String) -> [String] {
+    guard case .paragraph(let text) = MarkdownBlock.parse(source).first else { return [] }
+    return text.runs.compactMap { $0.link?.absoluteString }
+  }
+  #expect(links("(see https://a.com/x)") == ["https://a.com/x"])
+  #expect(links("https://en.wikipedia.org/wiki/A_(b) is a page") == ["https://en.wikipedia.org/wiki/A_(b)"])
+}
+
+@Test func tablesKeepColumnAlignment() {
+  guard case .table(_, _, let alignments) = MarkdownBlock.parse("| A | B | C | D |\n|:--|:-:|--:|---|\n| 1 | 2 | 3 | 4 |").first else {
+    Issue.record("Expected a table")
+    return
+  }
+  #expect(alignments == [.leading, .center, .trailing, .leading])
+}
+
+@Test func footnotesBecomeNumbersAndANumberedList() {
+  let blocks = MarkdownBlock.parse("Muse said so[^a] twice[^b].\n\n[^b]: The second.\n[^a]: The first.\n[^unused]: Dropped.")
+  guard case .paragraph(let text) = blocks.first else { Issue.record("Expected a paragraph"); return }
+  #expect(String(text.characters) == "Muse said so¹ twice².")
+  #expect(blocks.contains(.rule))
+  guard case .list(let ordered, _, let items) = blocks.last else { Issue.record("Expected a list"); return }
+  #expect(ordered)
+  #expect(items.count == 2)
+  guard case .paragraph(let first) = items[0].blocks.first else { Issue.record("Expected text"); return }
+  #expect(String(first.characters) == "The first.")
+}
+
+@Test func footnotesLeaveCodeAndUndefinedReferencesAlone() {
+  let source = "Use `[^a]` here, and [^none].\n\n```\n[^a]\n```\n\n[^a]: Note."
+  let blocks = MarkdownBlock.parse(source)
+  guard case .paragraph(let text) = blocks.first else { Issue.record("Expected a paragraph"); return }
+  #expect(String(text.characters) == "Use [^a] here, and [^none].")
+  #expect(blocks.contains(.code(language: nil, code: "[^a]")))
+  #expect(!blocks.contains(.rule))
+}
+
+@MainActor @Test func anInProgressItemParsesAtMostOncePer100ms() {
+  let cache = MarkdownCache()
+  _ = cache.blocks(id: "a", text: "one", final: false)
+  let stale = cache.blocks(id: "a", text: "one two", final: false)
+  #expect(stale == MarkdownBlock.parse("one"))
+  #expect(cache.blocks(id: "a", text: "one two", final: true) == MarkdownBlock.parse("one two"))
+}
+
+@MainActor @Test func anInProgressItemParsesAgainAfter100ms() async throws {
+  let cache = MarkdownCache()
+  _ = cache.blocks(id: "a", text: "one", final: false)
+  try await Task.sleep(for: .milliseconds(150))
+  #expect(cache.blocks(id: "a", text: "one two", final: false) == MarkdownBlock.parse("one two"))
+  #expect(cache.parseCount == 2)
+}
+
+/// Run with `MMAC_MEASURE=1 swift test … --filter measureMarkdownReparse` and report the output.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["MMAC_MEASURE"] != nil))
+func measureMarkdownReparse() {
+  let unit = """
+    ## A heading
+
+    A paragraph with **bold**, `code`, and a link to https://example.com/page that runs on long enough.
+
+    - one item
+    - two items with *emphasis*
+
+    ```swift
+    func example() -> Int { return 42 }
+    ```
+
+    """
+  for size in [30_000, 60_000, 120_000] {
+    let text = String(repeating: unit, count: size / unit.utf8.count + 1)
+    var times: [Duration] = []
+    for _ in 0..<15 {
+      let start = ContinuousClock.now
+      _ = MarkdownBlock.parse(text)
+      times.append(ContinuousClock.now - start)
+    }
+    times.sort()
+    print("measureMarkdownReparse \(size / 1000) KB median \(times[times.count / 2])")
+  }
 }

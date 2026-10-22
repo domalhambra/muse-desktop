@@ -8,9 +8,7 @@ struct MarkdownView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-        BlockView(block: block)
-      }
+      ForEach(MarkdownBlock.identified(blocks)) { item in BlockView(block: item.block) }
     }
     .environment(
       \.openURL,
@@ -47,8 +45,8 @@ struct BlockView: View {
           }
         }
       }
-    case .table(let header, let rows):
-      TableBlockView(header: header, rows: rows)
+    case .table(let header, let rows, let alignments):
+      TableBlockView(header: header, rows: rows, alignments: alignments)
     case .rule:
       Divider()
     }
@@ -117,6 +115,8 @@ struct CodeBlockView: View {
 struct TableBlockView: View {
   let header: [AttributedString]
   let rows: [[AttributedString]]
+  /// Each column's alignment. Task 16 draws it; until then it is unused.
+  let alignments: [TableAlignment]
 
   var body: some View {
     ScrollView(.horizontal) {

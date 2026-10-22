@@ -47,27 +47,37 @@ private func message(_ id: String, _ kind: String = "agentMessage") -> Transcrip
   #expect(ToolPresentation.summary(item) == "ls")
   #expect(ToolPresentation.output(item, stored: nil) == "out")
   #expect(ToolPresentation.output(item, stored: "stored") == "stored")
-  #expect(ToolPresentation.formattedArgs(#"{"b":1}"#) == "{\n  \"b\" : 1\n}")
+  #expect(ToolPresentation.formattedArgs(#"{"b":1}"#) == "{\n  \"b\": 1\n}")
   #expect(ToolPresentation.formattedArgs("not json") == "not json")
   // JSON.stringify leaves slashes alone; Foundation escapes them unless told not to.
-  #expect(ToolPresentation.formattedArgs(#"{"path":"/etc/hosts"}"#) == "{\n  \"path\" : \"/etc/hosts\"\n}")
+  #expect(ToolPresentation.formattedArgs(#"{"path":"/etc/hosts"}"#) == "{\n  \"path\": \"/etc/hosts\"\n}")
   #expect(ToolPresentation.patch(item) == "+3 \u{2212}1")
   #expect(ToolPresentation.footer(item) == "completed · 1.2s")
 }
 
 @Test func numbersInToolInputPrintAsTyped() {
   #expect(ToolPresentation.formattedArgs(#"{"a":0.7,"b":3.14,"c":[1,2]}"#)
-    == "{\n  \"a\" : 0.7,\n  \"b\" : 3.14,\n  \"c\" : [\n    1,\n    2\n  ]\n}")
+    == "{\n  \"a\": 0.7,\n  \"b\": 3.14,\n  \"c\": [\n    1,\n    2\n  ]\n}")
   #expect(ToolPresentation.formattedArgs("0.7") == "0.7")
   #expect(ToolPresentation.formattedArgs("{not json") == "{not json")
+  #expect(ToolPresentation.formattedArgs(#"{"n":-0,"m":1e300}"#) == "{\n  \"n\": -0,\n  \"m\": 1e300\n}")
 }
 
 @Test func emptyToolInputPrintsOnOneLine() {
-  // JSON.stringify(value, null, 2) writes {} and []; Foundation spreads them over three lines.
+  // JSON.stringify(value, null, 2) writes {} and [].
   #expect(ToolPresentation.formattedArgs("{}") == "{}")
-  #expect(ToolPresentation.formattedArgs("[]") == "[]")
+  #expect(ToolPresentation.formattedArgs("[ ]") == "[]")
   #expect(ToolPresentation.formattedArgs(#"{"a":{},"b":[],"c":"{\n}"}"#)
-    == "{\n  \"a\" : {},\n  \"b\" : [],\n  \"c\" : \"{\\n}\"\n}")
+    == "{\n  \"a\": {},\n  \"b\": [],\n  \"c\": \"{\\n}\"\n}")
+}
+
+@Test func toolInputKeepsItsKeyOrderAndStringsAsTyped() {
+  #expect(ToolPresentation.formattedArgs(#"{"zeta":"a \"quoted\" , : word","alpha":true}"#)
+    == "{\n  \"zeta\": \"a \\\"quoted\\\" , : word\",\n  \"alpha\": true\n}")
+  // A string that starts with a combining mark: the quote and the mark are one Character.
+  #expect(ToolPresentation.formattedArgs("{\"a\":\"\u{301}x y\"}") == "{\n  \"a\": \"\u{301}x y\"\n}")
+  // Windows line ends between tokens are layout too.
+  #expect(ToolPresentation.formattedArgs("{\r\n  \"a\": [\r\n  ]\r\n}") == "{\n  \"a\": []\n}")
 }
 
 @Test func durationsRoundAsToFixedDoes() {
