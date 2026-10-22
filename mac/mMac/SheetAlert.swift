@@ -71,11 +71,15 @@ enum SheetAlert {
 
   /// Shows an alert and returns the chosen button's index, or -1 when it was closed through
   /// `token` or no window showed. The last button is the default and the cancel choice, as in
-  /// every Electron dialog the Asks replace: Return and Escape both choose it.
+  /// every Electron dialog the Asks replace: Return and Escape both choose it. With
+  /// `preferringKey`, the alert shows on the key window, so a confirmation the Settings window
+  /// asks shows there.
   static func present(
-    title: String, message: String, detail: String? = nil, buttons: [String], token: AlertToken? = nil
+    title: String, message: String, detail: String? = nil, buttons: [String], token: AlertToken? = nil,
+    preferringKey: Bool = false
   ) async -> Int {
-    guard !buttons.isEmpty, let window = await host(waitingUpTo: .seconds(1), token: token),
+    guard !buttons.isEmpty,
+      let window = await host(waitingUpTo: .seconds(1), token: token, preferringKey: preferringKey),
       token?.isClosed != true
     else { return -1 }
     let alert = NSAlert()
