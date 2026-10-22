@@ -421,3 +421,18 @@ let worktreesJSON =
   #expect(inspector.directory == "")
   #expect(requests(backend).filter { $0.first == "files" } == [["files", ["/p", ""]], ["files", ["/p", "src"]], ["files", ["/p", ""]]])
 }
+
+@MainActor @Test func theGenerationChangesOnlyWithTheProject() async throws {
+  // A confirmation sheet keeps it, and drops its answer when the inspector moved on meanwhile.
+  let (inspector, _) = await makeInspector()
+  let shown = inspector.generation
+  inspector.show(project: "/p")
+  #expect(inspector.generation == shown)
+  inspector.show(project: "/q")
+  #expect(inspector.generation != shown)
+  let second = inspector.generation
+  // Back to the first project is still a new generation: its state was reset.
+  inspector.show(project: "/p")
+  #expect(inspector.generation != shown)
+  #expect(inspector.generation != second)
+}

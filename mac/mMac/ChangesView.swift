@@ -75,12 +75,16 @@ struct ChangesView: View {
     let name = ProjectPath.name(of: entry.path)
     // Electron writes "The branch  is kept." for a detached worktree; this names no branch instead.
     let kept = entry.branch.flatMap { $0.isEmpty ? nil : "The branch \($0) is kept." } ?? "Its branch is kept."
+    // The answer is for the project shown now.
+    let generation = inspector.generation
     let choice = await SheetAlert.present(
       title: "Remove the worktree \(name)?",
       message: "Uncommitted changes in it are discarded. \(kept)",
       buttons: ["Remove", "Cancel"])
-    // Things may have moved on while the sheet showed: another action, or this worktree opened.
-    guard choice == 0, !inspector.busy, entry.path != workspace.project else { return }
+    // Things may have moved on while the sheet showed: another project, another action, or this
+    // worktree opened.
+    guard choice == 0, inspector.generation == generation, !inspector.busy, entry.path != workspace.project
+    else { return }
     await inspector.remove(entry)
   }
 }
@@ -245,10 +249,13 @@ struct DiffPane: View {
   }
 
   private func confirmRevert() async {
+    // The answer is for the project shown now.
+    let generation = inspector.generation
     let choice = await SheetAlert.present(
       title: "Discard all changes to \(path)?", message: "", buttons: ["Revert file", "Cancel"])
-    // A turn may have started while the sheet showed. `revertFile` drops a file no longer selected.
-    guard choice == 0, !workspace.isRunning else { return }
+    // Another project may show, or a turn may have started, while the sheet showed. `revertFile`
+    // drops a file no longer selected.
+    guard choice == 0, inspector.generation == generation, !workspace.isRunning else { return }
     await inspector.revertFile(path)
   }
 }

@@ -51,8 +51,9 @@ public final class Inspector {
   /// Receives each status read, so the sidebar's badge for this project stays current.
   @ObservationIgnored var statusRead: @MainActor (String, GitStatus) -> Void = { _, _ in }
 
-  /// Bumped by `show(project:)`. A reply for an earlier project compares it and is dropped.
-  private var generation = 0
+  /// Bumped by `show(project:)`. A reply for an earlier project compares it and is dropped, as is
+  /// a confirmation the view showed before the inspector moved to another project.
+  public private(set) var generation = 0
   private var refreshSequence = 0
   private var diffSequence = 0
   private var filesSequence = 0
