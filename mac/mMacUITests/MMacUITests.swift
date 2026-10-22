@@ -6,6 +6,13 @@ import XCTest
 @MainActor
 final class MMacUITests: XCTestCase {
   private var temporary: URL!
+  /// mMac's remembered `inspectorShown`, kept aside so each test starts with the inspector hidden
+  /// and Dom's own setting comes back afterwards.
+  private var savedInspectorShown: Any?
+
+  /// mMac's defaults. The app's HOME is temporary, but its preferences still live in the user's.
+  private static let appDefaults = "com.domalhambra.mmac"
+  private static let inspectorShownKey = "inspectorShown"
 
   /// The repository root: this file is `mac/mMacUITests/MMacUITests.swift`.
   private let repository = URL(fileURLWithPath: #filePath)
@@ -18,10 +25,20 @@ final class MMacUITests: XCTestCase {
       try FileManager.default.createDirectory(
         at: temporary.appending(path: folder), withIntermediateDirectories: true)
     }
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: Self.appDefaults))
+    savedInspectorShown = defaults.object(forKey: Self.inspectorShownKey)
+    defaults.removeObject(forKey: Self.inspectorShownKey)
   }
 
+  // Teardown blocks, which stop the app, run before this.
   override func tearDown() async throws {
     try? FileManager.default.removeItem(at: temporary)
+    let defaults = UserDefaults(suiteName: Self.appDefaults)
+    if let savedInspectorShown {
+      defaults?.set(savedInspectorShown, forKey: Self.inspectorShownKey)
+    } else {
+      defaults?.removeObject(forKey: Self.inspectorShownKey)
+    }
   }
 
   private func launch(cliPath: String, extra: [String: String] = [:]) throws -> XCUIApplication {
@@ -52,9 +69,10 @@ final class MMacUITests: XCTestCase {
     return app
   }
 
-  private func quit(_ app: XCUIApplication) {
+  private func quit(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
     app.typeKey("q", modifierFlags: .command)
-    XCTAssertTrue(app.wait(for: .notRunning, timeout: 15), "mMac did not quit within 15 seconds")
+    XCTAssertTrue(
+      app.wait(for: .notRunning, timeout: 15), "mMac did not quit within 15 seconds", file: file, line: line)
   }
 
   /// Launches mMac on the fake backend, which logs to `log`.
@@ -69,20 +87,60 @@ final class MMacUITests: XCTestCase {
 
   /// Opens the fake conversation and presses Escape on the Ask it raises first. Escape must choose
   /// the last button.
-  private func openFakeConversation(_ app: XCUIApplication) {
-    XCTAssertTrue(app.staticTexts["Connected to Muse Code"].waitForExistence(timeout: 30))
+  private func openFakeConversation(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+    XCTAssertTrue(
+      app.staticTexts["Connected to Muse Code"].waitForExistence(timeout: 30), file: file, line: line)
     let row = app.staticTexts["Fake conversation"]
-    XCTAssertTrue(row.waitForExistence(timeout: 10))
+    XCTAssertTrue(row.waitForExistence(timeout: 10), file: file, line: line)
     row.click()
-    XCTAssertTrue(app.staticTexts["Open the fake conversation?"].waitForExistence(timeout: 10))
+    XCTAssertTrue(
+      app.staticTexts["Open the fake conversation?"].waitForExistence(timeout: 10), file: file, line: line)
     app.typeKey(.escape, modifierFlags: [])
-    XCTAssertTrue(app.staticTexts["Approval required"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["Approval required"].waitForExistence(timeout: 10), file: file, line: line)
   }
 
   /// Waits until `element` is enabled: an action disables the buttons while it runs.
-  private func waitUntilEnabled(_ element: XCUIElement, timeout: TimeInterval = 10) {
-    let enabled = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: element)
-    wait(for: [enabled], timeout: timeout)
+  private func waitUntilEnabled(
+    _ element: XCUIElement, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line
+  ) {
+    XCTAssertTrue(
+      element.wait(for: \.isEnabled, toEqual: true, timeout: timeout),
+      "\(element) did not become enabled within \(timeout) seconds", file: file, line: line)
+  }
+
+  /// Waits until `element`'s accessibility value is `value`, such as a toggle's "Shown".
+  private func waitForValue(
+    _ element: XCUIElement, _ value: String, timeout: TimeInterval = 5, file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let matches = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
+    XCTAssertEqual(
+      XCTWaiter().wait(for: [matches], timeout: timeout), .completed,
+      "\(element) did not read \"\(value)\" within \(timeout) seconds", file: file, line: line)
+  }
+
+  /// Waits until the fake backend has logged `expected`, so the next click cannot race the action
+  /// before it.
+  private func waitUntilLogged(
+    _ log: URL, _ expected: NSDictionary, timeout: TimeInterval = 10, file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let found = XCTNSPredicateExpectation(
+      predicate: NSPredicate { _, _ in
+        ((try? Self.logged(log)) ?? []).contains { $0 == expected }
+      }, object: nil)
+    XCTAssertEqual(
+      XCTWaiter().wait(for: [found], timeout: timeout), .completed,
+      "\(expected) was not logged within \(timeout) seconds. The log: \((try? Self.logged(log)) ?? [])",
+      file: file, line: line)
+  }
+
+  /// Checks that the log holds `expected`, and prints the log when it does not.
+  private func assertLogged(
+    _ entries: [NSDictionary?], _ expected: NSDictionary, file: StaticString = #filePath, line: UInt = #line
+  ) {
+    XCTAssertTrue(
+      entries.contains { $0 == expected }, "\(expected) is not in the log: \(entries)", file: file, line: line)
   }
 
   /// An inspector tab. A segmented control's segments are radio buttons on macOS; the label can
@@ -92,7 +150,7 @@ final class MMacUITests: XCTestCase {
   }
 
   /// The logged requests and answers of the fake backend.
-  private func logged(_ log: URL) throws -> [NSDictionary?] {
+  private nonisolated static func logged(_ log: URL) throws -> [NSDictionary?] {
     try String(contentsOf: log, encoding: .utf8)
       .split(separator: "\n")
       .map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? NSDictionary }
@@ -109,11 +167,20 @@ final class MMacUITests: XCTestCase {
     XCTAssertTrue(composer.waitForExistence(timeout: 5))
     // Typing backticks once took 20 seconds and timed the test out. A paste is instant. The
     // pasteboard is Dom's, so its text goes back afterwards.
+    // Every item goes back with every type it had, not only its plain text.
     let board = NSPasteboard.general
-    let saved = board.string(forType: .string)
+    let saved = (board.pasteboardItems ?? []).map { item in
+      item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+    }
     addTeardownBlock { @MainActor in
+      let board = NSPasteboard.general
       board.clearContents()
-      if let saved { board.setString(saved, forType: .string) }
+      let items = saved.map { entries in
+        let item = NSPasteboardItem()
+        for (type, data) in entries { item.setData(data, forType: type) }
+        return item
+      }
+      if !items.isEmpty { board.writeObjects(items) }
     }
     let message = "Check this\n```swift\nlet x = 1\n```"
     board.clearContents()
@@ -174,30 +241,27 @@ final class MMacUITests: XCTestCase {
 
     quit(app)
 
-    let entries = try logged(log)
-    func has(_ expected: NSDictionary) -> Bool { entries.contains { $0 == expected } }
-    XCTAssertTrue(has(["answer": 1, "choice": 1]))
-    XCTAssertTrue(has(["method": "approve", "args": ["fake-1", "appr-1", "once"]]))
-    XCTAssertTrue(
-      has(["method": "answer", "args": ["fake-1", "ask-1", [["questionId": "color", "selectedLabel": "Blue"]]]]))
-    XCTAssertTrue(has(["method": "set-model", "args": ["fake-1", "fake-two"]]))
+    let entries = try Self.logged(log)
+    assertLogged(entries, ["answer": 1, "choice": 1])
+    assertLogged(entries, ["method": "approve", "args": ["fake-1", "appr-1", "once"]])
+    assertLogged(
+      entries, ["method": "answer", "args": ["fake-1", "ask-1", [["questionId": "color", "selectedLabel": "Blue"]]]])
+    assertLogged(entries, ["method": "set-model", "args": ["fake-1", "fake-two"]])
     XCTAssertTrue(entries.contains { $0?["method"] as? String == "shutdown" })
   }
 
   func testTheInspectorReviewsChangesAgainstTheFakeBackend() throws {
     let log = temporary.appending(path: "requests.jsonl")
     let project = temporary.appending(path: "project").path
+    let worktree = "\(project)/.muse/worktrees/feature"
     let app = try launchFake(log: log)
     openFakeConversation(app)
 
-    // The inspector's shown state is remembered between launches, so it may already be open.
+    // setUp cleared the remembered state, so the inspector starts hidden.
     let toggle = app.buttons["Toggle project inspector"]
-    if toggle.value as? String == "Shown" {
-      toggle.click()
-      XCTAssertEqual(toggle.value as? String, "Hidden")
-    }
+    waitForValue(toggle, "Hidden")
     toggle.click()
-    XCTAssertEqual(toggle.value as? String, "Shown")
+    waitForValue(toggle, "Shown")
 
     // A changed file's row reads its name, folder and status in words.
     let file = app.buttons["app.swift, src, Modified"]
@@ -210,30 +274,33 @@ final class MMacUITests: XCTestCase {
     XCTAssertTrue(revertHunk.exists)
     XCTAssertEqual(revertHunk.title, "Revert hunk")
     revertHunk.click()
+    waitUntilLogged(log, ["method": "git-revert-hunk", "args": [project, "src/app.swift", 0]])
 
     let stage = app.buttons["Stage"]
     waitUntilEnabled(stage)
     stage.click()
+    waitUntilLogged(log, ["method": "git-stage-file", "args": [project, "src/app.swift"]])
 
     let revertFile = app.buttons["Revert file"].firstMatch
     waitUntilEnabled(revertFile)
     revertFile.click()
     XCTAssertTrue(app.staticTexts["Discard all changes to src/app.swift?"].waitForExistence(timeout: 10))
     app.sheets.buttons["Revert file"].click()
+    waitUntilLogged(log, ["method": "git-revert-file", "args": [project, "src/app.swift"]])
 
-    let back = app.buttons["Back to the changed files"]
-    waitUntilEnabled(back)
-    back.click()
+    app.buttons["Back to the changed files"].click()
     let merge = app.buttons["Merge feature into main"]
     XCTAssertTrue(merge.waitForExistence(timeout: 10))
     waitUntilEnabled(merge)
     merge.click()
+    waitUntilLogged(log, ["method": "worktree-merge", "args": [project, worktree]])
     XCTAssertTrue(app.staticTexts["Merged muse/feature."].waitForExistence(timeout: 10))
     let remove = app.buttons["Remove worktree feature"]
     waitUntilEnabled(remove)
     remove.click()
     XCTAssertTrue(app.staticTexts["Remove the worktree feature?"].waitForExistence(timeout: 10))
     app.sheets.buttons["Remove"].click()
+    waitUntilLogged(log, ["method": "worktree-remove", "args": [project, worktree]])
 
     tab(app, "Files").click()
     let folder = app.buttons["src"]
@@ -261,14 +328,8 @@ final class MMacUITests: XCTestCase {
 
     quit(app)
 
-    let entries = try logged(log)
-    func has(_ expected: NSDictionary) -> Bool { entries.contains { $0 == expected } }
-    XCTAssertTrue(has(["method": "git-revert-hunk", "args": [project, "src/app.swift", 0]]))
-    XCTAssertTrue(has(["method": "git-stage-file", "args": [project, "src/app.swift"]]))
-    XCTAssertTrue(has(["method": "git-revert-file", "args": [project, "src/app.swift"]]))
-    XCTAssertTrue(has(["method": "worktree-merge", "args": [project, "\(project)/.muse/worktrees/feature"]]))
-    XCTAssertTrue(has(["method": "worktree-remove", "args": [project, "\(project)/.muse/worktrees/feature"]]))
-    XCTAssertTrue(has(["method": "read-file", "args": [project, "src/app.swift"]]))
+    // The review and worktree calls were each waited for above.
+    assertLogged(try Self.logged(log), ["method": "read-file", "args": [project, "src/app.swift"]])
   }
 
   func testAnAskShowsOverTheRenameSheet() throws {
@@ -292,8 +353,8 @@ final class MMacUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Renamed by test"].waitForExistence(timeout: 10))
 
     quit(app)
-    let entries = try logged(log)
-    XCTAssertTrue(entries.contains { $0 == ["answer": 2, "choice": 0] })
-    XCTAssertTrue(entries.contains { $0 == ["method": "rename", "args": ["fake-1", "Renamed by test"]] })
+    let entries = try Self.logged(log)
+    assertLogged(entries, ["answer": 2, "choice": 0])
+    assertLogged(entries, ["method": "rename", "args": ["fake-1", "Renamed by test"]])
   }
 }
