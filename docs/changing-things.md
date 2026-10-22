@@ -39,15 +39,15 @@ Back up both files before you test either feature against your real Muse. The te
 
 ## Change diff review
 
-- Edit: `src/main/git.ts` and `src/renderer/src/components/Inspector.tsx`.
-- Test: `tests/unit/git-revert.test.ts`.
-- Prove: the first test in `tests/e2e/extensions.spec.ts`.
+- Edit: `src/main/git.ts` and `src/renderer/src/components/Inspector.tsx`. In mMac, edit `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift` (`DiffLine`), `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift` and `mac/mMac/ChangesView.swift`.
+- Test: `tests/unit/git-revert.test.ts`. For mMac, also `tests/unit/headless-backend.test.ts`, `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorRulesTests.swift` and `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorTests.swift`.
+- Prove: the first test in `tests/e2e/extensions.spec.ts`. For mMac, `testTheInspectorReviewsChangesAgainstTheFakeBackend` in `mac/mMacUITests/MMacUITests.swift`.
 
 ## Change worktree conversations
 
-- Edit: `src/main/worktrees.ts`, `src/main/muse-config.ts` and `src/shared/worktree.ts`. Worktree sessions start in `src/main/muse-host.ts`.
-- Test: `tests/unit/worktrees.test.ts`.
-- Prove: the worktree check in `npm run test:integration` and the worktree test in `tests/e2e/extensions.spec.ts`.
+- Edit: `src/main/worktrees.ts`, `src/main/muse-config.ts` and `src/shared/worktree.ts`. Worktree sessions start in `src/main/muse-host.ts`. In mMac, a worktree conversation starts in `mac/Packages/MuseKit/Sources/MuseKit/Workspace+Actions.swift`, from the toggle in `mac/mMac/ComposerView.swift`. Merge and Remove are in `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift` and `mac/mMac/ChangesView.swift`.
+- Test: `tests/unit/worktrees.test.ts`. For mMac, also `tests/unit/headless-backend.test.ts`, `mac/Packages/MuseKit/Tests/MuseKitTests/WorkspaceInspectorTests.swift` and `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorTests.swift`.
+- Prove: the worktree check in `npm run test:integration` and the worktree test in `tests/e2e/extensions.spec.ts`. For mMac, `testTheInspectorReviewsChangesAgainstTheFakeBackend`.
 - Read first: discovery §4. Never write outside `<project>/.muse/worktrees/`. Keep every other key in `~/.config/muse/trust.json`.
 
 ## Change the MCP servers tab
@@ -67,6 +67,8 @@ Back up both files before you test either feature against your real Muse. The te
 ## Change mMac or its backend
 
 - Edit: `src/headless/backend.ts` for a backend method (the process itself is `src/headless/server.ts`), `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift client, `mac/Packages/MuseKit/` for logic (Markdown, the transcript and sidebar rules, the `Workspace` store), and `mac/mMac/` for views.
+- The inspector's rules are in `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift`: diff rows, file kinds, breadcrumbs, change labels, Git badges and activity rows. Its store is `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift`.
+- `src/headless/login-env.sh` answers `discoverCli`'s login-shell read from the environment mMac passed. `src/headless/server.ts` points `SHELL` at it when `MMAC_LOGIN_SHELL` is set. Keep it executable.
 - Test: `tests/unit/headless-backend.test.ts`, `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts`, `swift test` for both packages (`mac/Packages/MuseBackend/Tests/` and `mac/Packages/MuseKit/Tests/`), and the UI tests in `mac/mMacUITests/`.
 - Prove: `npm run test:headless`, both `swift test` runs and the `xcodebuild test` run in "Prove a change".
 - Read first: `docs/superpowers/specs/2026-10-21-mac-app-design.md`.
@@ -102,6 +104,10 @@ The UI tests drive the real desktop. Before you run them:
 - Turn on macOS Automation Mode once: run `automationmodetool enable-automationmode-without-authentication` in Terminal. Leave out `sudo`. With `sudo`, it asks for root's password.
 - Unlock the screen, and put no app full-screen in front.
 - Expect a prompt after a rebuild. The build is signed ad hoc, and the checkout is under `~/Documents`, so macOS can ask again whether mMac may use the Documents folder. The first run after a rebuild can need you at the keyboard.
+
+The echo test pastes its first message through the general pasteboard, then puts back every item the pasteboard held. Do not copy anything while it runs.
+
+Debug builds keep the window's user defaults, such as `inspectorShown`, in the suite that `MMAC_DEFAULTS_SUITE` names. The UI tests set it to `com.domalhambra.mmac.uitests`, and mMac empties it at launch. Your own mMac defaults stay unchanged.
 
 The scheme keeps screen capture off (`captureScreenshotsAutomatically: false` in `mac/project.yml`). Keep it off: a recording captures whatever else is on the screen.
 
@@ -146,7 +152,5 @@ swift test --package-path mac/Packages/MuseKit --scratch-path .cache/swift-kit
 `xcodebuild test` builds the app and runs the UI tests. It needs macOS Automation Mode, an unlocked screen and no full-screen app in front. See "Run the UI tests" above.
 
 The first e2e run on a new machine can time out while Playwright downloads Electron. Run it again.
-
-Until PR 4 merges, `tests/unit/bridge-files.test.ts` fails about one run in six. Run `npm test` again.
 
 Only the last command needs Xcode and XcodeGen. `swift test` needs only the Swift toolchain. All three write their build output to the gitignored .cache folder at the repo root.
