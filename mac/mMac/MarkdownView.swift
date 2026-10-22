@@ -26,7 +26,7 @@ struct BlockView: View {
     case .heading(let level, let text):
       Text(text).font(level == 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
     case .paragraph(let text):
-      Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+      LinkedText(text: text)
     case .code(let language, let code):
       CodeBlockView(language: language, code: code)
     case .quote(let blocks):
@@ -55,6 +55,29 @@ struct BlockView: View {
   private func marker(ordered: Bool, number: Int, checked: Bool?) -> String {
     if let checked { return checked ? "☑" : "☐" }
     return ordered ? "\(number)." : "•"
+  }
+}
+
+/// A paragraph whose links each end with a small external-link icon, as Electron draws them. The
+/// icon is an image, not a character of the text, so a copy should leave it out (to confirm live).
+struct LinkedText: View {
+  let text: AttributedString
+
+  var body: some View {
+    Self.compose(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+  }
+
+  static func compose(_ text: AttributedString) -> Text {
+    var result = Text("")
+    // `runs[\.link]` joins neighbouring runs with the same link, so a bold word inside a link
+    // still gets one icon.
+    for (link, range) in text.runs[\.link] {
+      result = result + Text(AttributedString(text[range]))
+      if link != nil {
+        result = result + Text(Image(systemName: "arrow.up.right")).font(.caption2).foregroundStyle(.secondary)
+      }
+    }
+    return result
   }
 }
 
@@ -115,14 +138,16 @@ struct CodeBlockView: View {
 struct TableBlockView: View {
   let header: [AttributedString]
   let rows: [[AttributedString]]
-  /// Each column's alignment. Task 16 draws it; until then it is unused.
+  /// Each column's alignment. A `Grid` column takes the alignment of its first row's cell.
   let alignments: [TableAlignment]
 
   var body: some View {
     ScrollView(.horizontal) {
       Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
         GridRow {
-          ForEach(Array(header.enumerated()), id: \.offset) { _, cell in Text(cell).bold() }
+          ForEach(Array(header.enumerated()), id: \.offset) { index, cell in
+            Text(cell).bold().gridColumnAlignment(alignment(index))
+          }
         }
         Divider()
         ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
@@ -134,6 +159,14 @@ struct TableBlockView: View {
         }
       }
       .padding(.vertical, 4)
+    }
+  }
+
+  private func alignment(_ column: Int) -> HorizontalAlignment {
+    switch column < alignments.count ? alignments[column] : .leading {
+    case .leading: .leading
+    case .center: .center
+    case .trailing: .trailing
     }
   }
 }

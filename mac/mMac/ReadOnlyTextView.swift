@@ -34,7 +34,15 @@ struct ReadOnlyTextView: NSViewRepresentable {
   func makeCoordinator() -> Coordinator { Coordinator() }
 
   func makeNSView(context: Context) -> NSScrollView {
-    let scroll = NSTextView.scrollableTextView()
+    // AppKit's factory configures the text view (TextKit 2, sizing); it moves into a scroll view
+    // that passes vertical scrolling on while the text fits.
+    let factory = NSTextView.scrollableTextView()
+    let scroll = NestedScrollView()
+    scroll.hasVerticalScroller = true
+    if let textView = factory.documentView {
+      factory.documentView = nil
+      scroll.documentView = textView
+    }
     scroll.drawsBackground = false
     scroll.hasHorizontalScroller = true
     scroll.autohidesScrollers = true
@@ -45,7 +53,8 @@ struct ReadOnlyTextView: NSViewRepresentable {
     textView.drawsBackground = false
     textView.font = font
     textView.textColor = .labelColor
-    // Command-F searches the text, in the scroll view's find bar.
+    // The scroll view's find bar is ready for when the app gains a Find menu item. mMac has none
+    // yet, so Command-F does nothing here.
     textView.usesFindBar = true
     textView.isIncrementalSearchingEnabled = true
     textView.textContainerInset = NSSize(width: 6, height: 6)
@@ -104,5 +113,25 @@ struct ReadOnlyTextView: NSViewRepresentable {
       if lines >= cap { break }
     }
     return min(ceil(CGFloat(lines) * lineHeight + fixed), maxHeight)
+  }
+}
+
+/// A scroll view that sits inside another one, such as a tool output box in the transcript. While
+/// its text fits vertically, it hands vertical scrolling to the enclosing view, so a wheel or
+/// trackpad over a short box scrolls the transcript instead of stopping at the box. Horizontal
+/// scrolling, and vertical scrolling once the text is taller than the box, stay with it.
+final class NestedScrollView: NSScrollView {
+  override func scrollWheel(with event: NSEvent) {
+    let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+    if !horizontal, !canScrollVertically, let next = nextResponder {
+      next.scrollWheel(with: event)
+    } else {
+      super.scrollWheel(with: event)
+    }
+  }
+
+  var canScrollVertically: Bool {
+    guard let document = documentView else { return false }
+    return document.frame.height > contentView.bounds.height + 1
   }
 }
