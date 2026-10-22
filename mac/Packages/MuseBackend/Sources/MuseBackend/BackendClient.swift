@@ -66,9 +66,11 @@ public actor BackendClient {
   /// How long `hello` may take. The backend answers it without starting Muse.
   public static let helloTimeout: Duration = .seconds(15)
 
-  /// How long `start` may take. The backend answers it once Muse has connected: `muse --version`
-  /// (up to 6 seconds a candidate), Muse's initialize (15 seconds, `src/main/muse-host.ts`), then
-  /// the bridges. This limit outlasts Muse's own, so its clearer message shows first.
+  /// How long `start` may take. The backend answers it once Muse has connected: the login-shell
+  /// probe (up to 6 seconds, `src/main/cli.ts`), `muse --version` (up to 6 seconds a candidate),
+  /// Muse's initialize (15 seconds, `src/main/muse-host.ts`), then the bridges. With one candidate
+  /// that is about 27 seconds at worst. This limit outlasts that, so Muse's clearer message shows
+  /// first.
   public static let startTimeout: Duration = .seconds(45)
 
   /// The launch handshake: `hello` within `helloTimeout`, then `start` within `startTimeout`. A

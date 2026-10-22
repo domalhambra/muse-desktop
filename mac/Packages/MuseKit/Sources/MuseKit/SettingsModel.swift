@@ -20,8 +20,8 @@ public final class SettingsModel {
   /// polls. Cleared by the next read that succeeds.
   public private(set) var bridgeError: String?
   /// Why mMac could not read the bridge token from the Keychain at launch. The backend then
-  /// started without one. The Bridges pane shows it as a lasting warning until a new token is
-  /// saved in the Keychain.
+  /// started without one. The Bridges pane shows it as a lasting warning until the backend holds
+  /// a new token.
   public private(set) var tokenError: String?
   /// A token made in this window, shown once.
   public private(set) var newToken: String?
@@ -29,6 +29,9 @@ public final class SettingsModel {
   /// `newToken` it outlasts the Bridges pane, so Copy token never falls back to the older token
   /// in the Keychain, which the backend no longer accepts. Cleared when a new token is saved.
   private var unsaved: (token: String, error: String)?
+  /// The backend's new token while the store saves it, which can wait behind a Keychain password
+  /// prompt. The store still holds the older token meanwhile, so Copy token must not read it.
+  private var saving: String?
   /// True while a new token is being made. The view disables Make token meanwhile.
   public private(set) var makingToken = false
   public var errorMessage: String?
@@ -189,13 +192,17 @@ public final class SettingsModel {
     }
     newToken = token
     tokensMade += 1
+    // The backend holds a new token now, so a failed read at launch no longer matters, whatever
+    // the Keychain does with it. A refusal shows as `unsavedTokenWarning` instead.
+    tokenError = nil
+    saving = token
     var keychainError: String?
     do {
       try await Self.write(token, to: tokens)
+      saving = nil
       unsaved = nil
-      // The Keychain holds the backend's token now, so a failed read at launch no longer matters.
-      tokenError = nil
     } catch {
+      saving = nil
       let message = "mMac could not save the token in the Keychain: \(error.localizedDescription)"
       keychainError = message
       unsaved = (token, message)
@@ -210,7 +217,7 @@ public final class SettingsModel {
   public var unsavedTokenWarning: String? {
     guard let error = unsaved?.error else { return nil }
     let sentence = error.hasSuffix(".") ? error : error + "."
-    return "\(sentence) Copy token copies the token in use until mMac quits. Make a new token to save one."
+    return "\(sentence) Copy token copies the token in use until mMac or its backend restarts. Agents using it then lose access. Make a new token to try saving again."
   }
 
   /// Forgets the token shown once. The Bridges pane calls it when it closes. A token the Keychain
@@ -218,19 +225,21 @@ public final class SettingsModel {
   public func clearNewToken() { newToken = nil }
 
   /// The token for Copy token: the one the Keychain refused, which is the only valid one then, or
-  /// the one on screen, or else the saved one, read off the main actor. Returns nil when a newer
+  /// the one being saved, or the one on screen, or else the saved one, read off the main actor. Returns nil when a newer
   /// Copy token started while the store was read, so the clipboard ends with the newest result.
   public func copyToken() async throws -> String? {
     copySequence += 1
     let sequence = copySequence
     while true {
-      if let token = unsaved?.token ?? newToken { return token }
+      if let token = unsaved?.token ?? saving ?? newToken { return token }
       let made = tokensMade
       let read: String?
       do {
         read = try await Self.read(from: tokens)
       } catch {
         guard sequence == copySequence else { return nil }
+        // A token made during the read is in memory: look again rather than fail.
+        guard made == tokensMade else { continue }
         throw error
       }
       guard sequence == copySequence else { return nil }

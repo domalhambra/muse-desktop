@@ -53,23 +53,43 @@ final class RecordingTokenStore: BridgeTokenStore {
   }
 }
 
-/// A store whose first read waits until `release()`.
+/// A store whose first read, or first write, waits until `release()`. It holds `token`, which a
+/// write replaces; with `failReads` a read throws instead.
 final class GatedTokenStore: BridgeTokenStore {
+  enum Gate { case read, write }
+  private struct State {
+    var token: String?
+    var reads = 0
+    var writes = 0
+  }
   private let gate = DispatchSemaphore(value: 0)
-  private let reads = Mutex(0)
-  private let token: String
-  init(_ token: String) { self.token = token }
-  var started: Int { reads.withLock { $0 } }
+  private let state: Mutex<State>
+  private let gated: Gate
+  private let failReads: Bool
+  init(_ token: String?, gating: Gate = .read, failReads: Bool = false) {
+    state = Mutex(State(token: token))
+    gated = gating
+    self.failReads = failReads
+  }
+  var started: Int { state.withLock { gated == .read ? $0.reads : $0.writes } }
   func release() { gate.signal() }
   func read() throws -> String? {
-    let first = reads.withLock {
-      $0 += 1
-      return $0 == 1
+    let first = state.withLock {
+      $0.reads += 1
+      return $0.reads == 1
     }
-    if first { gate.wait() }
-    return token
+    if first && gated == .read { gate.wait() }
+    if failReads { throw WorkspaceError("locked") }
+    return state.withLock { $0.token }
   }
-  func write(_ token: String) throws {}
+  func write(_ token: String) throws {
+    let first = state.withLock {
+      $0.writes += 1
+      return $0.writes == 1
+    }
+    if first && gated == .write { gate.wait() }
+    state.withLock { $0.token = token }
+  }
 }
 
 private let bridgeJSON =
@@ -501,7 +521,7 @@ private func listJSON(_ names: String...) -> String {
   #expect(settings.bridge?.mcp.hasToken == true)
 }
 
-@MainActor @Test func aKeychainReadErrorLastsUntilATokenIsSaved() async {
+@MainActor @Test func aKeychainReadErrorLastsUntilTheBackendHasANewToken() async {
   let (workspace, _) = await makeWorkspace { method, _, id in
     switch method {
     case "bridge-token": [reply(id, #""t""#)]
@@ -518,10 +538,12 @@ private func listJSON(_ names: String...) -> String {
   #expect(settings.tokenError == message)
   await settings.makeToken()
   #expect(settings.tokenError == nil)
-  // A Keychain that refuses the new token keeps the warning.
+  // A Keychain that refuses the new token still ends the read warning: the backend holds a new
+  // token, and the unsaved-token warning takes its place, so two warnings never show at once.
   let refused = SettingsModel(workspace: workspace, tokens: FailingTokenStore(), tokenError: message)
   await refused.makeToken()
-  #expect(refused.tokenError == message)
+  #expect(refused.tokenError == nil)
+  #expect(refused.unsavedTokenWarning != nil)
 }
 
 @MainActor @Test func clearingTheNewTokenHidesIt() async throws {
@@ -565,7 +587,7 @@ private func listJSON(_ names: String...) -> String {
   #expect(try await settings.copyToken() == shown)
   #expect(
     settings.unsavedTokenWarning
-      == "mMac could not save the token in the Keychain: denied. Copy token copies the token in use until mMac quits. Make a new token to save one."
+      == "mMac could not save the token in the Keychain: denied. Copy token copies the token in use until mMac or its backend restarts. Agents using it then lose access. Make a new token to try saving again."
   )
   // A token the Keychain saves ends the warning, and Copy token reads the store again.
   tokens.accept = true
@@ -606,4 +628,73 @@ private func listJSON(_ names: String...) -> String {
   #expect(try await settings.copyToken() == "saved")
   tokens.release()
   #expect(try await first.value == nil)
+}
+
+@MainActor @Test(.timeLimit(.minutes(1))) func copyingWhileTheTokenIsSavingGivesTheNewToken() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "bridge-token": [reply(id, #""new""#)]
+    case "bridge-status": [reply(id, bridgeJSON)]
+    default: []
+    }
+  }
+  // The write waits, as behind a Keychain password prompt; the store still holds the old token.
+  let tokens = GatedTokenStore("old", gating: .write)
+  let settings = SettingsModel(workspace: workspace, tokens: tokens)
+  let making = Task { await settings.makeToken() }
+  try await eventually { tokens.started == 1 }
+  settings.clearNewToken()
+  #expect(try await settings.copyToken() == "new")
+  tokens.release()
+  await making.value
+  #expect(try await settings.copyToken() == "new")
+}
+
+@MainActor @Test(.timeLimit(.minutes(1))) func aTokenMadeDuringACopysReadIsCopied() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "bridge-token": [reply(id, #""made""#)]
+    case "bridge-status": [reply(id, bridgeJSON)]
+    default: []
+    }
+  }
+  let tokens = GatedTokenStore("old")
+  let settings = SettingsModel(workspace: workspace, tokens: tokens)
+  let copying = Task { try await settings.copyToken() }
+  try await eventually { tokens.started == 1 }
+  await settings.makeToken()
+  settings.clearNewToken()
+  tokens.release()
+  #expect(try await copying.value == "made")
+}
+
+@MainActor @Test(.timeLimit(.minutes(1))) func aTokenMadeDuringAFailingReadIsCopied() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "bridge-token": [reply(id, #""made""#)]
+    case "bridge-status": [reply(id, bridgeJSON)]
+    default: []
+    }
+  }
+  // Every read fails, but the token made meanwhile is in memory, so the copy needs no read.
+  let tokens = GatedTokenStore(nil, failReads: true)
+  let settings = SettingsModel(workspace: workspace, tokens: tokens)
+  let copying = Task { try await settings.copyToken() }
+  try await eventually { tokens.started == 1 }
+  await settings.makeToken()
+  tokens.release()
+  #expect(try await copying.value == "made")
+}
+
+@MainActor @Test(.timeLimit(.minutes(1))) func anOvertakenCopyWhoseReadFailsIsDropped() async throws {
+  let (workspace, _) = await makeWorkspace()
+  let tokens = GatedTokenStore(nil, failReads: true)
+  let settings = SettingsModel(workspace: workspace, tokens: tokens)
+  let first = Task { try await settings.copyToken() }
+  try await eventually { tokens.started == 1 }
+  // The newer copy reports the failure; the older one, failing after it, gives nothing.
+  await #expect(throws: WorkspaceError("locked")) { try await settings.copyToken() }
+  tokens.release()
+  #expect(try await first.value == nil)
+  #expect(settings.errorMessage == nil)
 }
