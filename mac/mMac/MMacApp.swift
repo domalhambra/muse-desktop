@@ -6,6 +6,22 @@ struct MMacApp: App {
   @NSApplicationDelegateAdaptor private var delegate: AppDelegate
   static let mainWindow = "main"
 
+  /// Where `@AppStorage` keeps the window's choices, such as `inspectorShown`. Debug builds take
+  /// `MMAC_DEFAULTS_SUITE` from the UI tests: a suite of their own, emptied at launch, so a test
+  /// starts from the defaults and never reads or changes Dom's. The test runner is sandboxed and
+  /// cannot reach mMac's preferences itself.
+  static let appStorage: UserDefaults = {
+    #if DEBUG
+      if let suite = ProcessInfo.processInfo.environment["MMAC_DEFAULTS_SUITE"], !suite.isEmpty,
+        let defaults = UserDefaults(suiteName: suite)
+      {
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
+      }
+    #endif
+    return .standard
+  }()
+
   var body: some Scene {
     // One window. The backend belongs to the app, so closing this window keeps it.
     Window("mMac", id: Self.mainWindow) {
@@ -13,6 +29,7 @@ struct MMacApp: App {
         .frame(minWidth: 820, minHeight: 560)
         // Muse and Moonlight, the two kept themes, are both dark. Themes arrive in M3.
         .preferredColorScheme(.dark)
+        .defaultAppStorage(Self.appStorage)
     }
     .commands {
       CommandGroup(replacing: .newItem) {
@@ -48,7 +65,8 @@ private struct FileCommands: View {
 
 /// View → Show Inspector. It shares the stored choice with the toolbar button.
 private struct InspectorCommand: View {
-  @AppStorage("inspectorShown") private var inspectorShown = false
+  // The store is named here: a menu item does not reliably read the window's `defaultAppStorage`.
+  @AppStorage("inspectorShown", store: MMacApp.appStorage) private var inspectorShown = false
 
   var body: some View {
     Button(inspectorShown ? "Hide Inspector" : "Show Inspector") { inspectorShown.toggle() }

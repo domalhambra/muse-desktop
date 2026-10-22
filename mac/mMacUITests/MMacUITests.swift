@@ -6,13 +6,6 @@ import XCTest
 @MainActor
 final class MMacUITests: XCTestCase {
   private var temporary: URL!
-  /// mMac's remembered `inspectorShown`, kept aside so each test starts with the inspector hidden
-  /// and Dom's own setting comes back afterwards.
-  private var savedInspectorShown: Any?
-
-  /// mMac's defaults. The app's HOME is temporary, but its preferences still live in the user's.
-  private static let appDefaults = "com.domalhambra.mmac"
-  private static let inspectorShownKey = "inspectorShown"
 
   /// The repository root: this file is `mac/mMacUITests/MMacUITests.swift`.
   private let repository = URL(fileURLWithPath: #filePath)
@@ -25,20 +18,10 @@ final class MMacUITests: XCTestCase {
       try FileManager.default.createDirectory(
         at: temporary.appending(path: folder), withIntermediateDirectories: true)
     }
-    let defaults = try XCTUnwrap(UserDefaults(suiteName: Self.appDefaults))
-    savedInspectorShown = defaults.object(forKey: Self.inspectorShownKey)
-    defaults.removeObject(forKey: Self.inspectorShownKey)
   }
 
-  // Teardown blocks, which stop the app, run before this.
   override func tearDown() async throws {
     try? FileManager.default.removeItem(at: temporary)
-    let defaults = UserDefaults(suiteName: Self.appDefaults)
-    if let savedInspectorShown {
-      defaults?.set(savedInspectorShown, forKey: Self.inspectorShownKey)
-    } else {
-      defaults?.removeObject(forKey: Self.inspectorShownKey)
-    }
   }
 
   private func launch(cliPath: String, extra: [String: String] = [:]) throws -> XCUIApplication {
@@ -57,6 +40,9 @@ final class MMacUITests: XCTestCase {
       "MUSE_NO_AUTO_UPDATE": "1",
       "MMAC_DATA_FOLDER": temporary.appending(path: "app-data").path,
       "MMAC_TEST_PROJECT": temporary.appending(path: "project").path,
+      // The window's remembered choices go to a suite of the tests' own, which mMac empties at
+      // launch, so no test inherits the inspector's state or changes Dom's.
+      "MMAC_DEFAULTS_SUITE": "com.domalhambra.mmac.uitests",
     ].merging(extra) { $1 }
     // Run the backend from this checkout, whatever the build recorded.
     app.launchArguments = ["-MMacRepository", repository.path]
@@ -257,7 +243,7 @@ final class MMacUITests: XCTestCase {
     let app = try launchFake(log: log)
     openFakeConversation(app)
 
-    // setUp cleared the remembered state, so the inspector starts hidden.
+    // mMac emptied the tests' defaults suite at launch, so the inspector starts hidden.
     let toggle = app.buttons["Toggle project inspector"]
     waitForValue(toggle, "Hidden")
     toggle.click()
