@@ -342,7 +342,8 @@ struct DiffRow: View {
         .foregroundStyle(.tertiary)
         .frame(width: gutterWidth, alignment: .trailing)
         .accessibilityHidden(true)
-      Text(row.text.isEmpty ? " " : row.text)
+      // A very long line, such as a minified file, shows cut. Copy hunk and Copy diff copy it whole.
+      Text(row.text.isEmpty ? " " : DiffLine.display(row.text))
         .foregroundStyle(foreground)
         .textSelection(.enabled)
         .fixedSize()

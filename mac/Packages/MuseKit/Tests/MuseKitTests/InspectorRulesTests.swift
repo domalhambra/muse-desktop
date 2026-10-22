@@ -1,3 +1,4 @@
+import Foundation
 import MuseBackend
 import Testing
 @testable import MuseKit
@@ -260,4 +261,53 @@ let reviewDiff = [
   #expect(DiffLine.metrics(rows) == DiffLine.Metrics(maxDigits: 3, maxColumns: 18))
   #expect(DiffLine.metrics([]) == DiffLine.Metrics(maxDigits: 0, maxColumns: 0))
   #expect(DiffLine.metrics(DiffLine.parse("plain")) == DiffLine.Metrics(maxDigits: 0, maxColumns: 5))
+}
+
+@Test func rawHunksMatchTheBackendsSplit() {
+  let raw =
+    "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n-one\n+ONE\n two\n@@ -9 +9 @@\n-nine\n+NINE\n"
+  #expect(DiffLine.rawHunks(raw) == ["@@ -1,2 +1,2 @@\n-one\n+ONE\n two", "@@ -9 +9 @@\n-nine\n+NINE"])
+  let noNewline = "--- a/b\n+++ b/b\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n"
+  #expect(DiffLine.rawHunks(noNewline) == ["@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file"])
+  #expect(DiffLine.rawHunks("Binary files differ\n").isEmpty)
+  #expect(DiffLine.rawHunks("").isEmpty)
+  // Only one final newline goes, as `replace(/\n$/, '')`.
+  #expect(DiffLine.rawHunks("@@ -1 +1 @@\n+a\n\n") == ["@@ -1 +1 @@\n+a\n"])
+}
+
+/// The bytes Git wrote for a file with Windows line ends, kept byte-exact beside the backend's
+/// test of the same diff. `splitHunks` splits on "\n" only, so each line keeps its "\r".
+@Test func rawHunksOfAWindowsFileKeepEachCarriageReturn() throws {
+  let url = try #require(
+    Bundle.module.url(forResource: "crlf-two-hunks", withExtension: "diff", subdirectory: "Fixtures"))
+  let raw = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+  let hunks = DiffLine.rawHunks(raw)
+  let expected = [
+    "@@ -1,5 +1,5 @@\n one\r\n-two\r\n+TWO\r\n three\r\n x\r\n x\r",
+    "@@ -22,4 +22,5 @@ x\n x\r\n x\r\n ten\r\n+ten and a half\r\n eleven\r",
+  ]
+  // Compared as bytes, so every "\r" is checked exactly.
+  #expect(hunks.map { Array($0.utf8) } == expected.map { Array($0.utf8) })
+  // The parsed diff numbers the same two hunks, so a row's `hunkIndex` picks the matching text.
+  let rows = DiffLine.parse("Working changes\n" + raw)
+  #expect(rows.compactMap(\.hunkIndex) == [0, 1])
+  #expect(rows.last?.text == " eleven\r")
+}
+
+@Test func longDiffLinesShowCut() {
+  let long = String(repeating: "x", count: 2_500)
+  let shown = DiffLine.display(long)
+  #expect(shown.count == DiffLine.longLine + 1 && shown.hasSuffix("…"))
+  #expect(DiffLine.display(String(repeating: "y", count: DiffLine.longLine)).count == DiffLine.longLine)
+  #expect(DiffLine.display("short") == "short")
+  // The view is as wide as the cut line; Copy hunk and Copy diff keep the whole line.
+  let rows = DiffLine.parse("@@ -1 +1 @@\n+" + long)
+  #expect(DiffLine.metrics(rows).maxColumns == DiffLine.longLine + 1)
+  #expect(DiffLine.text(rows).hasSuffix(long))
+  #expect(DiffLine.hunkText(rows, at: 0).hasSuffix(long))
+}
+
+@Test func tabTitlesCountOnlyWhenThereIsSomething() {
+  #expect(ChangeLabel.counted("Changes", 0) == "Changes")
+  #expect(ChangeLabel.counted("Changes", 3) == "Changes 3")
 }

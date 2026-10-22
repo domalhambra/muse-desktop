@@ -29,7 +29,11 @@ public final class Inspector {
   public private(set) var selected: String?
   public private(set) var diff: Loadable<[DiffLine]> = .idle
   /// The loaded diff's measurements, taken once when it loads rather than on every render.
-  public private(set) var diffMetrics = DiffLine.Metrics(maxDigits: 0, maxColumns: 0)
+  public private(set) var diffMetrics = Inspector.noMetrics
+  /// The working-tree hunks of the loaded diff, cut from `git-raw-diff` as the backend cuts them.
+  /// Revert hunk sends one, so the backend reverts the hunk the person saw or refuses. Nil when that
+  /// read failed or does not match the diff shown.
+  private var rawHunks: [String]?
   /// True while a review or worktree action runs. The buttons are disabled meanwhile.
   public private(set) var busy = false
   /// A successful merge's message, until the next action.
@@ -69,6 +73,13 @@ public final class Inspector {
   private var filesSequence = 0
   private var previewSequence = 0
 
+  static let noMetrics = DiffLine.Metrics(maxDigits: 0, maxColumns: 0)
+
+  /// The backend's refusal when a hunk changed after its diff was read (src/headless/revert-hunk.ts).
+  /// mMac shows it too when it cannot tell which hunk the person saw.
+  nonisolated public static let staleHunk =
+    "The file changed since this diff was read. Refresh the diff, then try again."
+
   init(client: BackendClient, project: String) {
     self.client = client
     self.project = project
@@ -86,6 +97,8 @@ public final class Inspector {
     error = nil
     selected = nil
     diff = .idle
+    diffMetrics = Self.noMetrics
+    rawHunks = nil
     busy = false
     notice = nil
     directory = ""
@@ -156,6 +169,7 @@ public final class Inspector {
   public func select(_ path: String) async {
     selected = path
     diff = .loading
+    rawHunks = nil
     await loadDiff()
   }
 
@@ -166,6 +180,7 @@ public final class Inspector {
     selected = path
     diffSequence += 1
     diff = .loading
+    rawHunks = nil
   }
 
   /// Back to the list of changed files.
@@ -173,20 +188,31 @@ public final class Inspector {
     selected = nil
     diffSequence += 1
     diff = .idle
+    diffMetrics = Self.noMetrics
+    rawHunks = nil
   }
 
   /// Loads the selected file's diff. A reload keeps the rows shown until the new ones arrive.
+  /// It reads the labelled diff it shows and, beside it, the raw working diff that Revert hunk
+  /// sends from. The labelled diff ends with the same working diff, so a file that changed
+  /// between the two reads shows as a mismatch, and no hunk is sent from it.
   private func loadDiff() async {
     guard let path = selected else { return }
     let project = self.project
     let generation = self.generation
     diffSequence += 1
     let sequence = diffSequence
+    let client = self.client
+    async let shownReply = client.gitDiff(project: project, path: path)
+    async let rawReply = client.gitRawDiff(project: project, path: path)
     do {
-      let text = try await client.gitDiff(project: project, path: path)
+      let text = try await shownReply
+      // A failed raw read still shows the diff; Revert hunk then asks for a refresh.
+      let raw = try? await rawReply
       guard sequence == diffSequence, generation == self.generation else { return }
       let rows = DiffLine.parse(text)
       diffMetrics = DiffLine.metrics(rows)
+      rawHunks = raw.flatMap { raw in Self.ends(text, with: raw) ? DiffLine.rawHunks(raw) : nil }
       diff = .loaded(rows)
     } catch is CancellationError {
       // The caller stopped waiting, so nothing shows a message; the next select or refresh loads it.
@@ -194,6 +220,11 @@ public final class Inspector {
       guard sequence == diffSequence, generation == self.generation else { return }
       diff = .failed(error.localizedDescription)
     }
+  }
+
+  /// Compared as bytes, so a "\r" before a "\n" counts.
+  static func ends(_ text: String, with suffix: String) -> Bool {
+    text.utf8.suffix(suffix.utf8.count).elementsEqual(suffix.utf8)
   }
 
   public func stage() async {
@@ -214,10 +245,14 @@ public final class Inspector {
     }
   }
 
+  /// Reverts working-tree hunk `index` of the selected file, sending the hunk's text so the
+  /// backend refuses if the file changed since the diff was read. Either way the diff reloads.
   public func revertHunk(_ index: Int) async {
     guard let path = selected else { return }
+    let hunk = rawHunks.flatMap { $0.indices.contains(index) ? $0[index] : nil }
     await act { client, project in
-      try await client.revertHunk(project: project, path: path, index: index)
+      guard let hunk else { throw WorkspaceError(Self.staleHunk) }
+      try await client.revertHunk(project: project, path: path, index: index, expected: hunk)
       return nil
     }
   }

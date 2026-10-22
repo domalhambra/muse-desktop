@@ -68,12 +68,18 @@ public enum ToolPresentation {
     values.first { $0?.isEmpty == false } ?? nil
   }
 
-  /// `toolCall` becomes `tool call`.
-  static func spaced(_ kind: String) -> String {
+  /// A camel-case kind as words: `toolCall` becomes `tool Call`. A space before each ASCII
+  /// capital, as Electron's `kind.replace(/([A-Z])/g, ' $1')`. The transcript and the Activity tab
+  /// both start from this.
+  static func words(_ kind: String) -> String {
     kind.reduce(into: "") { text, character in
-      if character.isUppercase { text += " " + character.lowercased() } else { text.append(character) }
+      if character.isASCII, character.isUppercase { text += " " }
+      text.append(character)
     }
   }
+
+  /// `toolCall` becomes `tool call`, as Electron's `….toLowerCase()`.
+  static func spaced(_ kind: String) -> String { words(kind).lowercased() }
 
   public static func title(_ item: TranscriptItem) -> String {
     first(item.tool, item.label, item.role) ?? spaced(item.kind)

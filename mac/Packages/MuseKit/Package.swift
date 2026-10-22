@@ -31,6 +31,8 @@ let package = Package(
         .product(name: "MuseBackendTesting", package: "MuseBackend"),
         // MarkdownBlockTests.swift imports Markdown directly.
         .product(name: "Markdown", package: "swift-markdown"),
-      ]),
+      ],
+      // Byte-exact Git output, read through Bundle.module.
+      resources: [.copy("Fixtures")]),
   ]
 )

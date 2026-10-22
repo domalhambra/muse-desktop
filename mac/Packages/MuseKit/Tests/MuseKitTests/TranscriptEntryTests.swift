@@ -124,3 +124,12 @@ private func message(_ id: String, _ kind: String = "agentMessage") -> Transcrip
   #expect(!Activity.isBackgroundOnly([reminder, tool("t", status: "inProgress")]))
   #expect(!Activity.isBackgroundOnly([]))
 }
+
+@Test func oneHelperSplitsACamelCaseKindForTheTranscriptAndTheActivityTab() {
+  // As Electron's `kind.replace(/([A-Z])/g, ' $1')`.
+  #expect(ToolPresentation.words("mcpToolCall") == "mcp Tool Call")
+  #expect(ToolPresentation.words("plain") == "plain")
+  // The transcript lowercases it; the Activity tab capitalises its first letter.
+  #expect(ToolPresentation.spaced("mcpToolCall") == "mcp tool call")
+  #expect(ActivityEntry.titled("mcpToolCall") == "Mcp Tool Call")
+}

@@ -72,9 +72,9 @@ struct InspectorView: View {
   private func tabs(activityCount: Int) -> some View {
     HStack(spacing: 8) {
       Picker("Inspector view", selection: $inspector.tab) {
-        Text(Self.counted("Changes", inspector.git?.changes.count ?? 0)).tag(Inspector.Tab.changes)
+        Text(ChangeLabel.counted("Changes", inspector.git?.changes.count ?? 0)).tag(Inspector.Tab.changes)
         Text("Files").tag(Inspector.Tab.files)
-        Text(Self.counted("Activity", activityCount)).tag(Inspector.Tab.activity)
+        Text(ChangeLabel.counted("Activity", activityCount)).tag(Inspector.Tab.activity)
       }
       .pickerStyle(.segmented)
       .labelsHidden()
@@ -97,9 +97,6 @@ struct InspectorView: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
   }
-
-  /// "Changes 3", or "Changes" at zero, as Electron's tab badges.
-  static func counted(_ title: String, _ count: Int) -> String { count > 0 ? "\(title) \(count)" : title }
 
   /// What makes the inspector read the project again.
   struct RefreshKey: Equatable {
