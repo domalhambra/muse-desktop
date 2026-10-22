@@ -54,6 +54,7 @@ struct MainView: View {
             } label: {
               Label("Toggle project inspector", systemImage: "sidebar.trailing")
             }
+            .accessibilityValue(inspectorShown ? "Shown" : "Hidden")
             .help(inspectorShown ? "Hide the project inspector (⌥⌘I)" : "Show the project inspector (⌥⌘I)")
           }
         }

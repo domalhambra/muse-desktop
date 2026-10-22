@@ -10,16 +10,19 @@ struct InspectorView: View {
   @Bindable var inspector: Inspector
 
   var body: some View {
+    // Built once per render, for the tab's count and the list, so the list compares entries
+    // rather than re-reading transcript items whose message text alone changed.
+    let entries = ActivityEntry.build(workspace.view?.items ?? [])
     VStack(spacing: 0) {
       header
       Divider()
-      tabs
+      tabs(activityCount: entries.count)
       Divider()
       Group {
         switch inspector.tab {
         case .changes: Text("Changes").frame(maxWidth: .infinity, maxHeight: .infinity)
         case .files: Text("Files").frame(maxWidth: .infinity, maxHeight: .infinity)
-        case .activity: ActivityView(items: workspace.view?.items ?? [])
+        case .activity: ActivityView(entries: entries)
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -47,6 +50,7 @@ struct InspectorView: View {
         if let git = inspector.git, git.isRepository {
           HStack(spacing: 6) {
             Label(git.branch, systemImage: "arrow.triangle.branch")
+              .accessibilityLabel("Branch \(git.branch)")
             GitBadgeView(status: git)
           }
           .font(.caption)
@@ -61,21 +65,30 @@ struct InspectorView: View {
     .help(workspace.project)
   }
 
-  private var tabs: some View {
+  private func tabs(activityCount: Int) -> some View {
     HStack(spacing: 8) {
       Picker("Inspector view", selection: $inspector.tab) {
         Text(Self.counted("Changes", inspector.git?.changes.count ?? 0)).tag(Inspector.Tab.changes)
         Text("Files").tag(Inspector.Tab.files)
-        Text(Self.counted("Activity", ActivityEntry.build(workspace.view?.items ?? []).count))
-          .tag(Inspector.Tab.activity)
+        Text(Self.counted("Activity", activityCount)).tag(Inspector.Tab.activity)
       }
       .pickerStyle(.segmented)
       .labelsHidden()
-      Button("Refresh changes", systemImage: "arrow.clockwise") { Task { await inspector.refresh() } }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
-        .disabled(inspector.loading || workspace.project.isEmpty)
-        .help("Refresh changes")
+      Button {
+        Task { await inspector.refresh() }
+      } label: {
+        // As Electron's spinning icon: a spinner while the status loads.
+        if inspector.loading {
+          ProgressView().controlSize(.small).frame(width: 16, height: 16)
+        } else {
+          Label("Refresh changes", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+            .frame(width: 16, height: 16)
+        }
+      }
+      .buttonStyle(.borderless)
+      .disabled(inspector.loading || workspace.project.isEmpty)
+      .help("Refresh changes")
+      .accessibilityLabel("Refresh changes")
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
@@ -83,12 +96,12 @@ struct InspectorView: View {
 
   /// "Changes 3", or "Changes" at zero, as Electron's tab badges.
   static func counted(_ title: String, _ count: Int) -> String { count > 0 ? "\(title) \(count)" : title }
-}
 
-/// What makes the inspector read the project again.
-struct RefreshKey: Equatable {
-  let project: String
-  let status: String?
+  /// What makes the inspector read the project again.
+  struct RefreshKey: Equatable {
+    let project: String
+    let status: String?
+  }
 }
 
 /// "3 changed" or "Clean", as Electron's project-card pill.
@@ -100,17 +113,16 @@ struct GitBadgeView: View {
       .font(.caption2.weight(.semibold))
       .padding(.horizontal, 6)
       .padding(.vertical, 1)
-      .foregroundStyle(status.changes.isEmpty ? .green : .orange)
+      .foregroundStyle(.primary)
       .background((status.changes.isEmpty ? Color.green : Color.orange).opacity(0.15), in: Capsule())
   }
 }
 
 /// The Activity tab: tools, file edits, reminders and hooks, as Electron lists them.
 struct ActivityView: View {
-  let items: [TranscriptItem]
+  let entries: [ActivityEntry]
 
   var body: some View {
-    let entries = ActivityEntry.build(items)
     if entries.isEmpty {
       ContentUnavailableView(
         "No activity yet", systemImage: "terminal",
@@ -124,6 +136,7 @@ struct ActivityView: View {
             Text(entry.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
           }
         }
+        .accessibilityElement(children: .combine)
       }
       .listStyle(.inset)
     }
@@ -150,6 +163,7 @@ struct UsagePanel: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       Text("SESSION USAGE").font(.caption2.bold()).foregroundStyle(.secondary)
+        .accessibilityAddTraits(.isHeader)
       row("Input", usage.input)
       row("Output", usage.output)
       row("Total tokens", usage.total)
@@ -165,5 +179,6 @@ struct UsagePanel: View {
       Text(value.formatted()).monospacedDigit()
     }
     .font(.caption)
+    .accessibilityElement(children: .combine)
   }
 }
