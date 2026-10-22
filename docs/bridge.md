@@ -159,10 +159,30 @@ Then give the client:
 
 To stop serving, run `tailscale serve --https=443 off`. Tailscale Funnel is the public variant of the same command. Do not use it with this bridge unless you accept the exposure above.
 
+## mMac
+
+mMac, the native app in `mac/`, runs the same two bridges through `src/headless/bridges.ts`. Requests, tools and job states are the same as above. Three things differ.
+
+- **The folder.** mMac keeps its bridge folder in its own data folder: `~/Library/Application Support/mMac/bridge`. `MMAC_DATA_FOLDER` moves the data folder, and the bridge folder with it. Give the Muse app this path, not Muse Desktop's. **Settings → Bridges → Open bridge folder** opens it.
+- **The token.** mMac keeps the MCP bridge token in the login Keychain, as a generic password with the service `com.domalhambra.mmac.bridge-token` and the account `mcp-bridge`. mMac reads it before each backend start and sends it in `start`. The backend keeps it in memory only. **Make new token** writes the new token back to the Keychain. Debug builds can use another service, named in `MMAC_KEYCHAIN_SERVICE` (see `docs/changing-things.md`).
+- **The port.** mMac and Muse Desktop both use port 7735 by default. Run the MCP bridge in one app at a time. If the port is in use, the Bridges pane shows "Port 7735 is in use. Choose another port." Choose another port in one of the apps if you need both.
+
+To read the token without mMac, run this in Terminal:
+
+```sh
+security find-generic-password -s com.domalhambra.mmac.bridge-token -a mcp-bridge -w
+```
+
+Warning: macOS asks for your login password first, because `security` is not on the item's access list. **Copy token** in the Bridges pane gives the same token with no prompt.
+
+mMac is signed ad hoc, so each rebuild of mMac has a new code identity. The Keychain item trusts only the build that made it. After a rebuild, mMac asks for your login password when it reads the token at launch. Choose **Always Allow**. A stable signing identity, such as an Apple Development certificate, would stop this prompt.
+
+If the Keychain refuses a new token, the MCP bridge still uses it. **Copy token** copies it until mMac or its backend restarts, and a warning row says so. After a restart, agents that use that token lose access. Make a new token to try the save again.
+
 ## Security
 
 - A bridge accepts work only for trusted projects in the Muse Desktop project list, and for conversations in those projects. Worktrees count as part of their project. A project that drops off the list of 30 recent projects loses bridge access until you open it again.
 - The MCP bridge listens on `127.0.0.1` only. Every request must carry the bearer token. Muse Desktop compares the token in constant time.
-- The token is not stored in the preferences. Muse Desktop keeps it in the `bridge-token` file, encrypted with Electron `safeStorage`. On macOS that uses the Keychain. On Linux, `safeStorage` can fall back to a weak built-in key. When `safeStorage` is not available, the file holds the token as plain text with permissions for your user only.
+- The token is not stored in the preferences. Muse Desktop keeps it in the `bridge-token` file, encrypted with Electron `safeStorage`. On macOS that uses the Keychain. On Linux, `safeStorage` can fall back to a weak built-in key. When `safeStorage` is not available, the file holds the token as plain text with permissions for your user only. mMac keeps its token in the login Keychain instead (see mMac above).
 - Muse Desktop creates the bridge folder with permissions for your user only, and writes its own files the same way. Files that another agent writes keep the permissions that agent gives them. Any program that runs as your user can write requests into the folder. Turn the folder bridge off when you do not use it.
 - Muse Code applies its usual sandbox and approval rules to bridge jobs. A bridge decides an approval with one of the choices Muse offers, and Muse checks the choice.
