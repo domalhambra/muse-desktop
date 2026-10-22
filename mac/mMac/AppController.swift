@@ -103,8 +103,9 @@ final class AppController {
         }
         await self.backendStopped(client)
       }
-      _ = try await client.hello()
-      let started = try await client.start(dataFolder: Self.dataFolder(), bridgeToken: token)
+      // Fails after 15 seconds when the backend runs but never answers, so the setup screen and
+      // its Try again show instead of a spinner for ever.
+      let started = try await client.handshake(dataFolder: Self.dataFolder(), bridgeToken: token)
       let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
       reopen = nil
       // Electron posts unless its window has focus, and with no window it posts too. mMac counts
@@ -133,6 +134,8 @@ final class AppController {
       transport = nil
       asks.cancelAll()
       launched?.close()
+      // A backend that never answered may not quit when its input closes either.
+      if case BackendError.noAnswer = error { launched?.forceStop() }
       let details = await Self.errorOutput(of: launched)
       phase = .setupFailed(message: error.localizedDescription, details: details)
     }

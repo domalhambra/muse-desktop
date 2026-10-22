@@ -263,3 +263,48 @@ private func waitFor(_ condition: () -> Bool) async throws {
   await #expect(throws: CancellationError.self) { try await task.value }
   #expect(backend.messages.isEmpty)
 }
+
+@Test(.timeLimit(.minutes(1))) func theHandshakeSendsHelloThenStart() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "hello": return [#"{"id":\#(id),"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#]
+    case "start": return [#"{"id":\#(id),"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#]
+    default: return []
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let started = try await client.handshake(
+    dataFolder: URL(fileURLWithPath: "/d"), bridgeToken: "secret", timeout: .seconds(10))
+  #expect(started.status.state == "ready")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [["hello", [1]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
+}
+
+@Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersHelloFailsTheHandshake() async throws {
+  // Alive, reading its input, and silent: mMac must not wait on it for ever.
+  let backend = ScriptedBackend { _ in [] }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let timeout = Duration.milliseconds(200)
+  await #expect(throws: BackendError.noAnswer(method: "hello", after: timeout)) {
+    _ = try await client.handshake(dataFolder: URL(fileURLWithPath: "/d"), timeout: timeout)
+  }
+  #expect(backend.messages.map { $0["method"] } == ["hello"])
+}
+
+@Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersStartFailsTheHandshake() async throws {
+  let backend = ScriptedBackend { message in
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let timeout = Duration.milliseconds(200)
+  await #expect(throws: BackendError.noAnswer(method: "start", after: timeout)) {
+    _ = try await client.handshake(dataFolder: URL(fileURLWithPath: "/d"), timeout: timeout)
+  }
+  #expect(BackendError.noAnswer(method: "start", after: .seconds(15)).localizedDescription
+    == "The Muse backend did not answer start within 15 seconds.")
+}

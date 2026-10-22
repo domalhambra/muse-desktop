@@ -63,6 +63,48 @@ public actor BackendClient {
     }
   }
 
+  /// How long the launch handshake may take in all.
+  public static let handshakeTimeout: Duration = .seconds(15)
+
+  /// The launch handshake: `hello`, then `start`, within `timeout` in all. A backend that is
+  /// running but never answers fails with `BackendError.noAnswer` for the request it left
+  /// unanswered, instead of leaving mMac starting for ever. Each step is logged.
+  public func handshake(
+    dataFolder: URL, bridgeToken: String = "", timeout: Duration = handshakeTimeout
+  ) async throws -> Started {
+    let deadline = ContinuousClock.now + timeout
+    Self.log.info("Sent hello")
+    _ = try await answer("hello", by: deadline, timeout: timeout) { try await self.hello() }
+    Self.log.info("Got hello")
+    Self.log.info("Sent start")
+    let started = try await answer("start", by: deadline, timeout: timeout) {
+      try await self.start(dataFolder: dataFolder, bridgeToken: bridgeToken)
+    }
+    Self.log.info("Got start")
+    return started
+  }
+
+  /// `work`'s result, or `BackendError.noAnswer` once `deadline` passes. The request then stops
+  /// waiting, as a cancelled caller's does.
+  private func answer<T: Sendable>(
+    _ method: String, by deadline: ContinuousClock.Instant, timeout: Duration,
+    _ work: @escaping @Sendable () async throws -> T
+  ) async throws -> T {
+    try await withThrowingTaskGroup(of: T?.self) { group in
+      group.addTask { try await work() }
+      group.addTask {
+        try await Task.sleep(until: deadline, clock: .continuous)
+        return nil
+      }
+      defer { group.cancelAll() }
+      guard let first = try await group.next(), let value = first else {
+        Self.log.error("No answer to \(method, privacy: .public) in time")
+        throw BackendError.noAnswer(method: method, after: timeout)
+      }
+      return value
+    }
+  }
+
   /// Stops waiting for a request whose caller was cancelled.
   private func abandon(_ id: Int) {
     pending.removeValue(forKey: id)?.resume(throwing: CancellationError())

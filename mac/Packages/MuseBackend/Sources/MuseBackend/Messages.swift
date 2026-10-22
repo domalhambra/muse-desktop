@@ -10,13 +10,23 @@ public enum BackendError: Error, Equatable, LocalizedError {
   case unreadable(String)
   /// The backend process ended.
   case stopped
+  /// The backend is running but did not answer `method` in time, so mMac stopped waiting.
+  case noAnswer(method: String, after: Duration)
 
   public var errorDescription: String? {
     switch self {
     case .backend(let message): message
     case .unreadable(let detail): "mMac could not read a backend message. \(detail)"
     case .stopped: "The Muse backend stopped."
+    case .noAnswer(let method, let after):
+      "The Muse backend did not answer \(method) within \(Self.seconds(after)) seconds."
     }
+  }
+
+  /// `duration` in seconds, without a trailing ".0": "15", "0.2".
+  private static func seconds(_ duration: Duration) -> String {
+    let (whole, fraction) = duration.components
+    return String(format: "%g", Double(whole) + Double(fraction) / 1e18)
   }
 }
 
