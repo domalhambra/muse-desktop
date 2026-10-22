@@ -355,22 +355,26 @@ describe('headless backend, M1 methods', () => {
     expect(await call('output', 's1', 'i1')).toBe('stored output')
     expect(asks).toHaveLength(0)
   })
+
   it('asks before reconnecting during a turn, and checks for a quit after the Ask', async () => {
     const muse = fakeMuse({ hasActiveTurns: vi.fn(() => true) })
     const { call, start, asks } = harness(muse, [1, 0])
     await start()
-    muse.connect.mockClear()
+    await call('preferences', { cliPath: '/opt/muse' })
+    vi.mocked(muse.connect).mockClear()
     expect(await call('connect')).toEqual(ready)
     expect(muse.connect).not.toHaveBeenCalled()
     expect(asks[0].title).toBe('Reconnect while Muse is working?')
     expect(asks[0].buttons).toEqual(['Reconnect', 'Cancel'])
     await call('connect')
+    expect(asks).toHaveLength(2)
     expect(muse.connect).toHaveBeenCalledTimes(1)
+    expect(muse.connect).toHaveBeenCalledWith('/opt/muse')
 
     // A quit that starts while the Ask shows: the answer comes back, but connect must stop.
     const quitting = createBackendWithAskThatQuits(muse)
     await quitting.start()
-    muse.connect.mockClear()
+    vi.mocked(muse.connect).mockClear()
     await expect(quitting.call('connect')).rejects.toThrow('The backend is quitting.')
     expect(muse.connect).not.toHaveBeenCalled()
   })
