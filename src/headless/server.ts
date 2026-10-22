@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
 import type { AppEvent } from '../shared/protocol'
 import { MuseHost, messageOf } from '../main/muse-host'
 import { publish } from '../main/event-bus'
@@ -13,6 +14,11 @@ import { Wire } from './wire'
 const writeOut = process.stdout.write.bind(process.stdout)
 for (const name of ['log', 'info', 'debug', 'warn'] as const) console[name] = console.error
 console.dir = (value: unknown) => console.error(value)
+
+// mMac passes the login shell's environment and names the real shell in MMAC_LOGIN_SHELL.
+// discoverCli would start the login shell again; the stub answers from this environment.
+if (process.env.MMAC_LOGIN_SHELL)
+  process.env.SHELL = fileURLToPath(new URL('./login-env.sh', import.meta.url))
 
 const { version } = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
