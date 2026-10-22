@@ -20,6 +20,7 @@ Every document under `docs/`, with when to read it. The router is `CLAUDE.md` at
 | `superpowers/plans/2026-10-21-mmac-m0.md`                     | You check M0, mMac's spike: the headless backend, `MuseBackend` and a bare window. Built 2026-10-21. Ends with what M1 carries. |
 | `superpowers/plans/2026-10-21-mmac-m1.md`                     | You build or check M1, mMac's core loop. Built 2026-10-21. Ends with what M2 carries.                                           |
 | `superpowers/plans/2026-10-21-mmac-m1-electron-survey.md`     | You need Electron's exact strings, calls or edge cases for a mMac feature.                                                      |
+| `superpowers/plans/2026-10-21-mmac-m2.md`                     | You build or check M2, mMac's inspector.                                                                                        |
 
 The extensions plan itself was attached to the cloud session's first message and was never committed. The discovery record holds every difference from it.
 
