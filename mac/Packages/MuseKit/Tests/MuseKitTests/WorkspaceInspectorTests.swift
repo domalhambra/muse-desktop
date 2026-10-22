@@ -338,6 +338,21 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   #expect(requests(backend).filter { $0.first == "open" }.count == 1)
 }
 
+@MainActor @Test func aReopenNotYetDoneIsPendingUntilBeginOpensIt() async throws {
+  let (workspace, _) = await makeWorkspace(reopen: "s7") { method, _, id in
+    switch method {
+    case "sessions": [reply(id, #"{"sessions":[],"nextCursor":null}"#)]
+    case "models": [reply(id, "[]")]
+    case "open": [reply(id, viewJSON(sessionJSON("s7")))]
+    default: [reply(id, "[]")]
+    }
+  }
+  #expect(workspace.pendingReopen == "s7")
+  await workspace.begin()
+  #expect(workspace.view?.session.sessionId == "s7")
+  #expect(workspace.pendingReopen == nil)
+}
+
 @MainActor @Test func aConversationOpenedBeforeHistoryLoadsIsNotReplacedByTheReopen() async throws {
   // sessions gets no answer until the test pushes one; the person opens s2 meanwhile.
   let (workspace, backend) = await makeWorkspace(reopen: "s7") { method, args, id in

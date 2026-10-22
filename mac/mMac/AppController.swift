@@ -146,7 +146,8 @@ final class AppController {
   private func dropWorkspace() {
     if let workspace {
       drafts = workspace.drafts
-      reopen = workspace.openingSessionId ?? workspace.view?.session.sessionId
+      // A reopen the Workspace had not done yet, if it stopped while history loaded, carries on.
+      reopen = workspace.openingSessionId ?? workspace.view?.session.sessionId ?? workspace.pendingReopen
     }
     workspace = nil
   }

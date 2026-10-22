@@ -43,6 +43,9 @@ public final class Workspace {
   public internal(set) var composerFocusRequest = 0
   /// The conversation open before a backend restart, opened again once history has loaded.
   private var reopenSessionId: String?
+  /// The conversation `begin()` will reopen, until it does. A backend that stops before then hands
+  /// it on to the next Workspace.
+  public var pendingReopen: String? { reopenSessionId }
   /// How many `begin()` calls have not yet reached their final read of every badge. A `preferences`
   /// event meanwhile (history loading saves the recent projects) leaves the reading to that one.
   private var beginsRunning = 0
