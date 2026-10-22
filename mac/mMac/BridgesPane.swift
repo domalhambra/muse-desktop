@@ -92,6 +92,9 @@ struct BridgesPane: View {
               .padding(.horizontal, 6)
               .padding(.vertical, 4)
               .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
+              // Its own element, read as text, as the diff's lines are: see `DiffRow`.
+              .accessibilityElement(children: .ignore)
+              .accessibilityAddTraits(.isStaticText)
               .accessibilityLabel("New token, shown once")
               .accessibilityValue(token)
               .accessibilityIdentifier("bridge-new-token")

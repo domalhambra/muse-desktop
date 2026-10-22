@@ -349,9 +349,12 @@ struct DiffRow: View {
         .textSelection(.enabled)
         .fixedSize()
         // "Added, line 12, let b = 3": the tint and the gutter say it only to the eye. Its own
-        // element: a label set on selectable text itself resolves through the text's platform
-        // element, which asks SwiftUI for the label again, until the stack overflows.
+        // element, read as text: with the label set on the selectable text itself, in this row,
+        // any accessibility read of an open diff recursed through the label until the main
+        // thread's stack overflowed. Selectable labelled text elsewhere, such as the Bridges
+        // token, did not; the cause is this layout's, not the pairing's alone.
         .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)
         .accessibilityLabel(row.spoken)
       if let index = row.hunkIndex {
         Button("Revert hunk") { revert(index) }
