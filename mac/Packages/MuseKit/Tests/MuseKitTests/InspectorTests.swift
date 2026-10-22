@@ -271,6 +271,31 @@ let worktreesJSON =
   #expect(inspector.diff == .idle)
 }
 
+@MainActor @Test func filesAndAPreviewAcrossAProjectChangeAreDropped() async throws {
+  let (inspector, backend) = await makeInspector()  // the replies come late, below
+  let opening = Task { await inspector.open(directory: "src") }
+  let previewing = Task { await inspector.preview("README.md") }
+  try await eventually {
+    backend.messages.contains { $0["method"] == "files" } && backend.messages.contains { $0["method"] == "read-file" }
+  }
+  inspector.show(project: "/q")
+  guard case .number(let files)? = backend.messages.first(where: { $0["method"] == "files" })?["id"],
+    case .number(let read)? = backend.messages.first(where: { $0["method"] == "read-file" })?["id"]
+  else {
+    Issue.record("No files or read-file request")
+    return
+  }
+  backend.push(reply(Int(files), #"[{"name":"App.swift","path":"src/App.swift","directory":false}]"#))
+  backend.push(reply(Int(read), #""late""#))
+  await opening.value
+  await previewing.value
+  #expect(inspector.files.isEmpty)
+  #expect(inspector.directory == "")
+  #expect(!inspector.filesLoading)
+  #expect(inspector.previewPath == nil)
+  #expect(inspector.preview == .idle)
+}
+
 @MainActor @Test func aCancelledReadShowsNoMessage() async throws {
   let (inspector, backend) = await makeInspector()  // nothing answers
   let reads: [Task<Void, Never>] = [
