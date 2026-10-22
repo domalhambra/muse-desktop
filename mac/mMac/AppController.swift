@@ -23,8 +23,6 @@ final class AppController {
   /// Read once: in memory mode every read of `BridgeTokenStores.app` makes a new, empty store, so
   /// every `start` and every `SettingsModel` must share this one.
   let tokens: any BridgeTokenStore = BridgeTokenStores.app
-  /// Why the last launch could not read the bridge token. The backend then starts without one.
-  private(set) var tokenError: String?
   /// The last Workspace's unsent drafts, for the next backend's Workspace.
   private var drafts: [String: String] = [:]
   /// The conversation the last Workspace showed or was opening, or one whose notification was
@@ -72,8 +70,10 @@ final class AppController {
     // Read before the backend launches: the Keychain may wait on a password prompt, and no
     // backend must be running meanwhile, since one that died could not be restarted until this
     // start ends. An error does not stop the launch: the backend starts without a token, and the
-    // Settings window shows the error.
+    // Bridges pane shows the error.
     let token: String
+    // Why this launch could not read the token. The Bridges pane shows it through `SettingsModel`.
+    let tokenError: String?
     do {
       token = try await Self.readToken(from: tokens)
       tokenError = nil
@@ -119,9 +119,7 @@ final class AppController {
         }
       }
       self.workspace = workspace
-      let settings = SettingsModel(workspace: workspace, tokens: tokens)
-      settings.errorMessage = tokenError
-      self.settings = settings
+      self.settings = SettingsModel(workspace: workspace, tokens: tokens, tokenError: tokenError)
       phase = .running
       // A backend that stops while history loads shows the stopped screen. Its Restart must not
       // find this start still under way.

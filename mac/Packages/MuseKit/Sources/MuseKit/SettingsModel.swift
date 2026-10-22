@@ -16,18 +16,28 @@ public final class SettingsModel {
   /// After any MCP change: "Reconnect Muse Code to apply your changes."
   public private(set) var needsReconnect = false
   public private(set) var bridge: BridgeStatus?
+  /// Why the last quiet bridge read failed, shown as a lasting row while the Bridges pane polls.
+  /// Cleared by the next read that succeeds.
+  public private(set) var bridgeError: String?
+  /// Why mMac could not read the bridge token from the Keychain at launch. The backend then
+  /// started without one. The Bridges pane shows it as a lasting warning until a new token is
+  /// saved in the Keychain.
+  public private(set) var tokenError: String?
   /// A token made in this window, shown once.
   public private(set) var newToken: String?
   /// True while a new token is being made. The view disables Make token meanwhile.
   public private(set) var makingToken = false
   public var errorMessage: String?
   private var listSequence = 0
+  /// Numbers each bridge read, so a read that ends after a newer one started is dropped.
+  private var bridgeSequence = 0
   /// Counts the MCP changes made, so a reconnect knows whether one came in while it ran.
   private var changes = 0
 
-  public init(workspace: Workspace, tokens: any BridgeTokenStore) {
+  public init(workspace: Workspace, tokens: any BridgeTokenStore, tokenError: String? = nil) {
     self.workspace = workspace
     self.tokens = tokens
+    self.tokenError = tokenError
   }
 
   private var client: BackendClient { workspace.client }
@@ -103,8 +113,22 @@ public final class SettingsModel {
 
   // MARK: Bridges
 
-  public func refreshBridge() async {
-    do { bridge = try await client.bridgeStatus() } catch { errorMessage = error.localizedDescription }
+  /// Reads the bridge status. A failure shows in `errorMessage`, or with `quietly` only in
+  /// `bridgeError`, so the Bridges pane's poll raises no alert every time it runs. A read that
+  /// ends after a newer one started is dropped, so a poll never shows an older status than a save.
+  public func refreshBridge(quietly: Bool = false) async {
+    bridgeSequence += 1
+    let sequence = bridgeSequence
+    do {
+      let status = try await client.bridgeStatus()
+      guard sequence == bridgeSequence else { return }
+      bridge = status
+      bridgeError = nil
+    } catch {
+      guard sequence == bridgeSequence else { return }
+      bridgeError = error.localizedDescription
+      if !quietly { errorMessage = error.localizedDescription }
+    }
   }
 
   /// Saves a preference, and reads the bridge status again when it was a bridge field.
@@ -157,6 +181,8 @@ public final class SettingsModel {
     var keychainError: String?
     do {
       try tokens.write(token)
+      // The Keychain holds the backend's token now, so a failed read at launch no longer matters.
+      tokenError = nil
     } catch {
       keychainError = "mMac could not save the token in the Keychain: \(error.localizedDescription)"
       errorMessage = keychainError
@@ -165,6 +191,9 @@ public final class SettingsModel {
     // A failed status read must not hide that the token was not saved.
     if let keychainError { errorMessage = keychainError }
   }
+
+  /// Forgets the token shown once. The Bridges pane calls it when it closes.
+  public func clearNewToken() { newToken = nil }
 
   /// The token for Copy token: the one on screen, which is the only valid one when the Keychain
   /// refused it, or else the saved one.

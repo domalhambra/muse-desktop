@@ -89,10 +89,3 @@ struct MuseCodeSettingsButton<Label: View>: View {
     }
   }
 }
-
-// A placeholder until its pane is written. It is replaced by its own file.
-
-struct BridgesPane: View {
-  let settings: SettingsModel
-  var body: some View { Text("Bridges") }
-}

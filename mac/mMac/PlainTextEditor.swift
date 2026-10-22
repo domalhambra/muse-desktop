@@ -153,6 +153,10 @@ struct PlainTextField: NSViewRepresentable {
   let accessibilityLabel: String
   @Binding var text: String
   var placeholder = ""
+  /// The accessibility identifier, for UI tests.
+  var identifier = ""
+  /// Told when editing ends: on Return, and when the field loses focus.
+  var onEndEditing: (@MainActor () -> Void)?
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -180,6 +184,7 @@ struct PlainTextField: NSViewRepresentable {
     if field.stringValue != text { field.stringValue = text }
     field.placeholderString = placeholder
     field.setAccessibilityLabel(accessibilityLabel)
+    if !identifier.isEmpty { field.setAccessibilityIdentifier(identifier) }
   }
 
   final class Coordinator: NSObject, NSTextFieldDelegate {
@@ -190,6 +195,12 @@ struct PlainTextField: NSViewRepresentable {
     func controlTextDidChange(_ notification: Notification) {
       guard let field = notification.object as? NSTextField else { return }
       parent.text = field.stringValue
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+      guard let onEndEditing = parent.onEndEditing else { return }
+      // Told after AppKit's responder change, never inside a SwiftUI update.
+      Task { @MainActor in onEndEditing() }
     }
   }
 }

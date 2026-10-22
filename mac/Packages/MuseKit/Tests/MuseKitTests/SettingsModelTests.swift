@@ -383,3 +383,84 @@ private func listJSON(_ names: String...) -> String {
   await first.value
   #expect(settings.servers.map(\.name) == ["second"])
 }
+
+@MainActor @Test func aQuietBridgeReadThatFailsShowsARowAndNoAlert() async {
+  let reads = Counter()
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    guard method == "bridge-status" else { return [] }
+    // The first two reads fail; the third succeeds.
+    return reads.next() <= 2 ? [failure(id, "The backend is busy.")] : [reply(id, bridgeJSON)]
+  }
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
+  await settings.refreshBridge(quietly: true)
+  await settings.refreshBridge(quietly: true)
+  #expect(settings.errorMessage == nil)
+  #expect(settings.bridgeError == "The backend is busy.")
+  await settings.refreshBridge(quietly: true)
+  #expect(settings.bridgeError == nil)
+  #expect(settings.bridge?.folder == "/d/bridge")
+  #expect(settings.errorMessage == nil)
+}
+
+@MainActor @Test func anOlderBridgeReadThatEndsLateIsDropped() async throws {
+  let reads = Counter()
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    // The first read waits; the second answers at once.
+    guard method == "bridge-status", reads.next() == 2 else { return [] }
+    return [reply(id, bridgeJSON)]
+  }
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
+  let first = Task { await settings.refreshBridge(quietly: true) }
+  try await eventually { backend.messages.contains { $0["method"] == "bridge-status" } }
+  await settings.refreshBridge()
+  #expect(settings.bridge?.mcp.hasToken == true)
+  guard case .number(let lateId)? = backend.messages.first(where: { $0["method"] == "bridge-status" })?["id"] else {
+    Issue.record("No first bridge-status request")
+    return
+  }
+  backend.push(failure(Int(lateId), "late"))
+  await first.value
+  #expect(settings.bridgeError == nil)
+  #expect(settings.bridge?.mcp.hasToken == true)
+}
+
+@MainActor @Test func aKeychainReadErrorLastsUntilATokenIsSaved() async {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "bridge-token": [reply(id, #""t""#)]
+    case "bridge-status": [reply(id, bridgeJSON)]
+    default: []
+    }
+  }
+  let message = "mMac could not read the bridge token from the Keychain: denied"
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore(), tokenError: message)
+  #expect(settings.tokenError == message)
+  // Shown as a lasting row, never as the Settings window's alert.
+  #expect(settings.errorMessage == nil)
+  await settings.refreshBridge()
+  #expect(settings.tokenError == message)
+  await settings.makeToken()
+  #expect(settings.tokenError == nil)
+  // A Keychain that refuses the new token keeps the warning.
+  let refused = SettingsModel(workspace: workspace, tokens: FailingTokenStore(), tokenError: message)
+  await refused.makeToken()
+  #expect(refused.tokenError == message)
+}
+
+@MainActor @Test func clearingTheNewTokenHidesIt() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "bridge-token": [reply(id, #""once""#)]
+    case "bridge-status": [reply(id, bridgeJSON)]
+    default: []
+    }
+  }
+  let tokens = MemoryTokenStore()
+  let settings = SettingsModel(workspace: workspace, tokens: tokens)
+  await settings.makeToken()
+  #expect(settings.newToken == "once")
+  settings.clearNewToken()
+  #expect(settings.newToken == nil)
+  // Copy token still gives the saved token.
+  #expect(try settings.copyToken() == "once")
+}
