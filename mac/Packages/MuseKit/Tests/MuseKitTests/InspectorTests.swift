@@ -482,7 +482,8 @@ let worktreesJSON =
     case "git-status": [reply(id, statusJSON(["a.txt"]))]
     case "git-diff": [reply(id, jsonText("Working changes\n" + twoHunks))]
     case "git-raw-diff": [reply(id, jsonText(twoHunks))]
-    case "git-revert-hunk": [failure(id, Inspector.staleHunk)]
+    // The backend's own words (src/headless/revert-hunk.ts), typed out so the two cannot drift.
+    case "git-revert-hunk": [failure(id, "The file changed since this diff was read. Refresh the diff, then try again.")]
     default: [reply(id, "[]")]
     }
   }
@@ -531,4 +532,23 @@ let worktreesJSON =
   #expect(inspector.diffMetrics != empty)
   inspector.show(project: "/q")
   #expect(inspector.diffMetrics == empty)
+}
+
+@MainActor @Test func aFailedRawReadSaysSoInsteadOfCallingTheFileChanged() async throws {
+  let (inspector, backend) = await makeInspector { method, _, id in
+    switch method {
+    case "git-status": [reply(id, statusJSON(["a.txt"]))]
+    case "git-diff": [reply(id, jsonText("Working changes\n" + twoHunks))]
+    case "git-raw-diff": [failure(id, "git failed")]
+    default: [reply(id, "[]")]
+    }
+  }
+  var reported: [String] = []
+  inspector.reportError = { reported.append($0) }
+  await inspector.select("a.txt")
+  guard case .loaded = inspector.diff else { Issue.record("The diff should still show"); return }
+  await inspector.revertHunk(0)
+  #expect(!backend.messages.contains { $0["method"] == "git-revert-hunk" })
+  #expect(reported == ["mMac could not read this diff again. Refresh the diff, then try again."])
+  #expect(requests(backend).filter { $0.first == "git-raw-diff" }.count == 2)
 }

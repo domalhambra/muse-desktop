@@ -327,7 +327,8 @@ final class ManualClock: Clock, Sendable {
   func advance(by duration: Duration) { current.withLock { $0 = $0.advanced(by: duration) } }
 
   func sleep(until deadline: Instant, tolerance: Duration?) async throws {
-    throw CancellationError()  // the cache never sleeps
+    Issue.record("unexpected sleep")  // the cache never sleeps
+    throw CancellationError()
   }
 }
 

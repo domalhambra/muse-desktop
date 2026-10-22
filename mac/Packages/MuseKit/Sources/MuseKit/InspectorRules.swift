@@ -39,8 +39,12 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
   public static let longLine = 2_000
 
   /// A diff line as the diff view shows it: cut after `longLine` characters, ending in "…".
+  /// It walks at most `longLine` characters, not the whole line, since it runs on every render.
   public static func display(_ text: String) -> String {
-    text.count > longLine ? String(text.prefix(longLine)) + "…" : text
+    guard let cut = text.index(text.startIndex, offsetBy: longLine, limitedBy: text.endIndex),
+      cut != text.endIndex
+    else { return text }
+    return String(text[..<cut]) + "…"
   }
 
   /// The hunks of a raw `git diff`, exactly as `splitHunks` in src/main/git.ts cuts them: one final

@@ -30,10 +30,17 @@ public final class Inspector {
   public private(set) var diff: Loadable<[DiffLine]> = .idle
   /// The loaded diff's measurements, taken once when it loads rather than on every render.
   public private(set) var diffMetrics = Inspector.noMetrics
-  /// The working-tree hunks of the loaded diff, cut from `git-raw-diff` as the backend cuts them.
-  /// Revert hunk sends one, so the backend reverts the hunk the person saw or refuses. Nil when that
-  /// read failed or does not match the diff shown.
-  private var rawHunks: [String]?
+  /// Where Revert hunk takes the hunk text it sends, so the backend reverts the hunk the person
+  /// saw or refuses.
+  private enum RawHunks {
+    /// `git-raw-diff` has not answered for the diff shown, or failed.
+    case unread
+    /// The raw diff does not match the diff shown: the file changed between the two reads.
+    case mismatched
+    /// The working-tree hunks, cut from `git-raw-diff` as the backend cuts them.
+    case read([String])
+  }
+  private var rawHunks = RawHunks.unread
   /// True while a review or worktree action runs. The buttons are disabled meanwhile.
   public private(set) var busy = false
   /// A successful merge's message, until the next action.
@@ -79,6 +86,9 @@ public final class Inspector {
   /// mMac shows it too when it cannot tell which hunk the person saw.
   nonisolated public static let staleHunk =
     "The file changed since this diff was read. Refresh the diff, then try again."
+  /// Shown when the raw diff that Revert hunk sends from could not be read.
+  nonisolated public static let unreadHunk =
+    "mMac could not read this diff again. Refresh the diff, then try again."
 
   init(client: BackendClient, project: String) {
     self.client = client
@@ -98,7 +108,7 @@ public final class Inspector {
     selected = nil
     diff = .idle
     diffMetrics = Self.noMetrics
-    rawHunks = nil
+    rawHunks = .unread
     busy = false
     notice = nil
     directory = ""
@@ -169,7 +179,7 @@ public final class Inspector {
   public func select(_ path: String) async {
     selected = path
     diff = .loading
-    rawHunks = nil
+    rawHunks = .unread
     await loadDiff()
   }
 
@@ -180,7 +190,7 @@ public final class Inspector {
     selected = path
     diffSequence += 1
     diff = .loading
-    rawHunks = nil
+    rawHunks = .unread
   }
 
   /// Back to the list of changed files.
@@ -189,7 +199,7 @@ public final class Inspector {
     diffSequence += 1
     diff = .idle
     diffMetrics = Self.noMetrics
-    rawHunks = nil
+    rawHunks = .unread
   }
 
   /// Loads the selected file's diff. A reload keeps the rows shown until the new ones arrive.
@@ -212,7 +222,7 @@ public final class Inspector {
       guard sequence == diffSequence, generation == self.generation else { return }
       let rows = DiffLine.parse(text)
       diffMetrics = DiffLine.metrics(rows)
-      rawHunks = raw.flatMap { raw in Self.ends(text, with: raw) ? DiffLine.rawHunks(raw) : nil }
+      rawHunks = raw.map { Self.ends(text, with: $0) ? .read(DiffLine.rawHunks($0)) : .mismatched } ?? .unread
       diff = .loaded(rows)
     } catch is CancellationError {
       // The caller stopped waiting, so nothing shows a message; the next select or refresh loads it.
@@ -249,10 +259,15 @@ public final class Inspector {
   /// backend refuses if the file changed since the diff was read. Either way the diff reloads.
   public func revertHunk(_ index: Int) async {
     guard let path = selected else { return }
-    let hunk = rawHunks.flatMap { $0.indices.contains(index) ? $0[index] : nil }
+    let source = rawHunks
     await act { client, project in
-      guard let hunk else { throw WorkspaceError(Self.staleHunk) }
-      try await client.revertHunk(project: project, path: path, index: index, expected: hunk)
+      switch source {
+      case .unread: throw WorkspaceError(Self.unreadHunk)
+      case .mismatched: throw WorkspaceError(Self.staleHunk)
+      case .read(let hunks):
+        guard hunks.indices.contains(index) else { throw WorkspaceError(Self.staleHunk) }
+        try await client.revertHunk(project: project, path: path, index: index, expected: hunks[index])
+      }
       return nil
     }
   }
