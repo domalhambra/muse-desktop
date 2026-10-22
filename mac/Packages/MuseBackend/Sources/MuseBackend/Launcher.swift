@@ -62,6 +62,7 @@ public enum Launcher {
       DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
         // Still running at the deadline: kill it and return nil. Exited, but a child holds
         // stdout: return what was read.
+        // The kill applies even after a reply: a shell that closed stdout but still runs is killed.
         if state.stillRunning {
           kill(pid, SIGKILL)
           state.giveUp()

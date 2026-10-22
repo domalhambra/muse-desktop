@@ -93,7 +93,10 @@ private func shell(_ script: String) throws -> ProcessTransport {
   // The child writes its last line to stderr after stdout has closed, as a crash trace can.
   let transport = try shell(#"exec 1>&-; sleep 0.3; echo "last words" >&2"#)
   for await _ in transport.lines {}
+  let start = ContinuousClock.now
   #expect(await transport.errorOutput(waitingUpTo: .seconds(5)) == "last words")
+  // Well below the 5-second limit: the end of stderr, not the limit, ended the wait.
+  #expect(ContinuousClock.now - start < .seconds(2))
 }
 
 @Test(.timeLimit(.minutes(1))) func errorOutputStopsWaitingWhenAGrandchildHoldsStderr() async throws {

@@ -70,12 +70,13 @@ final class AppController {
       phase = .running
       await workspace.begin()
     } catch {
-      // A backend that failed to start is dropped, and its input closed so it quits.
+      // A backend that failed to start is dropped, and its input closed so it quits. Closing it
+      // first lets stderr end at once, though its tail may then include the shutdown output.
       client = nil
       transport = nil
       asks.cancelAll()
-      let details = await Self.errorOutput(of: launched)
       launched?.close()
+      let details = await Self.errorOutput(of: launched)
       phase = .setupFailed(message: error.localizedDescription, details: details)
     }
   }
