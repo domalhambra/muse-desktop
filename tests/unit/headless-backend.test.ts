@@ -9,7 +9,9 @@ import type {
   MuseSession,
   SessionView,
 } from '../../src/shared/protocol'
+import type { AgentApi, AgentPolicy } from '../../src/main/agent-api'
 import { createBackend, type Muse } from '../../src/headless/backend'
+import type { BridgeFactories } from '../../src/headless/bridges'
 import { HEADLESS_PROTOCOL, type Ask } from '../../src/headless/wire'
 
 let dir = ''
@@ -79,8 +81,23 @@ function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
   const asks: Ask[] = []
   const events: AppEvent[] = []
   const terminal: string[] = []
+  const bridgeLog: string[] = []
+  const policies: AgentPolicy[] = []
   const quit = vi.fn()
   let quitting = false
+  const bridgeFactories: BridgeFactories = {
+    files: (root) => ({
+      start: async () => void bridgeLog.push(`files start ${root}`),
+      stop: async () => void bridgeLog.push('files stop'),
+    }),
+    mcp: (_api, options) => ({
+      start: async () => {
+        if (!options.token) throw new Error('Make a bridge token first.')
+        bridgeLog.push(`mcp start ${options.port}`)
+      },
+      stop: async () => void bridgeLog.push('mcp stop'),
+    }),
+  }
   const backend = createBackend({
     muse,
     emit: (event) => events.push(event),
@@ -88,6 +105,11 @@ function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
     openTerminal: async (command) => {
       terminal.push(command)
     },
+    agent: (policy) => {
+      policies.push(policy)
+      return { activeCount: 0 } as unknown as AgentApi
+    },
+    bridgeFactories,
     ask: async (value) => {
       asks.push(value)
       return answers.shift() ?? -1
@@ -111,10 +133,18 @@ function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
     asks,
     events,
     terminal,
+    bridgeLog,
     quit,
     call,
     start,
     lastPreferences,
+    backend,
+    /** The policy the backend gave the agent factory in start. */
+    agentPolicy: () => {
+      const policy = policies.at(-1)
+      if (!policy) throw new Error('The backend built no agent.')
+      return policy
+    },
     setQuitting: () => (quitting = true),
   }
 }
@@ -691,5 +721,112 @@ describe('headless backend, M3 MCP methods', () => {
       `cd '${homedir()}' && '/opt/muse' 'mcp' 'login' 'remote'`,
       `cd '${homedir()}' && '/opt/muse' 'mcp' 'logout' 'remote'`,
     ])
+  })
+})
+
+describe('headless backend, M3 bridges', () => {
+  it('takes the token in start and keeps it out of preferences and events', async () => {
+    const h = harness()
+    await h.call('hello', HEADLESS_PROTOCOL)
+    await h.call('start', { dataFolder: join(dir, 'data'), bridgeToken: 'tok-123' })
+    const status = (await h.call('bridge-status')) as { folder: string; mcp: { hasToken: boolean } }
+    expect(status.folder).toBe(join(dir, 'data', 'bridge'))
+    expect(status.mcp.hasToken).toBe(true)
+    await h.call('preferences', { bridgeFilesEnabled: true, bridgeMcpEnabled: true })
+    expect(await readFile(join(dir, 'data', 'preferences.json'), 'utf8')).not.toContain('tok-123')
+    expect(JSON.stringify(h.events)).not.toContain('tok-123')
+    expect(JSON.stringify(await h.call('bridge-status'))).not.toContain('tok-123')
+    expect(h.bridgeLog).toEqual([`files start ${join(dir, 'data', 'bridge')}`, 'mcp start 7735'])
+  })
+
+  it('refuses a token that is not a short string', async () => {
+    const h = harness()
+    await h.call('hello', HEADLESS_PROTOCOL)
+    await expect(
+      h.call('start', { dataFolder: join(dir, 'data'), bridgeToken: 'x'.repeat(257) }),
+    ).rejects.toThrow()
+    await expect(
+      h.call('start', { dataFolder: join(dir, 'data'), bridgeToken: 42 }),
+    ).rejects.toThrow()
+  })
+
+  it('syncs the bridges after start connects, as the preferences say', async () => {
+    const muse = fakeMuse()
+    const h = harness(muse)
+    await folder('data')
+    await writeFile(
+      join(dir, 'data', 'preferences.json'),
+      JSON.stringify({ bridgeFilesEnabled: true }),
+    )
+    await h.start()
+    expect(muse.connect).toHaveBeenCalled()
+    expect(h.bridgeLog).toEqual([`files start ${join(dir, 'data', 'bridge')}`])
+  })
+
+  it('makes a new token and reports it', async () => {
+    const h = harness()
+    await h.start()
+    expect(((await h.call('bridge-status')) as { mcp: { hasToken: boolean } }).mcp.hasToken).toBe(
+      false,
+    )
+    const token = (await h.call('bridge-token')) as string
+    expect(token).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    expect(((await h.call('bridge-status')) as { mcp: { hasToken: boolean } }).mcp.hasToken).toBe(
+      true,
+    )
+    expect(JSON.stringify(h.events)).not.toContain(token)
+  })
+
+  it('restarts a running MCP bridge with a new token', async () => {
+    const h = harness()
+    await h.call('hello', HEADLESS_PROTOCOL)
+    await h.call('start', { dataFolder: join(dir, 'data'), bridgeToken: 'tok-123' })
+    await h.call('preferences', { bridgeMcpEnabled: true })
+    await h.call('bridge-token')
+    expect(h.bridgeLog).toEqual(['mcp start 7735', 'mcp stop', 'mcp start 7735'])
+  })
+
+  it('syncs the bridges when a bridge preference is saved', async () => {
+    const h = harness()
+    await h.start()
+    await h.call('preferences', { bridgeFilesEnabled: true })
+    expect(((await h.call('bridge-status')) as { files: { running: boolean } }).files.running).toBe(
+      true,
+    )
+    await h.call('preferences', { reasoningEffort: 'low' })
+    await h.call('bridge-status')
+    expect(h.bridgeLog).toEqual([`files start ${join(dir, 'data', 'bridge')}`])
+  })
+
+  it('stops both bridges on the quit path', async () => {
+    const h = harness()
+    await h.start()
+    await h.call('preferences', { bridgeFilesEnabled: true })
+    await h.call('bridge-token')
+    await h.call('preferences', { bridgeMcpEnabled: true })
+    await h.backend.stopBridges()
+    expect(h.bridgeLog.slice(-2)).toEqual(['files stop', 'mcp stop'])
+  })
+
+  it('refuses agent work in a project that is not trusted', async () => {
+    const h = harness()
+    await h.start()
+    const project = await folder('untrusted')
+    await h.call('add-project', project)
+    await expect(h.agentPolicy().resolveProject(project)).rejects.toThrow(
+      'That project is not trusted in mMac. Open it there first.',
+    )
+  })
+
+  it('lets agent work into a trusted project and its Muse worktrees', async () => {
+    const h = harness(fakeMuse(), [0])
+    await h.start()
+    const project = await folder('trusted')
+    await h.call('add-project', project)
+    await h.call('create', project)
+    expect(await h.agentPolicy().resolveProject(project)).toBe(project)
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    await mkdir(worktree, { recursive: true })
+    expect(await h.agentPolicy().resolveProject(worktree)).toBe(worktree)
   })
 })

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { mkdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -28,10 +29,12 @@ import {
   setServerEnabled,
   settingsFile,
 } from '../main/mcp-config'
+import type { AgentApi, AgentPolicy } from '../main/agent-api'
 import type { MuseHost } from '../main/muse-host'
 import { readPreferences, writePreferences } from '../main/preferences'
 import { mergeWorktree, removeWorktree } from '../main/worktrees'
 import { projectRoot, worktreeParent } from '../shared/worktree'
+import { Bridges, type BridgeFactories } from './bridges'
 import { openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
@@ -76,6 +79,10 @@ export type BackendDeps = {
   quit: (code: number) => void
   /** Opens Terminal and runs one command line. Tests record it instead. */
   openTerminal?: (command: string) => Promise<void>
+  /** Builds the AgentApi behind both bridges. Without it, the backend runs no bridges. */
+  agent?: (policy: AgentPolicy) => AgentApi
+  /** The bridges to run. Tests pass fakes; the default is the real FileBridge and McpBridge. */
+  bridgeFactories?: BridgeFactories
 }
 
 export function createBackend({
@@ -86,6 +93,8 @@ export function createBackend({
   quitting,
   quit,
   openTerminal = openInTerminal,
+  agent,
+  bridgeFactories,
 }: BackendDeps) {
   const id = z.string().min(1).max(200)
   const pathSchema = z.string().min(1).max(4096)
@@ -95,6 +104,7 @@ export function createBackend({
   let preferences: Preferences | undefined
   let preferencePath = ''
   let preferenceWrites: Promise<void> = Promise.resolve()
+  let bridges: Bridges | undefined
 
   // Register every method with a literal call to method, name in quotes as the first argument:
   // tests/unit/headless-parity.test.ts finds them by that pattern.
@@ -118,6 +128,7 @@ export function createBackend({
       await writePreferences(preferencePath, snapshot)
       preferences = snapshot
       emit({ type: 'preferences', preferences: snapshot })
+      if (Object.keys(patch).some((key) => key.startsWith('bridge'))) void bridges?.sync()
       return snapshot
     })
     preferenceWrites = write.then(
@@ -186,16 +197,40 @@ export function createBackend({
     if (starting || preferences) throw new Error('The backend has already started.')
     starting = true
     try {
-      const { dataFolder } = z.object({ dataFolder: pathSchema }).parse(value)
+      // The bridge token comes from mMac's login Keychain. It stays in memory, in Bridges, only.
+      const { dataFolder, bridgeToken } = z
+        .object({ dataFolder: pathSchema, bridgeToken: z.string().max(256).optional() })
+        .parse(value)
       await mkdir(dataFolder, { recursive: true, mode: 0o700 })
       preferencePath = join(dataFolder, 'preferences.json')
       preferences = await readPreferences(preferencePath)
+      if (agent) {
+        // Bridges: other agents drive Muse Code through mMac, limited to projects mMac
+        // already knows and trusts, as in src/main/index.ts.
+        const api = agent({
+          resolveProject: async (path) => {
+            const project = await knownProject(path)
+            const trusted = current().trustedProjects
+            if (!trusted.includes(project) && !trusted.includes(projectRoot(project)))
+              throw new Error('That project is not trusted in mMac. Open it there first.')
+            return project
+          },
+        })
+        bridges = new Bridges({
+          root: join(dataFolder, 'bridge'),
+          token: bridgeToken ?? '',
+          api,
+          preferences: current,
+          factories: bridgeFactories,
+        })
+      }
     } catch (error) {
       starting = false
       throw error
     }
     if (quitting()) throw new Error('The backend is quitting.')
     const status = await muse.connect(preferences.cliPath)
+    await bridges?.sync() // As Electron does, after the first connect.
     return { preferences, status }
   })
 
@@ -299,7 +334,6 @@ export function createBackend({
 
   method('cancel', (value) => muse.cancel(id.parse(value)))
 
-  // Electron also restarts the bridges when a bridge* key changes; mMac adds that with the bridges in M3.
   method('preferences', (value) => savePreferences(preferencesPatchSchema.parse(value)))
 
   method('rename', async (session, name) => {
@@ -441,6 +475,22 @@ export function createBackend({
     )
   })
 
+  // The bridges, as src/main/index.ts registers them. mMac reveals the folder and copies the
+  // token itself; the token goes back to mMac, which stores it in the login Keychain.
+  function running() {
+    if (!bridges) throw new Error('This backend has no bridges.')
+    return bridges
+  }
+
+  method('bridge-status', () => running().status())
+
+  method('bridge-token', async () => {
+    const token = randomBytes(24).toString('base64url')
+    running().setToken(token)
+    await running().sync() // A running MCP bridge restarts, so the old token stops working.
+    return token
+  })
+
   method('shutdown', async () => {
     if (muse.hasActiveTurns()) {
       const choice = await ask({
@@ -459,5 +509,7 @@ export function createBackend({
     methods,
     /** Settles after every preference write queued so far. */
     preferenceWrites: () => preferenceWrites,
+    /** Stops both bridges for good: the quit path. */
+    stopBridges: () => bridges?.stop() ?? Promise.resolve(),
   }
 }
