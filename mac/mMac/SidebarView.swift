@@ -39,8 +39,11 @@ struct SidebarView: View {
         // The label is for VoiceOver only, as in Electron, so project names fit at 240 points.
         .labelsHidden()
         .id(pickerGeneration)
+        // A worktree's own status first (its branch), else its project's.
         if !workspace.project.isEmpty,
-          let git = workspace.projectGit[ProjectPath.root(of: workspace.project)], git.isRepository
+          let git = workspace.projectGit[workspace.project]
+            ?? workspace.projectGit[ProjectPath.root(of: workspace.project)],
+          git.isRepository
         {
           HStack(spacing: 6) {
             Label(git.branch, systemImage: "arrow.triangle.branch")
@@ -64,9 +67,11 @@ struct SidebarView: View {
       return .handled
     }
     .onChange(of: workspace.view?.session.sessionId) { highlighted = nil }
+    .onChange(of: workspace.project) { highlighted = nil }
     // `sections` groups by `.now` each time the list draws, so this moves yesterday's rows.
-    // The notification is posted on the main thread.
-    .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in redraw += 1 }
+    .onReceive(
+      NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)
+    ) { _ in redraw += 1 }
     .safeAreaInset(edge: .bottom) { connectionFooter }
   }
 
@@ -111,13 +116,20 @@ struct SidebarView: View {
           redraw += 1
           return
         }
-        if NSApp.currentEvent?.type == .keyDown {
+        if Self.isKeyEvent(NSApp.currentEvent) {
           highlighted = sessionId
           return
         }
         highlighted = nil
         Task { await workspace.open(sessionId) }
       })
+  }
+
+  /// A key press that is still being handled. `currentEvent` keeps the last event after it is
+  /// handled, so an older key press must not turn a later change into a highlight.
+  private static func isKeyEvent(_ event: NSEvent?) -> Bool {
+    guard let event, event.type == .keyDown else { return false }
+    return ProcessInfo.processInfo.systemUptime - event.timestamp < 0.3
   }
 
   @ViewBuilder private var history: some View {
@@ -137,6 +149,16 @@ struct SidebarView: View {
         ForEach(section.sessions) { session in
           SessionRow(session: session, showProject: workspace.project.isEmpty)
             .tag(session.sessionId)
+            .contentShape(.rect)
+            // A click on the row the arrow keys moved to: the selection does not change, so the
+            // binding is not set. An ordinary click clears `highlighted` on mouse-down first, so
+            // it does not open twice.
+            .simultaneousGesture(
+              TapGesture().onEnded {
+                guard highlighted == session.sessionId else { return }
+                highlighted = nil
+                Task { await workspace.open(session.sessionId) }
+              })
         }
       }
     }

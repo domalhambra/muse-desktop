@@ -34,8 +34,9 @@ public final class Workspace {
   }
   /// The inspector for `project`.
   public let inspector: Inspector
-  /// Git status per recent project, for the sidebar's badges. A folder whose status could not be
-  /// read has no entry; one outside a repository has a status with `isRepository` false.
+  /// Git status per recent project and the current one, for the sidebar's badges. A folder whose
+  /// status could not be read has no entry; one outside a repository has a status with
+  /// `isRepository` false.
   public internal(set) var projectGit: [String: GitStatus] = [:]
   /// Start the next new conversation in its own Muse-created Git worktree.
   public var startInWorktree = false
@@ -132,9 +133,11 @@ public final class Workspace {
     await refreshProjectGit()
   }
 
-  /// Reads the Git status of `only` these projects, or of every recent project, for the badges.
+  /// Reads the Git status of `only` these projects, or of every recent project and the current one
+  /// (a worktree conversation's folder is not a recent project), for the badges.
   public func refreshProjectGit(_ only: [String]? = nil) async {
-    let paths = only ?? preferences.recentProjects
+    var paths = only ?? preferences.recentProjects
+    if only == nil, !project.isEmpty, !paths.contains(project) { paths.append(project) }
     var sequence: Int?
     if only == nil {
       projectGitSequence += 1

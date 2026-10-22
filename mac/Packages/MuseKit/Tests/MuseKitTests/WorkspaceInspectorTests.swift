@@ -148,6 +148,31 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   #expect(workspace.projectGit[root] == nil)
 }
 
+@MainActor @Test func aFullBadgeReadAlsoReadsTheCurrentProject() async throws {
+  // A worktree conversation's folder is not a recent project, but the sidebar shows its badge.
+  let root = "/p/.muse/worktrees/w1"
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("w1", root: root)))]
+    case "git-status": [reply(id, statusJSON(args.first == .string(root) ? ["w.txt"] : []))]
+    default: []
+    }
+  }
+  await workspace.open("w1")
+  #expect(workspace.project == root)
+  await workspace.refreshProjectGit()
+  #expect(statusReads(backend, .string(root)) == 1)
+  #expect(workspace.projectGit.keys.sorted() == ["/p", root])
+  #expect(workspace.projectGit[root]?.changes.map(\.path) == ["w.txt"])
+  // A later full read keeps it.
+  await workspace.refreshProjectGit()
+  #expect(workspace.projectGit.keys.sorted() == ["/p", root])
+  // The current project is read once, not twice, when it is also a recent project.
+  workspace.selectProject("/p")
+  await workspace.refreshProjectGit()
+  #expect(statusReads(backend, "/p") == 3)
+}
+
 @MainActor @Test func recentProjectsSavedDuringBeginAreReadOnceByBegin() async throws {
   // sessions gets no answer until the test pushes one; history loading saves the recent projects.
   let (workspace, backend) = await makeWorkspace { method, _, id in
