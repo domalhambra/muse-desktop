@@ -104,13 +104,13 @@ The gate is in "Prove a change" in `docs/changing-things.md`: the six commands t
 
 ## Milestones
 
-| Milestone     | Done when                                                                                                                                                                              |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M0: spike     | Done 2026-10-21. `server.ts` and a bare window connect to Muse, list conversations and stream one echo turn. `npm run test:headless` (`scripts/verify-headless.ts`) passes.            |
-| M1: core loop | Done 2026-10-21. Projects, sidebar, conversation list, streamed transcripts with Markdown and code blocks, composer (send, stop, queue, steer), approvals, questions, model and effort |
-| M2: inspector | Native resizable inspector: file previews, Git status and diffs, diff review with a labeled **Revert hunk** button on each hunk, worktrees                                             |
-| M3: Settings  | A macOS Settings window: Muse Code path, MCP servers, bridges, appearance, notifications                                                                                               |
-| M4: the rest  | Everything else on the parity checklist                                                                                                                                                |
+| Milestone     | Done when                                                                                                                                                                                                   |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0: spike     | Done 2026-10-21. `server.ts` and a bare window connect to Muse, list conversations and stream one echo turn. `npm run test:headless` (`scripts/verify-headless.ts`) passes.                                 |
+| M1: core loop | Done 2026-10-21. Projects, sidebar, conversation list, streamed transcripts with Markdown and code blocks, composer (send, stop, queue, steer), approvals, questions, model and effort                      |
+| M2: inspector | Built 2026-10-22. The UI tests and the live run are not run yet. Native resizable inspector: file previews, Git status and diffs, diff review with a labeled **Revert hunk** button on each hunk, worktrees |
+| M3: Settings  | A macOS Settings window: Muse Code path, MCP servers, bridges, appearance, notifications                                                                                                                    |
+| M4: the rest  | Everything else on the parity checklist                                                                                                                                                                     |
 
 Each milestone is one PR from its own branch into the fork's `extensions` branch: M0 from `mac-app`, M1 from `mac-m1`, M2 from `mac-m2`. Dom merges.
 
@@ -127,12 +127,12 @@ Each item names the test that proves it, or the date of a manual check when no t
 - [x] Model selection and reasoning effort (M1; `theDefaultModelIsChosenAndModelsChangeWhereTheyShould`, `effortIsSavedAsAPreference`, the fake-backend UI test)
 - [x] Imports existing CLI history and discovers its project folders (M1; `historyFollowsEveryPage`, `historyKeepsATitleAndPromptTheListOmits`, the history test in `tests/unit/headless-backend.test.ts`)
 - [x] Project trust prompt (M1; `npm run test:headless`, the echo UI test)
-- [ ] Projects with Git branch and working-tree status badges (M2)
-- [ ] File previews with breadcrumbs and file-type icons (M2)
-- [ ] Line-numbered Git diffs in the inspector (M2)
-- [ ] Diff review: revert a hunk, revert a file, stage a file (M2)
-- [ ] Worktree conversations, and merge or remove in the inspector (M2)
-- [ ] Activity inspector for internal reminders and hooks (M2)
+- [x] Projects with Git branch and working-tree status badges (M2; `projectBadgesFollowTheRecentProjects`, `gitBadgesSayHowManyChanged`, `aWorktreeConversationReadsItsOwnBadge`)
+- [x] File previews with breadcrumbs and file-type icons (M2; `fileKindsFollowElectronsExtensionLists`, `breadcrumbsWalkFromTheRoot`, `filesOpenFoldersFilterAndPreview`)
+- [x] Line-numbered Git diffs in the inspector (M2; `diffLinesCarryNumbersAndWorkingHunkIndexes`)
+- [x] Diff review: revert a hunk, revert a file, stage a file (M2; the backend test "reverts a hunk, reverts a file and stages a file", `reviewActionsCallTheBackendThenRefresh`)
+- [x] Worktree conversations, and merge or remove in the inspector (M2; the backend test "merges and removes only Muse worktrees, and keeps a busy one", `aWorktreeConversationFollowsItsWorktree`, the worktree check in `npm run test:integration`)
+- [x] Activity inspector for internal reminders and hooks (M2; `activityKeepsInternalAndToolItemsWithElectronsLabels`)
 - [ ] Settings → Muse Code: executable path, connection status, reconnect (M3)
 - [ ] Settings → MCP servers, including OAuth sign-in through `muse mcp login` (M3)
 - [ ] Settings → Bridges: folder bridge and MCP bridge (M3)
