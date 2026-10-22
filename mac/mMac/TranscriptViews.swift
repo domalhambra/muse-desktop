@@ -115,10 +115,11 @@ struct EntryView: View {
 struct Avatar: View {
   enum Kind { case user, muse }
   let kind: Kind
+  @Environment(\.appearance) private var appearance
 
   var body: some View {
     ZStack {
-      Circle().fill(kind == .user ? Color.secondary.opacity(0.25) : Color.accentColor.opacity(0.25))
+      Circle().fill(kind == .user ? Color.secondary.opacity(0.25) : appearance.colors.accent.opacity(0.25))
       switch kind {
       case .user: Text("Y").font(.caption.bold())
       case .muse: Image(systemName: "sparkle").font(.caption.bold()).foregroundStyle(.tint)
@@ -188,12 +189,17 @@ struct CopyButton: View {
 
 struct UserMessageView: View {
   let item: TranscriptItem
+  @Environment(\.appearance) private var appearance
 
   var body: some View {
     let text = ToolPresentation.messageText(item)
     VStack(alignment: .leading, spacing: 6) {
       MessageHeader(avatar: .user, name: "You", recordedAt: item.recordedAt, copyText: text)
-      Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+      // The reading size, as Electron's `.user-message-text`.
+      Text(text)
+        .font(.system(size: appearance.textSize.points))
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 }

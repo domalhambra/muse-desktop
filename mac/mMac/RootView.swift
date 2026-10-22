@@ -4,6 +4,7 @@ import SwiftUI
 struct RootView: View {
   let controller: AppController
   @Environment(\.openWindow) private var openWindow
+  @Environment(\.appearance) private var appearance
 
   var body: some View {
     Group {
@@ -26,6 +27,7 @@ struct RootView: View {
         }
       }
     }
+    .background(ThemeBackground(palette: appearance.palette))
     // The controller reopens this window for an Ask or a Dock click after it was closed.
     .onAppear { controller.showWindow = { [openWindow] in openWindow(id: MMacApp.mainWindow) } }
   }
@@ -59,6 +61,8 @@ struct MainView: View {
           }
         }
     }
+    // The theme's background runs under the title bar, as Electron's window has no bar of its own.
+    .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     .alert(
       "Muse",
       isPresented: Binding(

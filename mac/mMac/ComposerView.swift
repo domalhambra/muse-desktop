@@ -6,6 +6,7 @@ import SwiftUI
 struct ComposerView: View {
   let controller: AppController
   @Bindable var workspace: Workspace
+  @Environment(\.appearance) private var appearance
   /// The text area's height, which it measures itself.
   @State private var inputHeight: CGFloat = 17
   /// A choice still being saved. The picker shows it until the Workspace answers, then shows the
@@ -23,7 +24,7 @@ struct ComposerView: View {
       )
       .frame(height: inputHeight)
       .padding(10)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+      .background(appearance.colors.input, in: RoundedRectangle(cornerRadius: 8))
       HStack(spacing: 10) {
         Picker("Model", selection: modelSelection) {
           if !workspace.models.contains(where: { $0.modelId == workspace.modelId }) {

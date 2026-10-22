@@ -29,6 +29,7 @@ struct SettingsView: View {
   static let paneKey = "settingsPane"
 
   let controller: AppController
+  @Environment(\.appearance) private var appearance
   // The store is named here, as the sidebar and banner name it, so all three share one value.
   @AppStorage(Self.paneKey, store: MMacApp.appStorage) private var pane: Pane = .appearance
 
@@ -42,6 +43,9 @@ struct SettingsView: View {
     }
     .frame(width: 560)
     .frame(minHeight: 360)
+    // Electron's Settings dialog sits on `--dialog`.
+    .scrollContentBackground(.hidden)
+    .background(appearance.colors.dialog)
     .alert(
       "Muse",
       isPresented: Binding(
@@ -57,7 +61,7 @@ struct SettingsView: View {
   @ViewBuilder private func content(_ pane: Pane) -> some View {
     if let settings = controller.settings {
       switch pane {
-      case .appearance: AppearancePane(workspace: settings.workspace)
+      case .appearance: AppearancePane(settings: settings, notifications: GrantedNotificationPermission())
       case .museCode: MuseCodePane(settings: settings)
       case .mcp: McpPane(settings: settings)
       case .bridges: BridgesPane(settings: settings)
@@ -87,11 +91,6 @@ struct MuseCodeSettingsButton<Label: View>: View {
 }
 
 // Placeholders until their panes are written. Each is replaced by its own file.
-
-struct AppearancePane: View {
-  let workspace: Workspace
-  var body: some View { Text("Appearance") }
-}
 
 struct McpPane: View {
   let settings: SettingsModel

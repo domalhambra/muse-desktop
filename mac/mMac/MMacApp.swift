@@ -33,8 +33,7 @@ struct MMacApp: App {
     Window("mMac", id: Self.mainWindow) {
       RootView(controller: delegate.controller)
         .frame(minWidth: 820, minHeight: 560)
-        // Muse and Moonlight, the two kept themes, are both dark. Themes arrive in M3.
-        .preferredColorScheme(.dark)
+        .themed(delegate.controller)
         .defaultAppStorage(Self.appStorage)
     }
     .commands {
@@ -49,7 +48,7 @@ struct MMacApp: App {
     Settings {
       SettingsView(controller: delegate.controller)
         .defaultAppStorage(Self.appStorage)
-        .preferredColorScheme(.dark)
+        .themed(delegate.controller)
     }
   }
 }

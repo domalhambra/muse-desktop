@@ -8,6 +8,7 @@ struct InspectorView: View {
   let controller: AppController
   let workspace: Workspace
   @Bindable var inspector: Inspector
+  @Environment(\.appearance) private var appearance
 
   var body: some View {
     // Built once per render, for the tab's count and the list, so the list compares entries
@@ -33,6 +34,9 @@ struct InspectorView: View {
     }
     // As Electron: read again when the project changes and when the open conversation's status
     // does, so a turn that ends shows what it changed.
+    // The Changes, Files and Activity lists draw on the column's color.
+    .scrollContentBackground(.hidden)
+    .background(appearance.colors.dialog)
     .task(id: RefreshKey(project: workspace.project, status: workspace.view?.session.status)) {
       await inspector.refresh()
     }

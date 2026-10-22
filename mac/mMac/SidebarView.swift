@@ -5,6 +5,7 @@ import SwiftUI
 struct SidebarView: View {
   let controller: AppController
   @Bindable var workspace: Workspace
+  @Environment(\.appearance) private var appearance
   /// The picker entry that opens the panel instead of choosing a project.
   private static let openAnother = "\u{0}open-another"
   /// Changed after the open panel closes, so the picker draws the current project again
@@ -56,6 +57,8 @@ struct SidebarView: View {
       history
     }
     .listStyle(.sidebar)
+    .scrollContentBackground(.hidden)
+    .background(appearance.colors.sidebar)
     .onKeyPress(.return) {
       guard let sessionId = highlighted else { return .ignored }
       highlighted = nil
@@ -177,7 +180,7 @@ struct SidebarView: View {
     }
   }
 
-  /// On a bar background, so rows do not show through it as the list scrolls. A click opens
+  /// On the sidebar's solid color, so rows do not show through it as the list scrolls. A click opens
   /// Settings on the Muse Code pane, as Electron's status pill does.
   private var connectionFooter: some View {
     VStack(spacing: 0) {
@@ -197,7 +200,7 @@ struct SidebarView: View {
       .accessibilityValue(statusText)
       .help(workspace.status.version.map { "Muse Code \($0)" } ?? workspace.status.message ?? "")
     }
-    .background(.bar)
+    .background(Color(hex: appearance.palette.sidebar))
   }
 
   private var statusText: String {
@@ -212,7 +215,7 @@ struct SidebarView: View {
   private var dotColor: Color {
     switch workspace.status.state {
     case "ready": .green
-    case "connecting": .accentColor
+    case "connecting": appearance.colors.accent
     default: .orange
     }
   }
