@@ -31,9 +31,18 @@ struct FilesView: View {
   private var browser: some View {
     VStack(alignment: .leading, spacing: 6) {
       breadcrumbs
-      TextField("Find in this folder…", text: $inspector.query)
-        .textFieldStyle(.roundedBorder)
-        .accessibilityLabel("Filter files")
+      HStack(spacing: 4) {
+        TextField("Find in this folder…", text: $inspector.query)
+          .textFieldStyle(.roundedBorder)
+          .accessibilityLabel("Filter files")
+        if !inspector.query.isEmpty {
+          Button("Clear filter", systemImage: "xmark.circle.fill") { inspector.query = "" }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("Clear filter")
+        }
+      }
       List {
         if !inspector.directory.isEmpty {
           Button {
@@ -113,7 +122,7 @@ struct FilesView: View {
     if let path = inspector.previewPath {
       VStack(spacing: 0) {
         HStack(spacing: 6) {
-          Image(systemName: FileKind.of(name: ChangeLabel.name(path), directory: false).symbol)
+          Image(systemName: FileKind.of(name: Self.fileName(path), directory: false).symbol)
             .foregroundStyle(.secondary)
             .accessibilityHidden(true)
           Text(path).lineLimit(1).truncationMode(.head).help(path)
@@ -148,6 +157,13 @@ struct FilesView: View {
         "File preview", systemImage: "doc.text",
         description: Text("Select a file to inspect its contents or reference it in chat."))
     }
+  }
+}
+
+extension FilesView {
+  /// The last part of a project-relative path, which the backend writes with `/`.
+  static func fileName(_ path: String) -> String {
+    path.split(separator: "/").last.map(String.init) ?? path
   }
 }
 

@@ -10,13 +10,25 @@ struct ReadOnlyTextView: NSViewRepresentable {
   /// What VoiceOver calls the text, such as "File preview".
   var label = ""
   var font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-  /// Receives the height the text needs, for a box that grows with it up to a limit.
+  /// Receives the height the text needs, up to `maxHeight`, for a box that grows with it.
   var measuredHeight: Binding<CGFloat>?
+  /// The tallest box the caller draws. Counting lines stops past it.
+  var maxHeight = CGFloat.greatestFiniteMagnitude
 
   final class Coordinator {
     /// The text last given to the view. Comparing against it, not the view's string, is cheap when
     /// a parent re-renders with the same text.
     var text: String?
+    /// What the last height was measured for, so a re-render does not count lines again.
+    var measuredFor: MeasureKey?
+    var height: CGFloat = 0
+  }
+
+  struct MeasureKey: Equatable {
+    let text: String
+    let font: NSFont
+    let maxHeight: CGFloat
+    let scroller: CGFloat
   }
 
   func makeCoordinator() -> Coordinator { Coordinator() }
@@ -33,6 +45,9 @@ struct ReadOnlyTextView: NSViewRepresentable {
     textView.drawsBackground = false
     textView.font = font
     textView.textColor = .labelColor
+    // Command-F searches the text, in the scroll view's find bar.
+    textView.usesFindBar = true
+    textView.isIncrementalSearchingEnabled = true
     textView.textContainerInset = NSSize(width: 6, height: 6)
     textView.isHorizontallyResizable = true
     textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -45,22 +60,49 @@ struct ReadOnlyTextView: NSViewRepresentable {
   func updateNSView(_ scroll: NSScrollView, context: Context) {
     guard let textView = scroll.documentView as? NSTextView else { return }
     if textView.accessibilityIdentifier() != identifier { textView.setAccessibilityIdentifier(identifier) }
-    if textView.accessibilityLabel() ?? "" != label { textView.setAccessibilityLabel(label.isEmpty ? nil : label) }
+    if textView.accessibilityLabel() ?? "" != label {
+      textView.setAccessibilityLabel(label.isEmpty ? nil : label)
+    }
+    // The font first, so the new string takes it.
+    if textView.font != font { textView.font = font }
     if context.coordinator.text != text {
       context.coordinator.text = text
       textView.string = text
-      textView.font = font
       textView.textColor = .labelColor
-    } else if textView.font != font {
-      textView.font = font
     }
-    guard let measuredHeight, let layout = textView.layoutManager, let container = textView.textContainer
-    else { return }
-    layout.ensureLayout(for: container)
-    // Room for a horizontal scroll bar, so the last line is not hidden under it.
-    let height = ceil(layout.usedRect(for: container).height + textView.textContainerInset.height * 2 + 14)
+    guard let measuredHeight else { return }
+    // Room for a horizontal scroll bar that takes space, so the last line is not hidden under it.
+    let style = scroll.scrollerStyle
+    let scroller = style == .overlay ? 0 : NSScroller.scrollerWidth(for: .regular, scrollerStyle: style)
+    let key = MeasureKey(text: text, font: font, maxHeight: maxHeight, scroller: scroller)
+    if context.coordinator.measuredFor != key {
+      context.coordinator.measuredFor = key
+      context.coordinator.height = Self.height(
+        of: text, font: font, inset: textView.textContainerInset.height, scroller: scroller, maxHeight: maxHeight)
+    }
+    let height = context.coordinator.height
     if measuredHeight.wrappedValue != height {
       Task { @MainActor in measuredHeight.wrappedValue = height }
     }
+  }
+
+  /// The height `text` needs, up to `maxHeight`. Lines do not wrap, so it is the line count times
+  /// the font's line height. This reads no layout manager, which would move the view off TextKit 2
+  /// and lay out all of the text.
+  static func height(of text: String, font: NSFont, inset: CGFloat, scroller: CGFloat, maxHeight: CGFloat)
+    -> CGFloat
+  {
+    let lineHeight = ceil(font.ascender - font.descender + font.leading)
+    let fixed = inset * 2 + scroller
+    // Enough lines to pass the cap; counting further changes nothing.
+    let cap =
+      maxHeight < .greatestFiniteMagnitude
+      ? max(Int(((maxHeight - fixed) / lineHeight).rounded(.up)), 0) + 1 : Int.max
+    var lines = 1
+    for byte in text.utf8 where byte == 10 {
+      lines += 1
+      if lines >= cap { break }
+    }
+    return min(ceil(CGFloat(lines) * lineHeight + fixed), maxHeight)
   }
 }
