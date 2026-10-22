@@ -115,7 +115,7 @@
     {
       "id": 17,
       "subject": "Task 17: Review the whole branch",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** One review of every change on `mac-m3` against the spec, this plan and the repo's rules, with each finding fixed or answered.\n\n**Files:** whatever the findings touch.\n\n**Acceptance Criteria:**\n\n- [ ] A reviewer reads `git diff origin/extensions...HEAD` in full, with the spec's M3 row and checklist, this plan, `docs/decisions.md`, `docs/bridge.md` and `CLAUDE.md`'s invariants.\n- [ ] The reviewer checks in particular:\n  - the token never reaches `preferences.json`, an event, a log line, stderr or a crash report;\n  - the MCP bridge's 401 path;\n  - Swift 6 isolation in `Notifications` and `SettingsModel`;\n  - Electron parity of every string;\n  - test quality.\n- [ ] Each finding is fixed (test first where it is behaviour) or answered in the report with the reason it stays.\n- [ ] `git diff --name-only origin/extensions...HEAD -- src/main src/renderer src/preload` prints nothing.\n- [ ] `git diff origin/extensions...HEAD | grep -E '^\\+.*(@unchecked Sendable|nonisolated\\(unsafe\\))'` prints nothing.\n- [ ] `git grep -n 'bridgeToken' -- src/headless` shows the token only in `start`'s schema and `Bridges`.\n\n**Verify:** the three commands above, and the reviewer's report with every finding's outcome.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"the three commands above, and the reviewer's report with every finding's outcome.\", \"acceptanceCriteria\": [\"A reviewer reads `git diff origin/extensions...HEAD` in full, with the spec's M3 row and checklist, this plan, `docs/decisions.md`, `docs/bridge.md` and `CLAUDE.md`'s invariants.\", \"The reviewer checks in particular: - the token never reaches `preferences.json`, an event, a log line, stderr or a crash report; - the MCP bridge's 401 path; - Swift 6 isolation in `Notifications` and `SettingsModel`; - Electron parity of every string; - test quality.\", \"Each finding is fixed (test first where it is behaviour) or answered in the report with the reason it stays.\", \"`git diff --name-only origin/extensions...HEAD -- src/main src/renderer src/preload` prints nothing.\", \"`git diff origin/extensions...HEAD | grep -E '^\\\\+.*(@unchecked Sendable|nonisolated\\\\(unsafe\\\\))'` prints nothing.\", \"`git grep -n 'bridgeToken' -- src/headless` shows the token only in `start`'s schema and `Bridges`.\"]}\n```",
       "blockedBy": [16]
     },
@@ -134,5 +134,5 @@
       "blockedBy": [18]
     }
   ],
-  "lastUpdated": "2026-10-22T21:45:44.382520+00:00"
+  "lastUpdated": "2026-10-22T22:03:47.945171+00:00"
 }
