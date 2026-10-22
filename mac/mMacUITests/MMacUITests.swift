@@ -315,6 +315,8 @@ final class MMacUITests: XCTestCase {
     // Its visible title, "Revert hunk", is not readable here: SwiftUI exposes only the label.
     XCTAssertTrue(revertHunk.exists)
     XCTAssertEqual(revertHunk.label, "Revert hunk 1")
+    // The number is in the label: no button reads plain "Revert hunk".
+    XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Revert hunk")).count, 0)
     revertHunk.click()
     // The hunk's text goes with its index, so the backend can refuse a hunk changed outside mMac.
     let hunk = "@@ -1,3 +1,3 @@\n let a = 1\n-let b = 2\n+let b = 3\n let c = 4"
@@ -528,6 +530,7 @@ final class MMacUITests: XCTestCase {
     port.click()
     port.typeKey("a", modifierFlags: .command)
     port.typeText("80")
+    waitForValue(port, "80")
     pane(settings, "Appearance").click()
     XCTAssertTrue(settings.buttons["theme-moonlight"].waitForExistence(timeout: 5))
     let alert = app.staticTexts["Use a port between 1024 and 65535."]

@@ -352,7 +352,7 @@ struct DiffRow: View {
         // element, read as text: with the label set on the selectable text itself, in this row,
         // any accessibility read of an open diff recursed through the label until the main
         // thread's stack overflowed. Selectable labelled text elsewhere, such as the Bridges
-        // token, did not; the cause is this layout's, not the pairing's alone.
+        // token, did not. Why this row and not that one is not known.
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isStaticText)
         .accessibilityLabel(row.spoken)

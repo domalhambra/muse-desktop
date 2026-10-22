@@ -4,13 +4,20 @@
 // question. It also answers the inspector's and the Settings window's methods from fixed or
 // in-memory data, and its rename Asks before it replies. A `send` of "crash now" ends the
 // process with code 1, as a backend that crashes does.
-// Each request and Ask answer is appended to the file FAKE_BACKEND_LOG names.
+// Each request and Ask answer is appended to the file FAKE_BACKEND_LOG names, with the fake's
+// start and every reply it writes, so a failed test shows how far the fake got.
 import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const logFile = process.env.FAKE_BACKEND_LOG
 const record = (entry) => logFile && appendFileSync(logFile, `${JSON.stringify(entry)}\n`)
-const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
+const write = (message) => {
+  if ('id' in message) {
+    record({ reply: message.id, ok: message.ok, ...(message.ok ? {} : { error: message.error }) })
+  }
+  process.stdout.write(`${JSON.stringify(message)}\n`)
+}
+record({ fake: 'started', pid: process.pid })
 
 const project = process.env.MMAC_TEST_PROJECT ?? '/tmp'
 const now = new Date().toISOString()
