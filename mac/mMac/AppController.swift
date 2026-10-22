@@ -171,7 +171,9 @@ final class AppController {
   }
 
   /// Sends the draft. With no project yet, asks for one first, as Electron does.
-  /// `send(addingProject:)` moves the draft to the new project's key, so no copy is left behind.
+  /// `send(addingProject:)` moves the draft to the chosen project's composer when that is empty.
+  /// When it already holds a draft, the text is sent from where it was written and the older
+  /// draft stays.
   func send() async {
     guard let workspace else { return }
     guard await workspace.send() == .needsProject, let folder = Self.chooseProjectFolder() else { return }

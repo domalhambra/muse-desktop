@@ -398,8 +398,9 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   await opening.value
 }
 
-@MainActor @Test func aCancelledSendKeepsTheMessageShown() async throws {
-  // The backend still finishes a request whose caller stopped waiting, so the message may have gone.
+@MainActor @Test func aCancelledCallerStillGetsTheBackendsAnswer() async throws {
+  // Cancelling the caller does not stop the wait: the send request runs in its own task, so the
+  // backend's answer still decides the outcome, and the message stays shown meanwhile.
   let (workspace, backend) = await makeWorkspace(script: openScript { method, _, _ in
     method == "send" ? [] : nil
   })
@@ -528,5 +529,28 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(!(workspace.view?.items.contains { $0.itemId.hasPrefix("optimistic-") } ?? true))
   #expect(workspace.draft == "hello")
   #expect(workspace.errorMessage == "Muse rejected the message.")
+  #expect(!workspace.submitting)
+}
+
+@MainActor @Test func aCancelledCallerStillGetsTheCreatedConversation() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "create", "send": []
+    default: [reply(id, "null")]
+    }
+  }
+  workspace.draft = "hi"
+  let sending = Task { await workspace.send() }
+  try await eventually { backend.messages.contains { $0["method"] == "create" } }
+  sending.cancel()
+  let createId = try #require(lastId(backend, "create"))
+  backend.push(reply(createId, viewJSON(sessionJSON("s1"))))
+  try await eventually { backend.messages.contains { $0["method"] == "send" } }
+  let sendId = try #require(lastId(backend, "send"))
+  backend.push(reply(sendId, "null"))
+  #expect(await sending.value == .sent)
+  #expect(workspace.view?.session.sessionId == "s1")
+  #expect(requests(backend).filter { $0.first == "create" }.count == 1)
+  #expect(workspace.errorMessage == nil)
   #expect(!workspace.submitting)
 }

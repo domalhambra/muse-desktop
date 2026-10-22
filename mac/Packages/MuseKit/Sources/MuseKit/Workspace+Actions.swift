@@ -7,7 +7,8 @@ extension Workspace {
   /// Sends the draft. With no conversation open, it creates one in the current project first.
   public func send() async -> SendOutcome { await send(text: draft, from: draftKey) }
 
-  /// Sends `text`, written under the draft key `startKey`.
+  /// Sends `text`, written under the draft key `startKey`. A cancelled caller still waits for the
+  /// backend's answer, and `submitting` stays true until it comes.
   func send(text: String, from startKey: String) async -> SendOutcome {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !submitting else {
       return .notSent
@@ -28,8 +29,14 @@ extension Workspace {
       if let view {
         current = view
       } else {
-        current = try await client.create(
-          project: project, modelId: modelId.isEmpty ? nil : modelId, worktree: worktree)
+        // Its own task, like the send below: a cancelled caller still gets the conversation that
+        // was created, so none is left behind and the next send does not create a second one.
+        let client = self.client
+        let (folder, model) = (project, modelId.isEmpty ? nil : modelId)
+        let creating = Task.detached {
+          try await client.create(project: folder, modelId: model, worktree: worktree)
+        }
+        current = try await creating.value
         // Show the new conversation, unless the person opened another one meanwhile.
         if sequence == openSequence, view == nil { view = current }
         if worktree {
@@ -59,18 +66,16 @@ extension Workspace {
       }
       // Clear the draft only where it still holds what was sent.
       for key in [startKey, sessionId] where drafts[key] == text { drafts[key] = nil }
-      // Its own task: cancelling the caller must not stop the wait, or a rejection that comes
-      // later would leave the conversation shown as running.
+      // Its own detached task: cancelling the caller must not stop the wait, or a rejection that
+      // comes later would leave the conversation shown as running. Detached, so the task
+      // inherits neither the caller's cancellation nor the main actor: the error path below is
+      // one main-actor hop away, which `AppController.dropWorkspace()` relies on.
       let client = self.client
-      let request = Task {
+      let request = Task.detached {
         try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode)
       }
       try await request.value
       return .sent
-    } catch is CancellationError {
-      // The caller stopped waiting, but the backend still finishes the request, so the message
-      // may have gone. Keep it shown and the draft cleared; the next session event settles it.
-      return .notSent
     } catch {
       let stillShown = sequence == openSequence && sentId != nil && view?.session.sessionId == sentId
       if stillShown {
