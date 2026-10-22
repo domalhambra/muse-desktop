@@ -35,6 +35,8 @@ struct ComposerView: View {
           }
         }
         .fixedSize()
+        // The stock bezel: the theme's light accent under a white label is unreadable.
+        .tint(nil)
         .disabled(workspace.submitting || workspace.models.isEmpty)
         .accessibilityIdentifier("model-picker")
         Picker("Reasoning effort", selection: effortSelection) {
@@ -45,6 +47,7 @@ struct ComposerView: View {
           }
         }
         .fixedSize()
+        .tint(nil)
         if workspace.canStartInWorktree {
           let label =
             workspace.startInWorktree
@@ -59,7 +62,7 @@ struct ComposerView: View {
           .help(label)
         }
         Spacer()
-        Text("↵ Send · ⇧ ↵ New line").font(.caption).foregroundStyle(.tertiary)
+        Text("↵ Send · ⇧ ↵ New line").font(.caption).foregroundStyle(.themeMuted)
         Button(action: submit) {
           if workspace.submitting {
             ProgressView().controlSize(.small)
@@ -76,7 +79,7 @@ struct ComposerView: View {
       if let footnote {
         Text(footnote)
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
           .accessibilityIdentifier("composer-footnote")
       }
     }
@@ -89,7 +92,7 @@ struct ComposerView: View {
       Text(
         Activity.isBackgroundOnly(workspace.view?.items ?? [])
           ? "Finishing background tasks…" : "Muse is working…")
-      Text("Send a follow-up to queue or steer.").foregroundStyle(.secondary)
+      Text("Send a follow-up to queue or steer.").foregroundStyle(.themeSecondary)
       Spacer()
       Picker("Follow-up behavior", selection: $workspace.mode) {
         Text("Queue next").tag(SendMode.queue)
@@ -97,6 +100,8 @@ struct ComposerView: View {
       }
       .pickerStyle(.segmented)
       .fixedSize()
+      // The stock selected segment: the theme's light accent under a white label is unreadable.
+      .tint(nil)
       Button("Stop Muse", systemImage: "stop.circle.fill") { Task { await workspace.stop() } }
         .labelStyle(.iconOnly)
         .help("Stop Muse")

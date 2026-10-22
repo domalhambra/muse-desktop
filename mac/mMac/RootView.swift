@@ -61,8 +61,7 @@ struct MainView: View {
           }
         }
     }
-    // The theme's background runs under the title bar, as Electron's window has no bar of its own.
-    .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+    .themedToolbar()
     .alert(
       "Muse",
       isPresented: Binding(

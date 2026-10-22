@@ -20,7 +20,7 @@ struct MuseCodePane: View {
             Text(stateText).font(.headline)
             // As Electron's `status.version ? … : status.message`.
             Text(status.version.map { "Version \($0)" } ?? status.message ?? "")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(.themeSecondary)
           }
           Spacer()
           Button {
@@ -56,13 +56,13 @@ struct MuseCodePane: View {
         }
       } footer: {
         Text("Leave empty to find Muse through your login shell and standard installation locations.")
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
       }
       Section("New to Muse Code?") {
         Text(
           "Install Muse Code using the official instructions, then run `muse login` in Terminal. Your credentials stay with the CLI."
         )
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.themeSecondary)
         Button("Open installation guide") {
           NSWorkspace.shared.open(URL(string: "https://dev.meta.ai/docs/muse-code")!)
         }

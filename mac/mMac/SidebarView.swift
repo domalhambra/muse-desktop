@@ -39,6 +39,8 @@ struct SidebarView: View {
         }
         // The label is for VoiceOver only, as in Electron, so project names fit at 240 points.
         .labelsHidden()
+        // The stock bezel: the theme's light accent under a white label is unreadable.
+        .tint(nil)
         .id(pickerGeneration)
         // The folder's own status: a worktree shows its branch once read, never its parent's.
         if let git = workspace.projectBadge, git.isRepository {
@@ -49,7 +51,7 @@ struct SidebarView: View {
             GitBadgeView(status: git)
           }
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
           .accessibilityElement(children: .combine)
           .accessibilityIdentifier("project-git-badge")
         }
@@ -138,7 +140,7 @@ struct SidebarView: View {
       Section {
         VStack(alignment: .leading, spacing: 6) {
           Text("Could not load your conversation history.").font(.headline)
-          Text(error).foregroundStyle(.secondary)
+          Text(error).foregroundStyle(.themeSecondary)
           Button("Try again") { Task { await workspace.refreshSessions() } }
         }
       }
@@ -174,7 +176,7 @@ struct SidebarView: View {
       Section {
         VStack(alignment: .leading, spacing: 2) {
           Text("No conversations yet").font(.headline)
-          Text("Start a conversation in this project.").foregroundStyle(.secondary)
+          Text("Start a conversation in this project.").foregroundStyle(.themeSecondary)
         }
       }
     }
@@ -188,7 +190,7 @@ struct SidebarView: View {
       MuseCodeSettingsButton {
         HStack(spacing: 6) {
           Circle().fill(dotColor).frame(width: 7, height: 7)
-          Text(statusText).font(.caption).foregroundStyle(.secondary)
+          Text(statusText).font(.caption).foregroundStyle(.themeSecondary)
           Spacer()
         }
         .padding(.horizontal, 12)
@@ -200,7 +202,7 @@ struct SidebarView: View {
       .accessibilityValue(statusText)
       .help(workspace.status.version.map { "Muse Code \($0)" } ?? workspace.status.message ?? "")
     }
-    .background(Color(hex: appearance.palette.sidebar))
+    .background(appearance.colors.sidebarSolid)
   }
 
   private var statusText: String {
@@ -231,7 +233,7 @@ struct SessionRow: View {
       if session.status == "running" {
         ProgressView().controlSize(.mini).accessibilityLabel("Working")
       } else {
-        Image(systemName: "bubble.left").foregroundStyle(.secondary).accessibilityHidden(true)
+        Image(systemName: "bubble.left").foregroundStyle(.themeSecondary).accessibilityHidden(true)
       }
       VStack(alignment: .leading, spacing: 2) {
         Text(SessionTitle.of(session)).lineLimit(1)
@@ -239,7 +241,7 @@ struct SessionRow: View {
         if showProject, let root = session.workspaceRoot, !root.isEmpty {
           Text(ProjectPath.name(of: root))
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.themeSecondary)
             .lineLimit(1)
         }
       }
@@ -255,7 +257,7 @@ struct SessionRow: View {
       TimelineView(.everyMinute) { context in
         Text(RelativeTime.text(SidebarSections.activity(session), now: context.date))
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
           .monospacedDigit()
       }
     }

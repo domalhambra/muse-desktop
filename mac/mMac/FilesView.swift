@@ -8,6 +8,7 @@ struct FilesView: View {
   let controller: AppController
   let workspace: Workspace
   @Bindable var inspector: Inspector
+  @Environment(\.appearance) private var appearance
 
   var body: some View {
     if workspace.project.isEmpty {
@@ -39,7 +40,7 @@ struct FilesView: View {
           Button("Clear filter", systemImage: "xmark.circle.fill") { inspector.query = "" }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.themeSecondary)
             .help("Clear filter")
         }
       }
@@ -56,7 +57,7 @@ struct FilesView: View {
           Text(error).foregroundStyle(.red)
         }
         if inspector.filesLoading {
-          Text("Opening folder…").foregroundStyle(.secondary)
+          Text("Opening folder…").foregroundStyle(.themeSecondary)
         } else {
           ForEach(inspector.visibleFiles) { file in
             let selected = inspector.previewPath == file.path
@@ -71,18 +72,18 @@ struct FilesView: View {
             .accessibilityLabel(file.name)
             .accessibilityHint(file.directory ? "Opens this folder" : "Shows this file's preview")
             .accessibilityAddTraits(selected ? .isSelected : [])
-            .listRowBackground(selected ? Color.accentColor.opacity(0.15) : nil)
+            .listRowBackground(selected ? appearance.colors.accent.opacity(0.15) : nil)
           }
           if inspector.filesError == nil, inspector.visibleFiles.isEmpty {
             Text(inspector.query.isEmpty ? "This folder is empty." : "No matching files.")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(.themeSecondary)
           }
         }
       }
       .listStyle(.inset)
       Text("\(inspector.files.count) entries · build dependencies hidden")
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.themeSecondary)
     }
     .padding(8)
   }
@@ -97,14 +98,14 @@ struct FilesView: View {
         }
         .buttonStyle(.borderless)
         .disabled(inspector.directory.isEmpty)
-        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary).accessibilityHidden(true)
+        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.themeMuted).accessibilityHidden(true)
         let trail = Breadcrumb.trail(inspector.directory)
         if trail.isEmpty {
-          Text("Project root").foregroundStyle(.secondary)
+          Text("Project root").foregroundStyle(.themeSecondary)
         }
         ForEach(Array(trail.enumerated()), id: \.element.id) { index, crumb in
           if index > 0 {
-            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.themeMuted)
               .accessibilityHidden(true)
           }
           Button(crumb.name) { Task { await inspector.open(directory: crumb.path) } }
@@ -123,11 +124,11 @@ struct FilesView: View {
       VStack(spacing: 0) {
         HStack(spacing: 6) {
           Image(systemName: FileKind.of(name: Self.fileName(path), directory: false).symbol)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.themeSecondary)
             .accessibilityHidden(true)
           Text(path).lineLimit(1).truncationMode(.head).help(path)
           if case .loaded(let text) = inspector.preview, !text.isEmpty {
-            Text("\(FilePreview.lineCount(text)) lines").font(.caption).foregroundStyle(.secondary)
+            Text("\(FilePreview.lineCount(text)) lines").font(.caption).foregroundStyle(.themeSecondary)
           }
           Spacer(minLength: 4)
           Button {
@@ -145,7 +146,7 @@ struct FilesView: View {
           ProgressView("Loading preview…").frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let message):
           Text(message)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.themeSecondary)
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .loaded(let text):
@@ -168,18 +169,19 @@ extension FilesView {
 }
 
 struct FileRow: View {
+  @Environment(\.appearance) private var appearance
   let file: ProjectFile
 
   var body: some View {
     HStack(spacing: 8) {
       Image(systemName: FileKind.of(file).symbol)
-        .foregroundStyle(file.directory ? Color.accentColor : .secondary)
+        .foregroundStyle(file.directory ? appearance.colors.accent : appearance.colors.secondary)
         .frame(width: 16)
         .accessibilityHidden(true)
       Text(file.name).lineLimit(1)
       Spacer(minLength: 4)
       if file.directory {
-        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
+        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.themeMuted).accessibilityHidden(true)
       }
     }
     .contentShape(.rect)

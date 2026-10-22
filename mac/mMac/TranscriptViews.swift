@@ -11,6 +11,7 @@ struct TranscriptView: View {
   @State private var following = true
   /// True while Dom's own scrolling moves the transcript, so growth never pulls against it.
   @State private var scrolling = false
+  @Environment(\.appearance) private var appearance
   private static let bottom = "transcript-bottom"
 
   var body: some View {
@@ -21,11 +22,11 @@ struct TranscriptView: View {
           // Centred, as Electron's `conversation-beginning`.
           HStack(spacing: 8) {
             Avatar(kind: .muse)
-            Text("Conversation with Muse").font(.callout).foregroundStyle(.secondary)
+            Text("Conversation with Muse").font(.callout).foregroundStyle(.themeSecondary)
           }
           .frame(maxWidth: .infinity)
           if let notice = view.historyNotice {
-            Text(notice).font(.callout).foregroundStyle(.secondary)
+            Text(notice).font(.callout).foregroundStyle(.themeSecondary)
           }
           if entries.isEmpty, view.approvals.isEmpty, view.questions.isEmpty, view.error == nil {
             ContentUnavailableView(
@@ -45,6 +46,7 @@ struct TranscriptView: View {
         .accessibilityLabel("Conversation")
       }
       .defaultScrollAnchor(.bottom, for: .initialOffset)
+      .softTopScrollEdge()
       .onScrollPhaseChange { _, phase in
         scrolling = phase == .tracking || phase == .interacting || phase == .decelerating
         // Growth during a gesture is not followed; catch up once it ends.
@@ -79,9 +81,9 @@ struct TranscriptView: View {
         if !following {
           Button("Jump to latest message", systemImage: "arrow.down") {
             following = true
-            withAnimation { proxy.scrollTo(Self.bottom, anchor: .bottom) }
+            withAnimation(appearance.reduceMotion ? nil : .default) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
           }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.primary)
           .padding()
         }
       }
@@ -119,7 +121,7 @@ struct Avatar: View {
 
   var body: some View {
     ZStack {
-      Circle().fill(kind == .user ? Color.secondary.opacity(0.25) : appearance.colors.accent.opacity(0.25))
+      Circle().fill(kind == .user ? appearance.colors.secondary.opacity(0.25) : appearance.colors.accent.opacity(0.25))
       switch kind {
       case .user: Text("Y").font(.caption.bold())
       case .muse: Image(systemName: "sparkle").font(.caption.bold()).foregroundStyle(.tint)
@@ -145,9 +147,9 @@ struct MessageHeader: View {
       if let recordedAt, let date = RelativeTime.date(recordedAt) {
         Text(date.formatted(date: .omitted, time: .shortened))
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
       }
-      if composing { Text("Composing").font(.caption).foregroundStyle(.secondary) }
+      if composing { Text("Composing").font(.caption).foregroundStyle(.themeSecondary) }
       Spacer()
       CopyButton(text: copyText)
     }
@@ -217,7 +219,7 @@ struct AgentMessageView: View {
     VStack(alignment: .leading, spacing: 6) {
       MessageHeader(avatar: .muse, name: "Muse", composing: item.status == "inProgress", copyText: text)
       if text.isEmpty, item.status == "inProgress" {
-        Text("…").foregroundStyle(.secondary)
+        Text("…").foregroundStyle(.themeSecondary)
       } else {
         MarkdownView(
           blocks: MarkdownCache.shared.blocks(id: item.itemId, text: text, final: item.status != "inProgress"))
@@ -235,6 +237,7 @@ struct AgentMessageView: View {
 /// it, and the content shows below while expanded.
 struct ExpandableRow<RowLabel: View, Content: View>: View {
   @Binding var expanded: Bool
+  @Environment(\.appearance) private var appearance
   @ViewBuilder let label: () -> RowLabel
   @ViewBuilder let content: () -> Content
 
@@ -246,9 +249,9 @@ struct ExpandableRow<RowLabel: View, Content: View>: View {
         HStack(spacing: 6) {
           Image(systemName: "chevron.right")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.themeSecondary)
             .rotationEffect(.degrees(expanded ? 90 : 0))
-            .animation(.easeInOut(duration: 0.15), value: expanded)
+            .animation(appearance.reduceMotion ? nil : .easeInOut(duration: 0.15), value: expanded)
             .accessibilityHidden(true)
           label()
         }
@@ -280,7 +283,7 @@ struct ReasoningView: View {
         }
       }
       .font(.callout)
-      .foregroundStyle(.secondary)
+      .foregroundStyle(.themeSecondary)
     } content: {
       // Not throttled: only the agent message has the catch-up render that shows its last text.
       MarkdownView(
@@ -301,7 +304,7 @@ struct StatusIcon: View {
     case "failed":
       Image(systemName: "xmark.circle").foregroundStyle(.red).accessibilityLabel("Failed")
     default:
-      Image(systemName: "minus.circle").foregroundStyle(.secondary).accessibilityLabel(Self.spoken(status))
+      Image(systemName: "minus.circle").foregroundStyle(.themeSecondary).accessibilityLabel(Self.spoken(status))
     }
   }
 
@@ -324,14 +327,14 @@ struct ToolLabel: View {
     HStack(spacing: 6) {
       StatusIcon(status: item.status)
       Image(systemName: item.kind == "subagent" ? "person.2" : item.kind == "toolCall" ? "terminal" : "doc.text")
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.themeSecondary)
         .accessibilityHidden(true)
       Text(ToolPresentation.title(item)).bold()
       if let summary = ToolPresentation.summary(item) {
-        Text(summary).foregroundStyle(.secondary).lineLimit(1)
+        Text(summary).foregroundStyle(.themeSecondary).lineLimit(1)
       }
       if let patch = ToolPresentation.patch(item) {
-        Text(patch).font(.caption.monospaced()).foregroundStyle(.secondary)
+        Text(patch).font(.caption.monospaced()).foregroundStyle(.themeSecondary)
       }
     }
     .font(.callout)
@@ -350,14 +353,14 @@ struct ToolView: View {
       VStack(alignment: .leading, spacing: 8) {
         if let objective = item.objective, !objective.isEmpty { Text(objective) }
         if let args = item.args, !args.isEmpty {
-          Text("INPUT").font(.caption2.bold()).foregroundStyle(.secondary)
+          Text("INPUT").font(.caption2.bold()).foregroundStyle(.themeSecondary)
           MonospacedBox(text: ToolPresentation.formattedArgs(args), label: "Tool input")
         }
         if let output = ToolPresentation.output(item, stored: workspace.storedOutput[item.itemId]) {
           MonospacedBox(text: output, label: "Tool output")
         }
         if item.truncated == true {
-          Text("Muse shortened the displayed output.").font(.caption).foregroundStyle(.secondary)
+          Text("Muse shortened the displayed output.").font(.caption).foregroundStyle(.themeSecondary)
         }
         if item.outputRef != nil, workspace.storedOutput[item.itemId] == nil {
           let loading = workspace.loadingOutput.contains(item.itemId)
@@ -366,7 +369,7 @@ struct ToolView: View {
           }
           .disabled(loading)
         }
-        Text(ToolPresentation.footer(item)).font(.caption).foregroundStyle(.secondary)
+        Text(ToolPresentation.footer(item)).font(.caption).foregroundStyle(.themeSecondary)
       }
     }
   }
@@ -381,11 +384,11 @@ struct ToolGroupView: View {
     ExpandableRow(expanded: $expanded) {
       HStack(spacing: 6) {
         Image(systemName: "checkmark.circle").foregroundStyle(.green).accessibilityHidden(true)
-        Image(systemName: "square.stack.3d.up").foregroundStyle(.secondary).accessibilityHidden(true)
+        Image(systemName: "square.stack.3d.up").foregroundStyle(.themeSecondary).accessibilityHidden(true)
         Text(ToolPresentation.groupTitle(items)).bold()
-        Text(ToolPresentation.groupDetail(items)).foregroundStyle(.secondary).lineLimit(1)
+        Text(ToolPresentation.groupDetail(items)).foregroundStyle(.themeSecondary).lineLimit(1)
         if let patch = ToolPresentation.groupPatch(items) {
-          Text(patch).font(.caption.monospaced()).foregroundStyle(.secondary)
+          Text(patch).font(.caption.monospaced()).foregroundStyle(.themeSecondary)
         }
       }
       .font(.callout)
@@ -433,7 +436,7 @@ struct TurnErrorView: View {
       Label("Muse couldn’t finish this turn.", systemImage: "exclamationmark.triangle").bold()
       Text(message).textSelection(.enabled)
       Text("Your conversation is saved. You can send a follow-up or reconnect.")
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.themeSecondary)
     }
     .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)

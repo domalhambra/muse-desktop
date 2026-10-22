@@ -50,7 +50,7 @@ struct InspectorView: View {
 
   private var header: some View {
     HStack(spacing: 10) {
-      Image(systemName: "folder").font(.title3).foregroundStyle(.secondary).accessibilityHidden(true)
+      Image(systemName: "folder").font(.title3).foregroundStyle(.themeSecondary).accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 3) {
         Text(workspace.project.isEmpty ? "No project selected" : ProjectPath.name(of: workspace.project))
           .font(.headline)
@@ -62,9 +62,9 @@ struct InspectorView: View {
             GitBadgeView(status: git)
           }
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
         } else {
-          Text("Local project").font(.caption).foregroundStyle(.secondary)
+          Text("Local project").font(.caption).foregroundStyle(.themeSecondary)
         }
       }
       Spacer(minLength: 0)
@@ -82,6 +82,7 @@ struct InspectorView: View {
       }
       .pickerStyle(.segmented)
       .labelsHidden()
+      .tint(nil)
       Button {
         Task { await inspector.refresh() }
       } label: {
@@ -138,7 +139,7 @@ struct ActivityView: View {
           ActivityStatusIcon(status: entry.status)
           VStack(alignment: .leading, spacing: 2) {
             Text(entry.title).bold().lineLimit(1)
-            Text(entry.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            Text(entry.detail).font(.caption).foregroundStyle(.themeSecondary).lineLimit(2)
           }
         }
         .accessibilityElement(children: .combine)
@@ -167,7 +168,7 @@ struct UsagePanel: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text("SESSION USAGE").font(.caption2.bold()).foregroundStyle(.secondary)
+      Text("SESSION USAGE").font(.caption2.bold()).foregroundStyle(.themeSecondary)
         .accessibilityAddTraits(.isHeader)
       row("Input", usage.input)
       row("Output", usage.output)
@@ -179,7 +180,7 @@ struct UsagePanel: View {
 
   private func row(_ title: String, _ value: Int) -> some View {
     HStack {
-      Text(title).foregroundStyle(.secondary)
+      Text(title).foregroundStyle(.themeSecondary)
       Spacer()
       Text(value.formatted()).monospacedDigit()
     }

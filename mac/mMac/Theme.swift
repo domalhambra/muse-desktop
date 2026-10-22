@@ -14,11 +14,17 @@ extension Color {
 
 /// A theme's palette as SwiftUI colors. `ThemePalette` keeps six-digit hex; the alpha values
 /// tokens.css gives some colors are applied here, so every view draws the same color.
-struct ThemeColors {
+struct ThemeColors: Equatable {
   let text, heading, secondary, muted, accent: Color
+  /// A label on an `accent` fill. Moonlight's is tokens.css's `--on-primary` #182239 (8.61:1 on
+  /// its accent). Muse's `--on-primary` #0753dd is only 4.20:1 on Muse's accent #b5d4ff, below
+  /// WCAG AA for the small text of a button, so Muse uses its `--base` #062565 (9.47:1).
+  let onAccent: Color
   /// The sidebar list, over the window background. Electron's Muse sidebar is a translucent
   /// gradient; this is its solid color, let through.
   let sidebar: Color
+  /// tokens.css's `--sidebar-solid`, for what must hide the rows that scroll under it.
+  let sidebarSolid: Color
   /// The inspector column.
   let dialog: Color
   /// The composer field.
@@ -37,7 +43,9 @@ struct ThemeColors {
     secondary = Color(hex: palette.secondary)
     muted = Color(hex: palette.muted)
     accent = Color(hex: palette.accent)
+    onAccent = Color(hex: muse ? palette.base : palette.onPrimary)
     sidebar = Color(hex: palette.sidebar, opacity: 0.68)
+    sidebarSolid = Color(hex: palette.sidebar)
     dialog = Color(hex: palette.dialog)
     input = Color(hex: palette.input, opacity: muse ? Double(0x9c) / 255 : 1)
     selection = Color(hex: palette.selection, opacity: muse ? Double(0x99) / 255 : 1)
@@ -47,17 +55,19 @@ struct ThemeColors {
 
 /// The current theme and reading size, for views below the root.
 struct Appearance: Equatable {
-  var theme: ThemeName = .muse
-  var textSize: TextSize = .comfortable
-  var reduceMotion = false
+  let theme: ThemeName
+  let textSize: TextSize
+  let colors: ThemeColors
+  /// mMac's Reduce motion, or the system's: `Themed` folds the system setting in.
+  var reduceMotion: Bool
   var palette: ThemePalette { theme.palette }
-  var colors: ThemeColors { ThemeColors(theme) }
 
+  /// With no preferences yet, Muse at the comfortable size.
   init(_ preferences: Preferences?) {
-    guard let preferences else { return }
-    theme = ThemeName(preference: preferences.theme)
-    textSize = TextSize(preference: preferences.fontSize)
-    reduceMotion = preferences.reduceMotion
+    theme = preferences.map { ThemeName(preference: $0.theme) } ?? .muse
+    textSize = preferences.map { TextSize(preference: $0.fontSize) } ?? .comfortable
+    reduceMotion = preferences?.reduceMotion ?? false
+    colors = ThemeColors(theme)
   }
 
   /// A transcript heading's size: level 1 is the largest. Headings scale with the reading size.
@@ -135,18 +145,28 @@ private struct Themed: ViewModifier {
   let controller: AppController
   @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
 
+  /// Read in `body`, so a `preferences` event redraws both scenes at once.
+  private var appearance: Appearance {
+    var appearance = Appearance(controller.workspace?.preferences)
+    appearance.reduceMotion = appearance.reduceMotion || systemReduceMotion
+    return appearance
+  }
+
   func body(content: Content) -> some View {
-    // Read here, in a view's body, so a `preferences` event redraws both scenes at once.
-    let appearance = Appearance(controller.workspace?.preferences)
+    let appearance = appearance
     let colors = appearance.colors
+    let reduceMotion = appearance.reduceMotion
     content
       .environment(\.appearance, appearance)
       .tint(colors.accent)
-      // `.secondary` and `.tertiary` resolve to these levels below.
-      .foregroundStyle(colors.text, colors.secondary, colors.muted)
+      // The primary level only. A `Text`'s `.secondary` and `.tertiary` do not take the levels
+      // set here, and pop-up buttons fill their bezel with the third level, so views name
+      // `.themeSecondary` and `.themeMuted` instead.
+      .foregroundStyle(colors.text)
       .preferredColorScheme(.dark)
+      // A backstop: the views' own animations read `appearance.reduceMotion` too.
       .transaction { transaction in
-        if appearance.reduceMotion || systemReduceMotion {
+        if reduceMotion {
           transaction.disablesAnimations = true
           transaction.animation = nil
         }
@@ -158,4 +178,73 @@ extension View {
   /// Applies the saved theme, reading size and Reduce motion. With no backend yet, Muse. Both
   /// themes are dark.
   func themed(_ controller: AppController) -> some View { modifier(Themed(controller: controller)) }
+
+  /// The window's toolbar. From macOS 26 it lets the theme's background run under the title,
+  /// and scroll views soften their content under it. On macOS 15 the toolbar keeps its own
+  /// background, so the transcript never scrolls under a bare title.
+  @ViewBuilder func themedToolbar() -> some View {
+    if #available(macOS 26, *) {
+      toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+    } else {
+      self
+    }
+  }
+
+  /// The soft edge a scroll view shows under a see-through toolbar, from macOS 26.
+  @ViewBuilder func softTopScrollEdge() -> some View {
+    if #available(macOS 26, *) {
+      scrollEdgeEffectStyle(.soft, for: .top)
+    } else {
+      self
+    }
+  }
+}
+
+/// The theme's secondary text and its muted text, for `.foregroundStyle` and `.fill`. SwiftUI's
+/// `.secondary` and `.tertiary` draw the text color at a lower opacity, which falls below WCAG
+/// contrast on the themes' backgrounds; these draw the palette's own colors.
+struct ThemeStyle: ShapeStyle {
+  enum Level { case secondary, muted }
+  let level: Level
+
+  func resolve(in environment: EnvironmentValues) -> Color {
+    let colors = environment.appearance.colors
+    return level == .secondary ? colors.secondary : colors.muted
+  }
+}
+
+extension ShapeStyle where Self == ThemeStyle {
+  /// The palette's `secondary`, in place of `.secondary`.
+  static var themeSecondary: ThemeStyle { ThemeStyle(level: .secondary) }
+  /// The palette's `muted`, in place of `.tertiary`.
+  static var themeMuted: ThemeStyle { ThemeStyle(level: .muted) }
+}
+
+/// A primary action, as Electron's `--primary` button: an `accent` fill with a dark label. The
+/// system's `.borderedProminent` draws a white label on the tint, which is under 2:1 on both
+/// themes' light accents.
+struct PrimaryButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View { PrimaryButton(configuration: configuration) }
+
+  private struct PrimaryButton: View {
+    let configuration: ButtonStyleConfiguration
+    @Environment(\.appearance) private var appearance
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+      configuration.label
+        .fontWeight(.semibold)
+        .foregroundStyle(appearance.colors.onAccent)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(appearance.colors.accent, in: RoundedRectangle(cornerRadius: 6))
+        .brightness(configuration.isPressed ? -0.08 : 0)
+        .opacity(isEnabled ? 1 : 0.5)
+        .contentShape(.rect)
+    }
+  }
+}
+
+extension ButtonStyle where Self == PrimaryButtonStyle {
+  static var primary: PrimaryButtonStyle { PrimaryButtonStyle() }
 }

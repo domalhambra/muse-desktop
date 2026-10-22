@@ -27,7 +27,7 @@ struct ApprovalCard: View {
           VStack(spacing: 2) {
             choiceButton(choice)
             if ApprovalPresentation.savesRule(choice) {
-              Text("Saves a rule").font(.caption2).foregroundStyle(.secondary)
+              Text("Saves a rule").font(.caption2).foregroundStyle(.themeSecondary)
             }
           }
         }
@@ -43,7 +43,7 @@ struct ApprovalCard: View {
     }
     .help(ApprovalPresentation.help(choice))
     if ApprovalPresentation.isPrimary(choice) {
-      button.buttonStyle(.borderedProminent)
+      button.buttonStyle(.primary)
     } else {
       button.buttonStyle(.bordered)
     }
@@ -117,7 +117,7 @@ struct QuestionCard: View {
         Spacer()
         Button("Skip question") { Task { await workspace.skip(question) } }
         Button(sending ? "Sending…" : "Continue", action: submit)
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.primary)
         .disabled(!form.canContinue)
       }
       .disabled(sending)
@@ -142,7 +142,7 @@ struct OptionLabel: View {
     VStack(alignment: .leading, spacing: 1) {
       Text(option.label).bold()
       if let description = option.description {
-        Text(description).font(.caption).foregroundStyle(.secondary)
+        Text(description).font(.caption).foregroundStyle(.themeSecondary)
       }
     }
   }
