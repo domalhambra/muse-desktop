@@ -14,6 +14,15 @@ import Testing
   }
 }
 
+@Test func pastedWindowsLineEndingsSplitLines() throws {
+  #expect(try SettingsRules.pairs("A=1\r\nB=2\r\n", separator: "=") == ["A": "1", "B": "2"])
+  var form = McpForm()
+  form.name = "files"
+  form.command = "npx"
+  form.arguments = "-y\r\n@scope/server"
+  #expect(try form.input() == .stdio(name: "files", command: "npx", args: ["-y", "@scope/server"], env: [:]))
+}
+
 @Test func aFormBuildsEachInput() throws {
   var form = McpForm()
   form.name = " files "
@@ -42,6 +51,7 @@ import Testing
   #expect(SettingsRules.port("7735") == 7735)
   #expect(SettingsRules.port(" 1024 ") == 1024)
   #expect(SettingsRules.port("65535") == 65535)
+  #expect(SettingsRules.port("7735\n") == 7735)
   #expect(SettingsRules.port("1023") == nil)
   #expect(SettingsRules.port("65536") == nil)
   #expect(SettingsRules.port("77.5") == nil)

@@ -9,14 +9,15 @@ public enum SettingsRules {
   /// One `KEY=value` (env) or `Name: value` (headers) pair per line, as Electron's `parsePairs`.
   public static func pairs(_ text: String, separator: Character) throws -> [String: String] {
     var pairs: [String: String] = [:]
-    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
+    // `isNewline` splits "\r\n" too: Swift reads it as one Character, so `separator: "\n"` would not.
+    for line in text.split(whereSeparator: \.isNewline) {
+      let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
       if trimmed.isEmpty { continue }
       guard let index = trimmed.firstIndex(of: separator), index > trimmed.startIndex else {
         throw WorkspaceError("Write each line as name\(separator)value: \(trimmed)")
       }
-      let key = trimmed[..<index].trimmingCharacters(in: .whitespaces)
-      let value = trimmed[trimmed.index(after: index)...].trimmingCharacters(in: .whitespaces)
+      let key = trimmed[..<index].trimmingCharacters(in: .whitespacesAndNewlines)
+      let value = trimmed[trimmed.index(after: index)...].trimmingCharacters(in: .whitespacesAndNewlines)
       pairs[key] = value
     }
     return pairs
@@ -24,7 +25,7 @@ public enum SettingsRules {
 
   /// The bridge port typed in the field, or nil when it is not a whole number from 1024 to 65535.
   public static func port(_ text: String) -> Int? {
-    guard let value = Int(text.trimmingCharacters(in: .whitespaces)), (1024...65535).contains(value) else {
+    guard let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)), (1024...65535).contains(value) else {
       return nil
     }
     return value
@@ -56,7 +57,8 @@ public struct McpForm: Equatable, Sendable {
     let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
     switch kind {
     case .local:
-      let args = arguments.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+      let args = arguments.split(whereSeparator: \.isNewline)
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
       return .stdio(
         name: name, command: command.trimmingCharacters(in: .whitespacesAndNewlines), args: args,
         env: try SettingsRules.pairs(environment, separator: "="))
@@ -103,9 +105,11 @@ public enum ThemeName: String, CaseIterable, Sendable, Identifiable {
 /// A theme's colors as `#rrggbb`. Alpha values from tokens.css are left to the views.
 public struct ThemePalette: Equatable, Sendable {
   public let base: String
-  /// The window background's top-to-bottom gradient. One stop is a solid color.
+  /// The color stops of tokens.css's `--app-background` linear gradient. Muse's is
+  /// `linear-gradient(125deg, #082968, #061b52 63%, #072e83)`: 125 degrees, the middle stop at 63%.
+  /// Moonlight has one stop, a solid color. Task 10 (`Theme.swift`) draws the angle and the glow.
   public let backgroundStops: [String]
-  /// Muse's radial glow behind the gradient.
+  /// Muse's radial glow over the gradient: `radial-gradient(ellipse at 95% 0%, #0758cd 0%, transparent 62%)`.
   public let glow: String?
   public let sidebar, text, heading, secondary, muted, accent, onPrimary, dialog, input: String
   public let selection, focus, green, red, warning, codeBackground: String
