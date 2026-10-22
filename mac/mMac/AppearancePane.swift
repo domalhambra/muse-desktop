@@ -44,7 +44,9 @@ struct AppearancePane: View {
             .foregroundStyle(.themeSecondary)
         }
         .toggleStyle(.switch)
-        if notifications.denied {
+        if let error = notifications.lastError {
+          Text(error).foregroundStyle(.themeSecondary)
+        } else if notifications.denied {
           HStack {
             Text("Notifications are off for mMac in System Settings.")
               .foregroundStyle(.themeSecondary)

@@ -27,7 +27,9 @@ final class AppController {
   private(set) var tokenError: String?
   /// The last Workspace's unsent drafts, for the next backend's Workspace.
   private var drafts: [String: String] = [:]
-  /// The conversation the last Workspace showed or was opening, for the next backend's Workspace.
+  /// The conversation the last Workspace showed or was opening, or one whose notification was
+  /// clicked while no Workspace existed, for the next backend's Workspace. Only `dropWorkspace()`
+  /// with a Workspace overwrites it, so a click's id survives a start that has not built one yet.
   private var reopen: String?
   let asks = AskQueue()
   /// Completion notifications. A click opens its conversation in the current Workspace.
@@ -45,10 +47,16 @@ final class AppController {
   @ObservationIgnored var showWindow: (@MainActor () -> Void)?
 
   init() {
+    // A click while no Workspace exists (the backend starting or stopped, or a click that
+    // launched mMac) hands the conversation to the next Workspace, which opens it once ready.
     notifications.openConversation = { [weak self] sessionId in
-      guard let self, let workspace = self.workspace else { return }
+      guard let self else { return }
       self.showMainWindow()
-      Task { await workspace.open(sessionId) }
+      if let workspace = self.workspace {
+        Task { await workspace.open(sessionId) }
+      } else {
+        self.reopen = sessionId
+      }
     }
   }
 
@@ -99,12 +107,13 @@ final class AppController {
       let started = try await client.start(dataFolder: Self.dataFolder(), bridgeToken: token)
       let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
       reopen = nil
-      // Electron checks its window's focus; for a one-window app `NSApp.isActive` is the Mac's.
+      // Electron posts unless its window has focus, and with no window it posts too. mMac counts
+      // itself focused only while it is active and the conversation window is open.
       workspace.turnFinished = { [weak self, weak workspace] session, previous in
         guard let self, let workspace else { return }
         if CompletionNotice.shouldPost(
           previous: previous, next: session.status, enabled: workspace.preferences.notifyOnCompletion,
-          focused: NSApp.isActive)
+          focused: NSApp.isActive && NSApp.windows.contains { $0.isVisible && MMacApp.isMainWindow($0) })
         {
           self.notifications.post(for: session)
         }

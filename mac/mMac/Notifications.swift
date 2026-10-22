@@ -2,6 +2,7 @@ import AppKit
 import MuseBackend
 import MuseKit
 import Observation
+import os
 @preconcurrency import UserNotifications
 
 /// Completion notifications. Electron posts them from its main process; mMac posts them here.
@@ -13,6 +14,11 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
   @ObservationIgnored var openConversation: (@MainActor (String) -> Void)?
   /// macOS refused permission. `AppearancePane` then shows how to turn it on in System Settings.
   private(set) var denied = false
+  /// Why the last permission request failed, when it failed rather than being refused.
+  /// `AppearancePane` shows it in place of the System Settings note.
+  private(set) var lastError: String?
+
+  private nonisolated static let log = Logger(subsystem: "com.domalhambra.mmac", category: "notifications")
 
   /// System Settings › Notifications.
   static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!
@@ -23,12 +29,18 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     UNUserNotificationCenter.current().delegate = self
   }
 
-  /// Asks macOS once; later calls return the saved answer.
+  /// Asks macOS once; later calls return the saved answer. An error is not a refusal: it sets
+  /// `lastError`, leaves `denied` as it was, and returns false.
   func requestPermission() async -> Bool {
-    let granted =
-      (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
-    denied = !granted
-    return granted
+    do {
+      let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+      denied = !granted
+      lastError = nil
+      return granted
+    } catch {
+      lastError = "mMac could not ask macOS for notification permission: \(error.localizedDescription)"
+      return false
+    }
   }
 
   /// Reads the saved answer without asking, so a refusal made in System Settings shows too.
@@ -51,8 +63,14 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     content.body = notice.body
     content.sound = .default
     content.userInfo = ["sessionId": session.sessionId]
+    // Logs only the error: the body is the conversation's name or title.
     UNUserNotificationCenter.current().add(
-      UNNotificationRequest(identifier: session.sessionId, content: content, trigger: nil))
+      UNNotificationRequest(identifier: session.sessionId, content: content, trigger: nil)
+    ) { error in
+      if let error {
+        Self.log.error("Could not post a completion notification: \(error.localizedDescription, privacy: .public)")
+      }
+    }
   }
 
   /// A click on a notification. macOS calls it off the main actor.
