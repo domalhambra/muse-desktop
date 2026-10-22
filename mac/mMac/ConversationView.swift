@@ -65,7 +65,12 @@ struct ConnectionBanner: View {
       Spacer()
       Button("Reconnect") { Task { await workspace.reconnect() } }
       MuseCodeSettingsButton { Text("Set up") }
-      Button("Choose Muse Code…") { Task { await controller.chooseCLI() } }
+      Button("Choose Muse Code…") {
+        Task {
+          guard let path = await AppController.chooseCLIPath() else { return }
+          await workspace.setCLIPath(path)
+        }
+      }
       if !workspace.preferences.cliPath.isEmpty {
         Button("Use automatic detection") { Task { await workspace.setCLIPath("") } }
       }

@@ -55,10 +55,10 @@ struct SettingsView: View {
   }
 
   @ViewBuilder private func content(_ pane: Pane) -> some View {
-    if let workspace = controller.workspace, let settings = controller.settings {
+    if let settings = controller.settings {
       switch pane {
-      case .appearance: AppearancePane(workspace: workspace)
-      case .museCode: MuseCodePane(controller: controller, settings: settings)
+      case .appearance: AppearancePane(workspace: settings.workspace)
+      case .museCode: MuseCodePane(settings: settings)
       case .mcp: McpPane(settings: settings)
       case .bridges: BridgesPane(settings: settings)
       }

@@ -6,7 +6,6 @@ import SwiftUI
 /// Electron's Muse Code tab: the connection, a custom path, and the installation guide. Every
 /// action goes through `SettingsModel`, so its errors show on the Settings window.
 struct MuseCodePane: View {
-  let controller: AppController
   let settings: SettingsModel
   @State private var path = ""
 
@@ -42,7 +41,12 @@ struct MuseCodePane: View {
       Section {
         TextField("Custom executable path", text: $path, prompt: Text("Automatic detection (recommended)"))
         HStack {
-          Button("Browse…") { Task { await controller.chooseCLI(fromSettings: true) } }
+          Button("Browse…") {
+            Task {
+              guard let path = await AppController.chooseCLIPath() else { return }
+              await settings.setCLIPath(path)
+            }
+          }
           Spacer()
           if !workspace.preferences.cliPath.isEmpty {
             Button("Use automatic detection") { Task { await settings.setCLIPath("") } }

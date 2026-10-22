@@ -17,27 +17,37 @@ final class AlertToken {
 /// open there, such as Rename, so an Ask that the rename starts still shows.
 @MainActor
 enum SheetAlert {
-  /// The window a new sheet attaches to: the front-most sheet of the main window, short of an
-  /// alert. With `preferringKey`, the key window's comes first, so an open panel started in the
-  /// Settings window attaches there. With no window showing, waits up to `limit` for one, since
-  /// an Ask reopens the window first. Stops waiting when `token` is closed.
+  /// The window a new sheet attaches to: the front-most sheet of the conversation window, short
+  /// of an alert. With `preferringKey`, the key window's comes first, so an open panel started in
+  /// the Settings window attaches there. While the conversation window is not showing, waits up
+  /// to `limit` for it, since an Ask and the File menu open it first; then any window that can be
+  /// main will do. Stops waiting when `token` is closed.
   static func host(
     waitingUpTo limit: Duration = .zero, token: AlertToken? = nil, preferringKey: Bool = false
   ) async -> NSWindow? {
     let deadline = ContinuousClock.now + limit
     while true {
-      if let window = (preferringKey ? keyRoot() : nil) ?? NSApp.mainWindow
-        ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain })
+      if let window = (preferringKey ? keyRoot() : nil)
+        ?? NSApp.windows.first(where: { $0.isVisible && MMacApp.isMainWindow($0) })
       {
-        var front = window
-        // A sheet is itself a window, and can carry a sheet of its own. An alert's window is never
-        // a host: an open panel must not attach to an Ask, nor an Ask to another Ask.
-        while let sheet = front.attachedSheet, !Self.isAlert(sheet) { front = sheet }
-        return front
+        return front(of: window)
       }
-      if ContinuousClock.now >= deadline || token?.isClosed == true { return nil }
+      if token?.isClosed == true { return nil }
+      if ContinuousClock.now >= deadline {
+        return (NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }))
+          .map(front(of:))
+      }
       try? await Task.sleep(for: .milliseconds(50))
     }
+  }
+
+  /// `window`'s front-most sheet, short of an alert. A sheet is itself a window, and can carry a
+  /// sheet of its own. An alert's window is never a host: an open panel must not attach to an
+  /// Ask, nor an Ask to another Ask.
+  private static func front(of window: NSWindow) -> NSWindow {
+    var front = window
+    while let sheet = front.attachedSheet, !Self.isAlert(sheet) { front = sheet }
+    return front
   }
 
   /// The window that holds the key window: the key window itself, or the window a key sheet is
@@ -103,11 +113,12 @@ enum SheetAlert {
     return buttons.count - 1 - offset
   }
 
-  /// Runs an open panel as a sheet on the window the person is using, the key one, or on its own
-  /// when no window shows.
-  static func run(_ panel: NSOpenPanel) async -> URL? {
+  /// Runs an open panel as a sheet on the conversation window, or with `preferringKey` on the key
+  /// window, or on its own when no window shows. Waits a moment for a conversation window that
+  /// the File menu has just opened.
+  static func run(_ panel: NSOpenPanel, preferringKey: Bool = false) async -> URL? {
     let response =
-      if let window = await host(preferringKey: true) {
+      if let window = await host(waitingUpTo: .seconds(1), preferringKey: preferringKey) {
         await panel.beginSheetModal(for: window)
       } else {
         await panel.begin()

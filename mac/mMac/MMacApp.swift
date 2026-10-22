@@ -6,6 +6,12 @@ struct MMacApp: App {
   @NSApplicationDelegateAdaptor private var delegate: AppDelegate
   static let mainWindow = "main"
 
+  /// Whether `window` is the conversation window. SwiftUI names it by its scene's id. The Settings
+  /// window can become main too, so "main" in AppKit's sense does not tell them apart.
+  @MainActor static func isMainWindow(_ window: NSWindow) -> Bool {
+    window.identifier?.rawValue == mainWindow
+  }
+
   /// Where `@AppStorage` keeps the window's choices, such as `inspectorShown`. Debug builds take
   /// `MMAC_DEFAULTS_SUITE` from the UI tests: a suite of their own, emptied at launch, so a test
   /// starts from the defaults and never reads or changes Dom's. The test runner is sandboxed and
@@ -53,15 +59,16 @@ private struct FileCommands: View {
   let controller: AppController
 
   var body: some View {
-    // Both open the window first when it is closed, so the result has somewhere to show.
+    // Both bring the window forward first, opening it when it is closed, so the result and the
+    // open panel show there even when Settings is in front.
     Button("New conversation") {
-      controller.revealWindow()
+      controller.showMainWindow()
       controller.workspace?.startNew()
     }
     .keyboardShortcut("n")
     .disabled(controller.workspace == nil)
     Button("Open project…") {
-      controller.revealWindow()
+      controller.showMainWindow()
       Task { await controller.openProject() }
     }
     .keyboardShortcut("o")
@@ -93,10 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Closing the window keeps mMac and its backend running, so a turn is never cut off unasked.
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-  /// A Dock click with no window open reopens it.
+  /// A Dock click reopens the conversation window when it is closed, even with Settings open.
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-    if flag { return true }
-    return !controller.revealWindow()
+    !controller.revealWindow()
   }
 
   /// Quits after the backend has closed `muse serve`, or when the person chose to keep working.

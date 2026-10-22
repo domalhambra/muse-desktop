@@ -51,6 +51,18 @@ final class AppController {
     phase = .starting
     dropWorkspace()
     stoppedWhileQuitting = nil
+    // Read before the backend launches: the Keychain may wait on a password prompt, and no
+    // backend must be running meanwhile, since one that died could not be restarted until this
+    // start ends. An error does not stop the launch: the backend starts without a token, and the
+    // Settings window shows the error.
+    let token: String
+    do {
+      token = try await Self.readToken(from: tokens)
+      tokenError = nil
+    } catch {
+      token = ""
+      tokenError = "mMac could not read the bridge token from the Keychain: \(error.localizedDescription)"
+    }
     var launched: ProcessTransport?
     do {
       let repository = try Self.repository()
@@ -74,16 +86,6 @@ final class AppController {
         await self.backendStopped(client)
       }
       _ = try await client.hello()
-      // A Keychain error does not stop the launch: the backend starts without a token, and the
-      // Settings window shows the error.
-      let token: String
-      do {
-        token = try await Self.readToken(from: tokens)
-        tokenError = nil
-      } catch {
-        token = ""
-        tokenError = "mMac could not read the bridge token from the Keychain: \(error.localizedDescription)"
-      }
       let started = try await client.start(dataFolder: Self.dataFolder(), bridgeToken: token)
       let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
       reopen = nil
@@ -192,14 +194,26 @@ final class AppController {
     return await asks.present(ask, generation: generation)
   }
 
-  /// Opens the main window when no mMac window is visible. Returns false if it cannot.
+  /// Opens the main window when it is not showing. Settings showing does not count. Returns
+  /// false if it cannot.
   @discardableResult
   func revealWindow() -> Bool {
-    if NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) { return true }
+    if NSApp.windows.contains(where: { $0.isVisible && MMacApp.isMainWindow($0) }) { return true }
     guard let showWindow else { return false }
     showWindow()
     NSApp.activate()
     return true
+  }
+
+  /// Brings the main window forward, opening it when it is closed. The File menu's actions use
+  /// it, so what they do shows there, not on the Settings window.
+  func showMainWindow() {
+    if let window = NSApp.windows.first(where: { $0.isVisible && MMacApp.isMainWindow($0) }) {
+      window.makeKeyAndOrderFront(nil)
+    } else {
+      showWindow?()
+    }
+    NSApp.activate()
   }
 
   // MARK: Panels
@@ -220,23 +234,16 @@ final class AppController {
     _ = await workspace.send(addingProject: folder)
   }
 
-  /// "Choose Muse Code…" in the banner and Browse… in Settings: saves the executable's path and
-  /// reconnects. The panel attaches to the window it was started from. From Settings, the save
-  /// goes through `SettingsModel`, so an error shows on the Settings window; from the banner,
-  /// through the Workspace, so it shows on the main window.
-  func chooseCLI(fromSettings: Bool = false) async {
-    guard let workspace, let settings else { return }
+  /// The Muse Code executable for "Choose Muse Code…" in the banner and Browse… in Settings, or
+  /// nil when cancelled. The panel attaches to the window it was started from, the key one. Each
+  /// caller saves the path its own way, so an error shows in its own window.
+  static func chooseCLIPath() async -> String? {
     let panel = NSOpenPanel()
     panel.title = "Choose the Muse Code executable"
     panel.canChooseFiles = true
     panel.canChooseDirectories = false
     panel.showsHiddenFiles = true
-    guard let url = await SheetAlert.run(panel) else { return }
-    if fromSettings {
-      await settings.setCLIPath(url.path)
-    } else {
-      await workspace.setCLIPath(url.path)
-    }
+    return await SheetAlert.run(panel, preferringKey: true)?.path
   }
 
   /// "Choose checkout…": runs the backend from another Muse Desktop checkout.
