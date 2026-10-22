@@ -37,8 +37,10 @@ enum Footnotes {
     var closing: String { String(repeating: mark, count: length) }
   }
 
-  static func rewrite(_ source: String) -> String {
-    guard source.contains("[^") else { return source }
+  static func rewrite(_ original: String) -> String {
+    guard original.contains("[^") else { return original }
+    // Windows line ends would leave a "\r" on every line, which no fence or definition matches.
+    let source = original.replacingOccurrences(of: "\r\n", with: "\n")
     // The lines that stay, each marked when it is inside a fenced code block.
     var body: [(line: String, code: Bool)] = []
     var definitions: [String: String] = [:]
@@ -73,7 +75,7 @@ enum Footnotes {
       continuing = nil
       body.append((line, false))
     }
-    guard !definitions.isEmpty else { return source }
+    guard !definitions.isEmpty else { return original }
 
     var order: [String] = []
     let rewritten = body.map { line, code -> String in

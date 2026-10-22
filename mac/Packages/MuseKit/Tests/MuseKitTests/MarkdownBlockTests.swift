@@ -289,6 +289,18 @@ private func intent(of word: String, in text: AttributedString) -> InlinePresent
   #expect(items.count == 1)
 }
 
+@Test func footnotesWorkWithWindowsLineEnds() {
+  let blocks = MarkdownBlock.parse("Note[^a].\r\n\r\n```\r\ncode\r\n```\r\n\r\n[^a]: First.\r\n")
+  guard case .paragraph(let text) = blocks.first else { Issue.record("Expected a paragraph"); return }
+  #expect(String(text.characters) == "Note¹.")
+  #expect(blocks.contains(.code(language: nil, code: "code")))
+  guard case .list(true, _, let items) = blocks.last, case .paragraph(let note) = items.first?.blocks.first else {
+    Issue.record("Expected the notes")
+    return
+  }
+  #expect(String(note.characters) == "First.")
+}
+
 @MainActor @Test func anInProgressItemParsesAtMostOncePer100ms() {
   let cache = MarkdownCache()
   _ = cache.blocks(id: "a", text: "one", final: false)
