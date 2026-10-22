@@ -149,6 +149,14 @@ let worktreesJSON =
   #expect(requests(backend).filter { $0.first == "git-revert-file" } == [["git-revert-file", ["/p", "a.txt"]]])
 }
 
+@MainActor @Test func aLoadedDiffIsMeasuredOnce() async throws {
+  let (inspector, _) = await makeInspector { method, _, id in
+    method == "git-diff" ? [reply(id, #""@@ -9 +9,2 @@\n+a\n+bcdef""#)] : []
+  }
+  await inspector.select("a.txt")
+  #expect(inspector.diffMetrics == DiffLine.Metrics(maxDigits: 2, maxColumns: 13))
+}
+
 @MainActor @Test func aDiffThatFailsShowsItsMessage() async throws {
   let (inspector, _) = await makeInspector { method, _, id in
     method == "git-diff" ? [failure(id, "This file no longer has changes. Refresh the changes panel.")] : []

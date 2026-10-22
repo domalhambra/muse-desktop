@@ -252,3 +252,12 @@ let reviewDiff = [
   // Not a hunk header: nothing.
   #expect(DiffLine.hunkText(rows, at: 6) == "")
 }
+
+@Test func diffMetricsGiveTheWidestNumberAndLine() {
+  let rows = DiffLine.parse("@@ -98,3 +99,3 @@\n a\n-bb\n+\t\tc\n d")
+  // Lines 99 to 101: three digits. "+\t\tc" is one column, two tabs of eight, and one more: 18,
+  // longer than the 17-column hunk header.
+  #expect(DiffLine.metrics(rows) == DiffLine.Metrics(maxDigits: 3, maxColumns: 18))
+  #expect(DiffLine.metrics([]) == DiffLine.Metrics(maxDigits: 0, maxColumns: 0))
+  #expect(DiffLine.metrics(DiffLine.parse("plain")) == DiffLine.Metrics(maxDigits: 0, maxColumns: 5))
+}

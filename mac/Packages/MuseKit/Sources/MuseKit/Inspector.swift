@@ -28,6 +28,8 @@ public final class Inspector {
   /// The changed file whose diff shows.
   public private(set) var selected: String?
   public private(set) var diff: Loadable<[DiffLine]> = .idle
+  /// The loaded diff's measurements, taken once when it loads rather than on every render.
+  public private(set) var diffMetrics = DiffLine.Metrics(maxDigits: 0, maxColumns: 0)
   /// True while a review or worktree action runs. The buttons are disabled meanwhile.
   public private(set) var busy = false
   /// A successful merge's message, until the next action.
@@ -166,7 +168,9 @@ public final class Inspector {
     do {
       let text = try await client.gitDiff(project: project, path: path)
       guard sequence == diffSequence, generation == self.generation else { return }
-      diff = .loaded(DiffLine.parse(text))
+      let rows = DiffLine.parse(text)
+      diffMetrics = DiffLine.metrics(rows)
+      diff = .loaded(rows)
     } catch is CancellationError {
       // The caller stopped waiting, so nothing shows a message; the next select or refresh loads it.
     } catch {

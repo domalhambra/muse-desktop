@@ -228,9 +228,9 @@ struct DiffPane: View {
           .padding()
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       case .loaded(let rows):
-        DiffView(rows: rows, locked: locked, lockedHelp: lockedHelp) { index in
+        DiffView(rows: rows, locked: locked, lockedHelp: lockedHelp, revert: { index in
           Task { await inspector.revertHunk(index) }
-        }
+        }, metrics: inspector.diffMetrics)
         .equatable()
       }
     }
@@ -261,31 +261,22 @@ struct DiffView: View, Equatable {
   let locked: Bool
   let lockedHelp: String?
   let revert: (Int) -> Void
-  /// The gutter's width, from the largest line number's digits.
-  private let gutterWidth: CGFloat
-  /// One width for every row, from the longest line, so row tints line up and the horizontal
-  /// scroller holds still.
-  private let contentWidth: CGFloat
-
-  init(rows: [DiffLine], locked: Bool, lockedHelp: String?, revert: @escaping (Int) -> Void) {
-    self.rows = rows
-    self.locked = locked
-    self.lockedHelp = lockedHelp
-    self.revert = revert
-    let advance = Self.advance
-    let digits = rows.map(\.gutter.count).max() ?? 0
-    gutterWidth = CGFloat(max(digits, 2)) * advance + 4
-    let widest =
-      rows.map { row -> CGFloat in
-        // A tab is counted as eight columns, the most it can take.
-        let columns = row.text.reduce(0) { $0 + ($1 == "\t" ? 8 : 1) }
-        return CGFloat(columns) * advance + (row.hunkIndex == nil ? 0 : Self.hunkButtonWidth)
-      }.max() ?? 0
-    contentWidth = Self.padding * 2 + gutterWidth + Self.spacing + widest
-  }
+  /// Measured once when the diff loaded, so a re-render does no per-row work.
+  let metrics: DiffLine.Metrics
 
   nonisolated static func == (lhs: DiffView, rhs: DiffView) -> Bool {
     lhs.rows == rhs.rows && lhs.locked == rhs.locked && lhs.lockedHelp == rhs.lockedHelp
+      && lhs.metrics == rhs.metrics
+  }
+
+  /// The gutter's width, from the largest line number's digits.
+  private var gutterWidth: CGFloat { CGFloat(max(metrics.maxDigits, 2)) * Self.advance + 4 }
+
+  /// One width for every row, from the longest line, so row tints line up and the horizontal
+  /// scroller holds still. Room for a Revert hunk button is always kept.
+  private var contentWidth: CGFloat {
+    Self.padding * 2 + gutterWidth + Self.spacing + CGFloat(metrics.maxColumns) * Self.advance
+      + Self.hunkButtonWidth
   }
 
   static let padding: CGFloat = 8
@@ -302,15 +293,16 @@ struct DiffView: View, Equatable {
   var body: some View {
     GeometryReader { proxy in
       let width = max(contentWidth, proxy.size.width)
+      let gutterWidth = gutterWidth
       ScrollView([.vertical, .horizontal]) {
         LazyVStack(alignment: .leading, spacing: 0) {
           ForEach(rows) { row in
             DiffRow(
-              row: row, gutterWidth: gutterWidth, locked: locked, lockedHelp: lockedHelp, revert: revert,
+              row: row, width: width, gutterWidth: gutterWidth, locked: locked, lockedHelp: lockedHelp,
+              revert: revert,
               copyHunk: { Self.copy(DiffLine.hunkText(rows, at: row.id)) },
               copyDiff: { Self.copy(DiffLine.text(rows)) }
             )
-            .frame(width: width, alignment: .leading)
           }
         }
         .padding(.vertical, 6)
@@ -328,6 +320,8 @@ struct DiffView: View, Equatable {
 
 struct DiffRow: View {
   let row: DiffLine
+  /// The width every row shares, so each tint and context-menu target spans the whole row.
+  let width: CGFloat
   let gutterWidth: CGFloat
   let locked: Bool
   let lockedHelp: String?
@@ -357,7 +351,9 @@ struct DiffRow: View {
     }
     .padding(.horizontal, DiffView.padding)
     .padding(.vertical, 1)
+    .frame(width: width, alignment: .leading)
     .background(background)
+    .contentShape(.rect)
     .contextMenu {
       if row.kind == .hunk {
         Button("Copy hunk", action: copyHunk)

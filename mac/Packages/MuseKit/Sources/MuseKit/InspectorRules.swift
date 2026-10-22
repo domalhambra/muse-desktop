@@ -34,6 +34,29 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
     }
   }
 
+  /// What a diff view needs to size its rows, measured once per loaded diff.
+  public struct Metrics: Equatable, Sendable {
+    /// Digits in the largest gutter number.
+    public let maxDigits: Int
+    /// The longest row's text in columns, a tab counted as eight.
+    public let maxColumns: Int
+
+    public init(maxDigits: Int, maxColumns: Int) {
+      self.maxDigits = maxDigits
+      self.maxColumns = maxColumns
+    }
+  }
+
+  public static func metrics(_ rows: [DiffLine]) -> Metrics {
+    var largest = 0
+    var columns = 0
+    for row in rows {
+      largest = max(largest, row.newNumber ?? row.oldNumber ?? 0)
+      columns = max(columns, row.text.unicodeScalars.reduce(0) { $0 + ($1 == "\t" ? 8 : 1) })
+    }
+    return Metrics(maxDigits: largest > 0 ? String(largest).count : 0, maxColumns: columns)
+  }
+
   /// The diff as text, without gutters: "Copy diff".
   public static func text(_ rows: [DiffLine]) -> String { rows.map(\.text).joined(separator: "\n") }
 
