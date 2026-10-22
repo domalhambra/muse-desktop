@@ -167,6 +167,8 @@ let worktreesJSON =
   #expect(!backend.messages.contains { $0["method"] == "git-revert-file" })
   staging.cancel()
   await staging.value
+  // A cancelled action skips its refresh.
+  #expect(!backend.messages.contains { $0["method"] == "git-status" })
   await inspector.revertFile()
   #expect(reported == ["This file has no changes to revert."])
 }
@@ -200,16 +202,18 @@ let worktreesJSON =
 
 @MainActor @Test func showingAnotherProjectResetsAndDropsLateReplies() async throws {
   let (inspector, backend) = await makeInspector { method, args, id in
-    guard args.first == "/q" else { return [] }
-    return [reply(id, method == "git-status" ? statusJSON([], branch: "dev") : "[]")]
+    // The first project's worktree list answers late, below. Everything else answers at once.
+    if args.first == "/p", method == "worktrees" { return [] }
+    if method == "git-status" { return [reply(id, statusJSON([], branch: args.first == "/q" ? "dev" : "main"))] }
+    return [reply(id, "[]")]
   }
+  inspector.tab = .files
   let old = Task { await inspector.refresh() }
   try await eventually { backend.messages.contains { $0["method"] == "worktrees" } }
   inspector.show(project: "/q")
   #expect(inspector.project == "/q")
   #expect(inspector.git == nil)
-  await inspector.refresh()
-  #expect(inspector.git?.branch == "dev")
+  #expect(inspector.tab == .changes)
   guard case .number(let late)? = backend.messages.first(where: { $0["method"] == "worktrees" })?["id"] else {
     Issue.record("No first worktrees request")
     return
@@ -217,7 +221,84 @@ let worktreesJSON =
   backend.push(reply(Int(late), worktreesJSON))
   await old.value
   #expect(inspector.worktrees.isEmpty)
+  #expect(inspector.git == nil)
+  #expect(!inspector.loading)
+  #expect(!requests(backend).contains(["git-status", ["/p"]]))
+  await inspector.refresh()
   #expect(inspector.git?.branch == "dev")
+}
+
+@MainActor @Test func anActionAcrossAProjectChangeIsDropped() async throws {
+  let (inspector, backend) = await makeInspector { method, args, id in
+    switch method {
+    case "git-stage-file": return []  // answered late, below
+    case "git-diff": return [reply(id, #""""#)]
+    case "git-status": return [reply(id, statusJSON([]))]
+    default: return [reply(id, "[]")]
+    }
+  }
+  var reported: [String] = []
+  inspector.reportError = { reported.append($0) }
+  await inspector.select("a.txt")
+  let staging = Task { await inspector.stage() }
+  try await eventually { backend.messages.contains { $0["method"] == "git-stage-file" } }
+  inspector.show(project: "/q")
+  #expect(!inspector.busy)
+  guard case .number(let late)? = backend.messages.first(where: { $0["method"] == "git-stage-file" })?["id"] else {
+    Issue.record("No stage request")
+    return
+  }
+  backend.push(failure(Int(late), "This file has no changes to stage."))
+  await staging.value
+  #expect(reported.isEmpty)
+  #expect(!inspector.busy)
+  // Neither project is refreshed for an action that belongs to the one the person left.
+  #expect(!backend.messages.contains { $0["method"] == "git-status" })
+}
+
+@MainActor @Test func aDiffAcrossAProjectChangeIsDropped() async throws {
+  let (inspector, backend) = await makeInspector()
+  let selecting = Task { await inspector.select("a.txt") }
+  try await eventually { backend.messages.contains { $0["method"] == "git-diff" } }
+  inspector.show(project: "/q")
+  guard case .number(let late)? = backend.messages.first(where: { $0["method"] == "git-diff" })?["id"] else {
+    Issue.record("No diff request")
+    return
+  }
+  backend.push(reply(Int(late), #""for a""#))
+  await selecting.value
+  #expect(inspector.selected == nil)
+  #expect(inspector.diff == .idle)
+}
+
+@MainActor @Test func aCancelledReadShowsNoMessage() async throws {
+  let (inspector, backend) = await makeInspector()  // nothing answers
+  let reads: [Task<Void, Never>] = [
+    Task { await inspector.select("a.txt") },
+    Task { await inspector.open(directory: "src") },
+    Task { await inspector.preview("README.md") },
+  ]
+  try await eventually { backend.messages.count == 3 }
+  for read in reads { read.cancel() }
+  for read in reads { await read.value }
+  if case .failed(let message) = inspector.diff { Issue.record("The diff shows \(message)") }
+  if case .failed(let message) = inspector.preview { Issue.record("The preview shows \(message)") }
+  #expect(inspector.filesError == nil)
+  #expect(!inspector.filesLoading)
+}
+
+@MainActor @Test func aMergeThatFailsSilentlySaysSo() async throws {
+  let (inspector, _) = await makeInspector { method, _, id in
+    switch method {
+    case "worktree-merge": [reply(id, #"{"ok":false,"output":""}"#)]
+    case "git-status": [reply(id, statusJSON([]))]
+    default: [reply(id, "[]")]
+    }
+  }
+  var reported: [String] = []
+  inspector.reportError = { reported.append($0) }
+  await inspector.merge(WorktreeEntry(path: "/p/.muse/worktrees/w1", branch: "muse/w1", isMain: false))
+  #expect(reported == ["The merge did not finish."])
 }
 
 @MainActor @Test func filesOpenFoldersFilterAndPreview() async throws {

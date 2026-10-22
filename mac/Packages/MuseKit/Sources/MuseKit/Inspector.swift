@@ -66,6 +66,7 @@ public final class Inspector {
     guard project != self.project else { return }
     generation += 1
     self.project = project
+    tab = .changes
     git = nil
     worktrees = []
     loading = false
@@ -157,6 +158,8 @@ public final class Inspector {
       let text = try await client.gitDiff(project: project, path: path)
       guard sequence == diffSequence, generation == self.generation else { return }
       diff = .loaded(DiffLine.parse(text))
+    } catch is CancellationError {
+      // The caller stopped waiting, so nothing shows a message; the next select or refresh loads it.
     } catch {
       guard sequence == diffSequence, generation == self.generation else { return }
       diff = .failed(error.localizedDescription)
@@ -191,7 +194,9 @@ public final class Inspector {
   public func merge(_ entry: WorktreeEntry) async {
     await act { client, project in
       let result = try await client.mergeWorktree(project: project, path: entry.path)
-      guard result.ok else { throw WorkspaceError(result.output) }
+      guard result.ok else {
+        throw WorkspaceError(result.output.isEmpty ? "The merge did not finish." : result.output)
+      }
       return result.output
     }
   }
@@ -244,6 +249,8 @@ public final class Inspector {
       let list = try await client.files(project: project, directory: directory)
       guard current() else { return }
       files = list
+    } catch is CancellationError {
+      // The caller stopped waiting. The next open lists the folder.
     } catch {
       guard current() else { return }
       filesError = error.localizedDescription
@@ -258,6 +265,7 @@ public final class Inspector {
   }
 
   public func preview(_ path: String) async {
+    guard !project.isEmpty else { return }
     let project = self.project
     let generation = self.generation
     previewPath = path
@@ -268,6 +276,8 @@ public final class Inspector {
       let text = try await client.readFile(project: project, path: path)
       guard sequence == previewSequence, generation == self.generation else { return }
       preview = .loaded(text)
+    } catch is CancellationError {
+      // The caller stopped waiting. The next preview reads the file.
     } catch {
       guard sequence == previewSequence, generation == self.generation else { return }
       preview = .failed(error.localizedDescription)
