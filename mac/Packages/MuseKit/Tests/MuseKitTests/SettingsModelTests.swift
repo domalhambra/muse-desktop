@@ -263,6 +263,22 @@ private func listJSON(_ names: String...) -> String {
   #expect(requests(backend) == [["preferences", [["cliPath": "/opt/muse"]]]])
 }
 
+@MainActor @Test func aMuseCodePathSavedButNotConnectedShowsInSettings() async {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "preferences": [reply(id, #"{"cliPath":"/opt/muse","recentProjects":["/p"]}"#)]
+    case "connect": [failure(id, "Muse Code did not start.")]
+    default: []
+    }
+  }
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
+  await settings.setCLIPath("/opt/muse")
+  #expect(workspace.preferences.cliPath == "/opt/muse")
+  #expect(settings.errorMessage == "Muse Code did not start.")
+  #expect(workspace.errorMessage == nil)
+  #expect(requests(backend) == [["preferences", [["cliPath": "/opt/muse"]]], ["connect", []]])
+}
+
 @MainActor @Test func aFailedReconnectKeepsTheNoticeAndShowsInSettings() async {
   let (workspace, _) = await makeWorkspace { method, _, id in
     switch method {

@@ -29,14 +29,18 @@ import Testing
   #expect(own.service == "com.domalhambra.mmac.bridge-token")
   #expect(own.account == "mcp-bridge")
   #expect(KeychainTokenStore.app(environment: ["MMAC_KEYCHAIN_SERVICE": ""]).service == own.service)
-  let test = KeychainTokenStore.app(environment: ["MMAC_KEYCHAIN_SERVICE": "com.domalhambra.mmac.test"])
-  #expect(test.service == "com.domalhambra.mmac.test")
-  #expect(test.account == "mcp-bridge")
+  #if DEBUG
+    let test = KeychainTokenStore.app(environment: ["MMAC_KEYCHAIN_SERVICE": "com.domalhambra.mmac.test"])
+    #expect(test.service == "com.domalhambra.mmac.test")
+    #expect(test.account == "mcp-bridge")
+  #endif
 }
 
 @Test func debugBuildsCanKeepTheTokenInMemory() {
-  #expect(BridgeTokenStores.app(environment: ["MMAC_TOKEN_STORE": "memory"]) is MemoryTokenStore)
-  let keychain = BridgeTokenStores.app(environment: ["MMAC_KEYCHAIN_SERVICE": "com.domalhambra.mmac.test"])
-  #expect((keychain as? KeychainTokenStore)?.service == "com.domalhambra.mmac.test")
   #expect((BridgeTokenStores.app(environment: [:]) as? KeychainTokenStore)?.service == "com.domalhambra.mmac.bridge-token")
+  #if DEBUG
+    #expect(BridgeTokenStores.app(environment: ["MMAC_TOKEN_STORE": "memory"]) is MemoryTokenStore)
+    let keychain = BridgeTokenStores.app(environment: ["MMAC_KEYCHAIN_SERVICE": "com.domalhambra.mmac.test"])
+    #expect((keychain as? KeychainTokenStore)?.service == "com.domalhambra.mmac.test")
+  #endif
 }
