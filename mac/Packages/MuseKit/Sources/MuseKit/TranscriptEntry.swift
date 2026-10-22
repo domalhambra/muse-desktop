@@ -109,7 +109,13 @@ public enum ToolPresentation {
       let scalar = scalars[index]
       if inString {
         out.append(scalar)
-        if escaped { escaped = false } else if scalar == "\\" { escaped = true } else if scalar == "\"" { inString = false }
+        if escaped {
+          escaped = false
+        } else if scalar == "\\" {
+          escaped = true
+        } else if scalar == "\"" {
+          inString = false
+        }
         index += 1
         continue
       }

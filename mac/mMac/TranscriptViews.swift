@@ -174,9 +174,14 @@ struct UserMessageView: View {
 
 struct AgentMessageView: View {
   let item: TranscriptItem
+  /// Bumped after a pause in a streamed reply. `MarkdownCache` parses an in-progress item at most
+  /// once per 100 ms, so without it the last text received could stay unparsed until the next
+  /// update, or forever for an item that never leaves "inProgress".
+  @State private var catchUp = 0
 
   var body: some View {
     let text = item.text ?? ""
+    let _ = catchUp
     VStack(alignment: .leading, spacing: 6) {
       MessageHeader(name: "Muse", composing: item.status == "inProgress", copyText: text)
       if text.isEmpty, item.status == "inProgress" {
@@ -185,6 +190,11 @@ struct AgentMessageView: View {
         MarkdownView(
           blocks: MarkdownCache.shared.blocks(id: item.itemId, text: text, final: item.status != "inProgress"))
       }
+    }
+    .task(id: text) {
+      guard item.status == "inProgress" else { return }
+      try? await Task.sleep(for: .milliseconds(110))
+      if !Task.isCancelled { catchUp += 1 }
     }
   }
 }

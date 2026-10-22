@@ -233,6 +233,62 @@ private func intent(of word: String, in text: AttributedString) -> InlinePresent
   #expect(!blocks.contains(.rule))
 }
 
+@Test func footnoteFencesCloseOnlyOnALongEnoughRunOfTheSameMark() {
+  let source = "Note[^a].\n\n````\n```\n[^b]: inside\n```\n````\n\n~~~\n```js\n[^c]: in\n~~~ x\n~~~\n\n[^a]: First."
+  let blocks = MarkdownBlock.parse(source)
+  #expect(blocks.contains(.code(language: nil, code: "```\n[^b]: inside\n```")))
+  #expect(blocks.contains(.code(language: nil, code: "```js\n[^c]: in\n~~~ x")))
+  guard case .list(true, _, let items) = blocks.last else { Issue.record("Expected a list"); return }
+  #expect(items.count == 1)
+}
+
+@Test func footnotesCloseAnOpenFenceBeforeTheNotes() {
+  let blocks = MarkdownBlock.parse("Note[^a].\n\n[^a]: First.\n\n```\nopen code")
+  #expect(blocks.count == 4)
+  #expect(blocks.contains(.code(language: nil, code: "open code")))
+  #expect(blocks.contains(.rule))
+  guard case .list(true, _, let items) = blocks.last, case .paragraph(let note) = items.first?.blocks.first else {
+    Issue.record("Expected the notes after the code")
+    return
+  }
+  #expect(String(note.characters) == "First.")
+}
+
+@Test func footnoteCodeSpansCloseOnARunOfTheSameLength() {
+  func paragraph(_ source: String) -> String? {
+    guard case .paragraph(let text) = MarkdownBlock.parse(source + "\n\n[^a]: Note.").first else { return nil }
+    return String(text.characters)
+  }
+  #expect(paragraph("Use ``[^a]`` and a lone ` before [^a].") == "Use [^a] and a lone ` before ¹.")
+  // One backtick does not close on two: both runs are plain text.
+  #expect(paragraph("Then `a`` [^a].") == "Then `a`` ¹.")
+  // A line that opens with a backtick span is not a fence.
+  guard case .paragraph(let span) = MarkdownBlock.parse("```a``` b[^a]\n\n[^a]: Note.").first else {
+    Issue.record("Expected a paragraph")
+    return
+  }
+  #expect(String(span.characters) == "a b¹")
+}
+
+@Test func aDuplicateFootnoteDefinitionAndItsContinuationAreDropped() {
+  let blocks = MarkdownBlock.parse("Use[^a].\n\n[^a]: First.\n[^a]: Second.\n    more\n")
+  guard case .list(true, _, let items) = blocks.last, case .paragraph(let note) = items.first?.blocks.first else {
+    Issue.record("Expected a list")
+    return
+  }
+  #expect(items.count == 1)
+  #expect(String(note.characters) == "First.")
+  #expect(!blocks.contains(.code(language: nil, code: "more")))
+}
+
+@Test func footnoteLabelsIgnoreCase() {
+  let blocks = MarkdownBlock.parse("See[^Note] and[^note].\n\n[^NOTE]: Text.")
+  guard case .paragraph(let text) = blocks.first else { Issue.record("Expected a paragraph"); return }
+  #expect(String(text.characters) == "See¹ and¹.")
+  guard case .list(true, _, let items) = blocks.last else { Issue.record("Expected a list"); return }
+  #expect(items.count == 1)
+}
+
 @MainActor @Test func anInProgressItemParsesAtMostOncePer100ms() {
   let cache = MarkdownCache()
   _ = cache.blocks(id: "a", text: "one", final: false)
