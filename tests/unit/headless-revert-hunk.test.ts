@@ -44,3 +44,9 @@ it('names a hunk that no longer applies, and leaves the file alone', async () =>
   await expect(revertExpectedHunk(dir, header, hunks[0])).rejects.toThrow(STALE)
   expect(await readFile(join(dir, 'a.txt'), 'utf8')).toBe(moved)
 })
+
+it('names a file that was deleted after the diff was read', async () => {
+  const { header, hunks } = splitHunks(await getRawDiff(dir, 'a.txt'))
+  await rm(join(dir, 'a.txt'))
+  await expect(revertExpectedHunk(dir, header, hunks[0])).rejects.toThrow(STALE)
+})

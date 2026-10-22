@@ -463,7 +463,11 @@ async function repository(name = 'repo') {
   return { path, git, gitIn }
 }
 
-/** `git diff` of a CRLF a.txt with two hunks, as git prints it. Byte-exact: the \r stay. Task 8's Swift test reads the same bytes from mac/Packages/MuseKit/Tests/MuseKitTests/Fixtures/crlf-two-hunks.diff. */
+/**
+ * `git diff` of a CRLF a.txt with two hunks, as git prints it. Byte-exact: the \r stay.
+ * Task 8's Swift test reads the same bytes from
+ * mac/Packages/MuseKit/Tests/MuseKitTests/Fixtures/crlf-two-hunks.diff.
+ */
 const CRLF_TWO_HUNKS_DIFF =
   'diff --git a/a.txt b/a.txt\n' +
   'index f68ba2a..f952615 100644\n' +
@@ -613,8 +617,9 @@ describe('headless backend, M2 inspector methods', () => {
     expect(hunks).toHaveLength(2)
     await call('git-revert-hunk', path, 'a.txt', 0, hunks[0])
     const after = await readFile(join(path, 'a.txt'), 'utf8')
-    expect(after).toContain('two\r\n')
-    expect(after).toContain('ten and a half\r\n')
+    expect(after).toBe(
+      crlf('one\ntwo\nthree\n' + 'x\n'.repeat(20) + 'ten\nten and a half\neleven\n'),
+    )
   })
 
   it('lists files and reads one, inside the project only', async () => {
