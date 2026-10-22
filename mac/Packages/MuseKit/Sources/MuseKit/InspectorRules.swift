@@ -18,9 +18,13 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
   /// The one gutter Electron draws: the new line number, else the old one.
   public var gutter: String { (newNumber ?? oldNumber).map(String.init) ?? "" }
 
-  /// Differs from Electron in three ways: a final newline adds no empty row, a
-  /// `\ No newline at end of file` line is meta, and an untracked file's lines (which
-  /// `getGitDiff` writes with no hunk header) are numbered from 1.
+  /// Differs from Electron in four ways:
+  /// - A final newline adds no empty row. For an untracked file, `getGitDiff` splits its content on
+  ///   "\n", so a file that ends in a newline gives a last row of a bare `+`. That row is dropped too.
+  /// - A `\ No newline at end of file` line is meta, not context.
+  /// - An untracked file's lines (which `getGitDiff` writes with no hunk header) are numbered from 1.
+  /// - Inside a hunk, a line that starts `---` or `+++` (a removed `-- note`, an added `++ x`) is
+  ///   content and keeps its number. Electron reads it as a file header. A `diff ` line ends the hunk.
   public static func parse(_ diff: String) -> [DiffLine] {
     var lines = diff.components(separatedBy: "\n")
     // utf8, because Swift reads "\r\n" as one Character that is not "\n".
@@ -31,8 +35,15 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
     var working = false
     var workingHunks = 0
     var newFile = false
+    var inHunk = false
     func add(_ kind: Kind, _ text: String, old: Int? = nil, new: Int? = nil, hunk: Int? = nil) {
       rows.append(DiffLine(id: rows.count, kind: kind, oldNumber: old, newNumber: new, text: text, hunkIndex: hunk))
+    }
+    // An untracked file ending in a newline: drop the bare `+` that `split('\n')` leaves.
+    if lines.last == "+", lines.count > 1, !lines.contains(where: { hunkStart($0) != nil }),
+      lines.contains("--- /dev/null")
+    {
+      lines.removeLast()
     }
     for line in lines {
       if line == "Staged changes" || line == "Working changes" {
@@ -41,11 +52,16 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
       } else if let (old, new) = hunkStart(line) {
         oldLine = old
         newLine = new
+        inHunk = true
         add(.hunk, line, hunk: working ? workingHunks : nil)
         if working { workingHunks += 1 }
-      } else if line.hasPrefix("---") || line.hasPrefix("+++") || line.hasPrefix("diff ")
-        || line.hasPrefix("index ") || line.hasPrefix("\\")
+      } else if line.hasPrefix("diff ") || line.hasPrefix("index ") || line.hasPrefix("\\")
+        || (!inHunk && (line.hasPrefix("---") || line.hasPrefix("+++")))
       {
+        if line.hasPrefix("diff ") {
+          inHunk = false
+          newFile = false
+        }
         if line == "--- /dev/null" { newFile = true }
         if line.hasPrefix("+++"), newFile, newLine == 0 { newLine = 1 }
         add(.meta, line)
@@ -147,7 +163,12 @@ public enum ChangeLabel {
     return String(path[..<slash])
   }
 
-  static func normalized(_ path: String) -> String { path.replacingOccurrences(of: "\\", with: "/") }
+  /// Slashes forward, and no trailing one: an untracked folder arrives as `newdir/`.
+  static func normalized(_ path: String) -> String {
+    var path = path.replacingOccurrences(of: "\\", with: "/")
+    while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+    return path
+  }
 }
 
 /// The text of a project's Git badges, as Electron's project cards.
@@ -204,9 +225,9 @@ public struct ActivityEntry: Equatable, Sendable, Identifiable {
 }
 
 public enum FilePreview {
-  /// As Electron's `content.split('\n').length`. Counts bytes, because Swift reads "\r\n" as one
-  /// `Character` that is not "\n".
+  /// As Electron's line count: `content.split('\n').length`, or 0 for empty content. Counts bytes,
+  /// because Swift reads "\r\n" as one `Character` that is not "\n".
   public static func lineCount(_ text: String) -> Int {
-    text.utf8.reduce(1) { $0 + ($1 == 10 ? 1 : 0) }
+    text.isEmpty ? 0 : text.utf8.reduce(1) { $0 + ($1 == 10 ? 1 : 0) }
   }
 }

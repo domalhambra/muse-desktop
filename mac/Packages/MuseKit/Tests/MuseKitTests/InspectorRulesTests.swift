@@ -121,7 +121,7 @@ import Testing
 @Test func previewLineCountsSplitOnNewlines() {
   #expect(FilePreview.lineCount("a\nb\n") == 3)
   #expect(FilePreview.lineCount("one") == 1)
-  #expect(FilePreview.lineCount("") == 1)
+  #expect(FilePreview.lineCount("") == 0)
   #expect(FilePreview.lineCount("a\r\nb") == 2)
 }
 
@@ -129,4 +129,43 @@ import Testing
   let rows = DiffLine.parse("@@ -1 +1 @@\r\n-a\r\n+b\r\n")
   #expect(rows.count == 3)
   #expect(rows.last?.text == "+b\r")
+}
+
+@Test func removedAndAddedLinesThatLookLikeFileHeadersKeepTheirNumbers() {
+  // "-- note" removed is "--- note"; "++ x" added is "+++ x". Inside a hunk they are content.
+  let rows = DiffLine.parse("diff --git a/a.sql b/a.sql\n--- a/a.sql\n+++ b/a.sql\n@@ -1,3 +1,3 @@\n--- note\n+++ x\n keep")
+  #expect(rows.map(\.kind) == [.meta, .meta, .meta, .hunk, .removed, .added, .context])
+  #expect(rows[4].oldNumber == 1 && rows[5].newNumber == 1)
+  #expect(rows[6].oldNumber == 2 && rows[6].newNumber == 2)
+}
+
+@Test func aNewDiffSectionStartsWithFileHeadersAgain() {
+  let rows = DiffLine.parse("@@ -1 +1 @@\n-a\n+b\ndiff --git a/b b/b\n--- a/b\n+++ b/b\n@@ -3 +3 @@\n-c")
+  #expect(rows.map(\.kind) == [.hunk, .removed, .added, .meta, .meta, .meta, .hunk, .removed])
+  #expect(rows.last?.oldNumber == 3)
+}
+
+@Test func aNewFileFlagDoesNotLeakPastADiffLine() {
+  // `--- /dev/null` marks one file as new. A `diff ` line starts the next file, which is not.
+  let rows = DiffLine.parse("--- /dev/null\ndiff --git a/o b/o\n+++ b/o\n+y")
+  #expect(rows.last?.kind == .added)
+  #expect(rows.last?.newNumber == nil)
+}
+
+@Test func anUntrackedFilesFinalNewlineAddsNoEmptyAddedRow() {
+  let rows = DiffLine.parse("--- /dev/null\n+++ b/new.txt\n+first\n+second\n+")
+  #expect(rows.map(\.kind) == [.meta, .meta, .added, .added])
+  #expect(rows.compactMap(\.newNumber) == [1, 2])
+  // An empty untracked file is just the headers and one bare "+".
+  #expect(DiffLine.parse("--- /dev/null\n+++ b/e\n+").count == 2)
+  // A bare "+" that is a real blank line in a hunk stays.
+  let hunk = DiffLine.parse("@@ -0,0 +1,2 @@\n+a\n+")
+  #expect(hunk.count == 3 && hunk.last?.newNumber == 2)
+}
+
+@Test func anUntrackedFolderShowsWithoutItsTrailingSlash() {
+  #expect(ChangeLabel.name("newdir/") == "newdir")
+  #expect(ChangeLabel.folder("newdir/") == "Project root")
+  #expect(ChangeLabel.name("a/newdir/") == "newdir")
+  #expect(ChangeLabel.folder("a/newdir/") == "a")
 }
