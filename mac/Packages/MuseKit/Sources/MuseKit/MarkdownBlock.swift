@@ -218,7 +218,8 @@ public enum MarkdownBlock: Equatable, Sendable {
 /// Parsed Markdown per transcript item, so a streamed update re-parses only the item that changed.
 /// Keyed by item id, with at most `limit` items. An item still streaming parses at most once per
 /// `throttle`: a 30 KB reply takes about 11.5 ms to parse in a Release build (measured
-/// 2026-10-21), more than half a frame at 60 Hz.
+/// 2026-10-21), more than half a frame at 60 Hz. The throttle reads the clock it is given, so a
+/// test can move time by hand.
 @MainActor
 public final class MarkdownCache {
   public static let shared = MarkdownCache()
@@ -226,7 +227,8 @@ public final class MarkdownCache {
   struct Entry {
     let text: String
     let blocks: [MarkdownBlock]
-    let parsedAt: ContinuousClock.Instant
+    /// When it parsed, as time since the cache was made.
+    let parsedAt: Duration
   }
 
   /// One entry per item id. A streamed item replaces its own entry as its text grows.
@@ -237,18 +239,28 @@ public final class MarkdownCache {
   private let throttle = Duration.milliseconds(100)
   /// How many times `blocks(id:text:final:)` parsed. Tests read it.
   private(set) var parseCount = 0
+  /// Time since the cache was made, on its clock.
+  private let elapsed: () -> Duration
 
-  public init() {}
+  public init(clock: any Clock<Duration> = ContinuousClock()) {
+    elapsed = Self.stopwatch(clock)
+  }
+
+  /// Opens the clock's type once, so each read is a plain `Duration`.
+  private static func stopwatch<C: Clock<Duration>>(_ clock: C) -> () -> Duration {
+    let start = clock.now
+    return { start.duration(to: clock.now) }
+  }
 
   var count: Int { entries.count }
 
   /// `final` is false while the item is still streaming. Then, within `throttle` of the item's
   /// last parse, the last blocks come back unparsed. The completed update arrives as its own
   /// event with `final` true, so the last text always parses.
-  public func blocks(id: String, text: String, final: Bool = true) -> [MarkdownBlock] {
+  public func blocks(id: String, text: String, final: Bool) -> [MarkdownBlock] {
     if let entry = entries[id] {
       if entry.text == text { return entry.blocks }
-      if !final, ContinuousClock.now - entry.parsedAt < throttle { return entry.blocks }
+      if !final, elapsed() - entry.parsedAt < throttle { return entry.blocks }
     }
     let parsed = MarkdownBlock.parse(text)
     parseCount += 1
@@ -256,7 +268,7 @@ public final class MarkdownCache {
       order.append(id)
       if order.count > limit { entries[order.removeFirst()] = nil }
     }
-    entries[id] = Entry(text: text, blocks: parsed, parsedAt: .now)
+    entries[id] = Entry(text: text, blocks: parsed, parsedAt: elapsed())
     return parsed
   }
 }

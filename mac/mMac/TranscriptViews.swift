@@ -276,8 +276,9 @@ struct ReasoningView: View {
       .font(.callout)
       .foregroundStyle(.secondary)
     } content: {
+      // Not throttled: only the agent message has the catch-up render that shows its last text.
       MarkdownView(
-        blocks: MarkdownCache.shared.blocks(id: item.itemId, text: ToolPresentation.reasoningText(item)))
+        blocks: MarkdownCache.shared.blocks(id: item.itemId, text: ToolPresentation.reasoningText(item), final: true))
     }
   }
 }

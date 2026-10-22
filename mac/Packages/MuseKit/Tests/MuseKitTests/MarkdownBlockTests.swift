@@ -1,6 +1,7 @@
 import Foundation
-import Testing
 import Markdown
+import Synchronization
+import Testing
 @testable import MuseKit
 
 private func plain(_ text: AttributedString) -> String { String(text.characters) }
@@ -107,10 +108,10 @@ private func intent(of word: String, in text: AttributedString) -> InlinePresent
 
 @MainActor @Test func theCacheParsesOncePerText() {
   let cache = MarkdownCache()
-  let first = cache.blocks(id: "i1", text: "**a**")
-  #expect(cache.blocks(id: "i1", text: "**a**") == first)
+  let first = cache.blocks(id: "i1", text: "**a**", final: true)
+  #expect(cache.blocks(id: "i1", text: "**a**", final: true) == first)
   #expect(cache.parseCount == 1)
-  _ = cache.blocks(id: "i1", text: "**a** more")
+  _ = cache.blocks(id: "i1", text: "**a** more", final: true)
   #expect(cache.parseCount == 2)
 }
 
@@ -169,18 +170,18 @@ private func intent(of word: String, in text: AttributedString) -> InlinePresent
 
 @MainActor @Test func theCacheKeepsOneEntryPerItem() {
   let cache = MarkdownCache()
-  for n in 0..<5 { _ = cache.blocks(id: "streaming", text: String(repeating: "a", count: n + 1)) }
+  for n in 0..<5 { _ = cache.blocks(id: "streaming", text: String(repeating: "a", count: n + 1), final: true) }
   #expect(cache.count == 1)
   #expect(cache.parseCount == 5)
-  for n in 0..<400 { _ = cache.blocks(id: "i\(n)", text: "t") }
+  for n in 0..<400 { _ = cache.blocks(id: "i\(n)", text: "t", final: true) }
   #expect(cache.count == 400)
   let before = cache.parseCount
-  _ = cache.blocks(id: "i399", text: "t")
+  _ = cache.blocks(id: "i399", text: "t", final: true)
   #expect(cache.parseCount == before)
-  _ = cache.blocks(id: "i0", text: "t")
+  _ = cache.blocks(id: "i0", text: "t", final: true)
   #expect(cache.parseCount == before)
   // 401 distinct ids: the oldest, "streaming", was evicted and parses again.
-  _ = cache.blocks(id: "streaming", text: "aaaaa")
+  _ = cache.blocks(id: "streaming", text: "aaaaa", final: true)
   #expect(cache.parseCount == before + 1)
   #expect(cache.count == 400)
 }
@@ -302,19 +303,82 @@ private func intent(of word: String, in text: AttributedString) -> InlinePresent
 }
 
 @MainActor @Test func anInProgressItemParsesAtMostOncePer100ms() {
-  let cache = MarkdownCache()
+  // A clock that never moves, so the second read is always inside the throttle.
+  let cache = MarkdownCache(clock: ManualClock())
   _ = cache.blocks(id: "a", text: "one", final: false)
   let stale = cache.blocks(id: "a", text: "one two", final: false)
   #expect(stale == MarkdownBlock.parse("one"))
   #expect(cache.blocks(id: "a", text: "one two", final: true) == MarkdownBlock.parse("one two"))
 }
 
-@MainActor @Test func anInProgressItemParsesAgainAfter100ms() async throws {
-  let cache = MarkdownCache()
+/// A clock that moves only when a test advances it.
+final class ManualClock: Clock, Sendable {
+  struct Instant: InstantProtocol {
+    let offset: Duration
+    func advanced(by duration: Duration) -> Instant { Instant(offset: offset + duration) }
+    func duration(to other: Instant) -> Duration { other.offset - offset }
+    static func < (lhs: Instant, rhs: Instant) -> Bool { lhs.offset < rhs.offset }
+  }
+
+  private let current = Mutex(Instant(offset: .zero))
+  var now: Instant { current.withLock { $0 } }
+  var minimumResolution: Duration { .zero }
+
+  func advance(by duration: Duration) { current.withLock { $0 = $0.advanced(by: duration) } }
+
+  func sleep(until deadline: Instant, tolerance: Duration?) async throws {
+    throw CancellationError()  // the cache never sleeps
+  }
+}
+
+@MainActor @Test func anInProgressItemParsesAgainAfter100ms() {
+  let clock = ManualClock()
+  let cache = MarkdownCache(clock: clock)
   _ = cache.blocks(id: "a", text: "one", final: false)
-  try await Task.sleep(for: .milliseconds(150))
+  clock.advance(by: .milliseconds(99))
+  #expect(cache.blocks(id: "a", text: "one two", final: false) == MarkdownBlock.parse("one"))
+  #expect(cache.parseCount == 1)
+  clock.advance(by: .milliseconds(1))
   #expect(cache.blocks(id: "a", text: "one two", final: false) == MarkdownBlock.parse("one two"))
   #expect(cache.parseCount == 2)
+  // The throttle counts from the last parse.
+  clock.advance(by: .milliseconds(50))
+  #expect(cache.blocks(id: "a", text: "one two three", final: false) == MarkdownBlock.parse("one two"))
+}
+
+@Test func footnotesTreatAnEscapedBacktickAsText() {
+  // `\`` is a literal backtick, so no code span opens and both references are prose.
+  #expect(Footnotes.rewrite("A \\`[^1]\\` b[^1]\n\n[^1]: Note.") == "A \\`¹\\` b¹\n\n\n---\n\n1. Note.\n")
+  // A backslash escaped by another leaves the backtick to open a span; the reference in it stays.
+  #expect(Footnotes.rewrite("A \\\\`[^1]` b[^1]\n\n[^1]: Note.").hasPrefix("A \\\\`[^1]` b¹\n"))
+}
+
+@Test func footnotesLeaveIndentedCodeBlocksAlone() {
+  #expect(
+    Footnotes.rewrite("    code [^1]\n\tmore [^1]\n\nText[^1]\n\n[^1]: N.")
+      == "    code [^1]\n\tmore [^1]\n\nText¹\n\n\n---\n\n1. N.\n")
+  // After a blank line too.
+  #expect(Footnotes.rewrite("Text[^1]\n\n    code [^1]\n\n[^1]: N.").hasPrefix("Text¹\n\n    code [^1]\n"))
+  // An indented line that continues a paragraph, or sits in a list, is not code.
+  #expect(Footnotes.rewrite("Text[^1]\n    more[^1]\n\n[^1]: N.").hasPrefix("Text¹\n    more¹\n"))
+  #expect(Footnotes.rewrite("- item[^1]\n\n    more[^1]\n\n[^1]: N.").hasPrefix("- item¹\n\n    more¹\n"))
+  let blocks = MarkdownBlock.parse("    code [^1]\n\nText[^1]\n\n[^1]: N.")
+  #expect(blocks.first == .code(language: nil, code: "code [^1]"))
+}
+
+@Test func footnotesLeaveFencesInBlockQuotesAlone() {
+  #expect(
+    Footnotes.rewrite("> ```\n> x[^1]\n> ```\n\nY[^1]\n\n[^1]: N.")
+      == "> ```\n> x[^1]\n> ```\n\nY¹\n\n\n---\n\n1. N.\n")
+  // The quote's end closes its fence, so the line after it is prose again.
+  #expect(Footnotes.rewrite("> ```\n> x[^1]\nY[^1]\n\n[^1]: N.").hasPrefix("> ```\n> x[^1]\nY¹\n"))
+  // A fence left open inside a quote gets no closing fence: the notes are outside the quote.
+  let open = MarkdownBlock.parse("Y[^1]\n\n[^1]: N.\n\n> ```\n> code")
+  guard case .list(true, _, let items) = open.last, case .paragraph(let note) = items.first?.blocks.first else {
+    Issue.record("Expected the notes after the quote")
+    return
+  }
+  #expect(String(note.characters) == "N.")
 }
 
 /// Run with `MMAC_MEASURE=1 swift test … --filter measureMarkdownReparse` and report the output.
