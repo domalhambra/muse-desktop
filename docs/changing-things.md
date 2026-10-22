@@ -66,10 +66,8 @@ Back up both files before you test either feature against your real Muse. The te
 
 ## Change mMac or its backend
 
-- Edit: `src/headless/backend.ts` for a backend method (the process itself is `src/headless/server.ts`), `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift client, `mac/Packages/MuseKit/` for logic (Markdown, the transcript and sidebar rules, the `Workspace` store), and `mac/mMac/` for views.
-- The inspector's rules are in `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift`: diff rows, file kinds, breadcrumbs, change labels, Git badges and activity rows. Its store is `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift`.
-- `src/headless/login-env.sh` answers `discoverCli`'s login-shell read from the environment mMac passed. `src/headless/server.ts` points `SHELL` at it when `MMAC_LOGIN_SHELL` is set. Keep it executable.
-- Test: `tests/unit/headless-backend.test.ts`, `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts`, `swift test` for both packages (`mac/Packages/MuseBackend/Tests/` and `mac/Packages/MuseKit/Tests/`), and the UI tests in `mac/mMacUITests/`.
+- Edit: `src/headless/backend.ts` for a backend method (the process itself is `src/headless/server.ts`), `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift client, `mac/Packages/MuseKit/` for logic (Markdown, the transcript and sidebar rules, the `Workspace` store), and `mac/mMac/` for views. The inspector's rules (diff rows, file kinds, breadcrumbs, change labels, Git badges and activity rows) are in `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift`. Its store is `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift`. `src/headless/login-env.sh` answers `discoverCli`'s login-shell read from the environment mMac passed. `src/headless/server.ts` points `SHELL` at it when `MMAC_LOGIN_SHELL` is set. Keep it executable.
+- Test: `tests/unit/headless-backend.test.ts`, `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts`, `tests/unit/headless-login-env.test.ts`, `swift test` for both packages (`mac/Packages/MuseBackend/Tests/` and `mac/Packages/MuseKit/Tests/`), and the UI tests in `mac/mMacUITests/`.
 - Prove: `npm run test:headless`, both `swift test` runs and the `xcodebuild test` run in "Prove a change".
 - Read first: `docs/superpowers/specs/2026-10-21-mac-app-design.md`.
 
@@ -105,7 +103,7 @@ The UI tests drive the real desktop. Before you run them:
 - Unlock the screen, and put no app full-screen in front.
 - Expect a prompt after a rebuild. The build is signed ad hoc, and the checkout is under `~/Documents`, so macOS can ask again whether mMac may use the Documents folder. The first run after a rebuild can need you at the keyboard.
 
-The echo test pastes its first message through the general pasteboard, then puts back every item the pasteboard held. Do not copy anything while it runs.
+The echo test pastes its first message through the general pasteboard, then restores every item the pasteboard held. Do not copy anything while it runs.
 
 Debug builds keep the window's user defaults, such as `inspectorShown`, in the suite that `MMAC_DEFAULTS_SUITE` names. The UI tests set it to `com.domalhambra.mmac.uitests`, and mMac empties it at launch. Your own mMac defaults stay unchanged.
 
