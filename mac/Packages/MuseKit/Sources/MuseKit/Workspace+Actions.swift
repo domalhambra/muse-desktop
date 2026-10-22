@@ -166,16 +166,25 @@ extension Workspace {
   }
 
   /// Reconnects to Muse, then reopens the conversation last clicked, as Electron reopens `activeId`:
-  /// the one opening, or else the one shown.
-  public func reconnect() async {
+  /// the one opening, or else the one shown. Returns true when the connect call succeeded.
+  @discardableResult
+  public func reconnect() async -> Bool {
+    await reconnect { self.errorMessage = $0 }
+  }
+
+  /// `reconnect()`, with the connect call's error going to `report`: the Settings window shows its
+  /// own errors. An error reopening the conversation still shows here.
+  func reconnect(reportingTo report: (String) -> Void) async -> Bool {
     do {
       let next = try await client.connect()
       apply(.connection(next))
       if next.isReady, let sessionId = openingSessionId ?? view?.session.sessionId {
         await open(sessionId, force: true)
       }
+      return true
     } catch {
-      errorMessage = error.localizedDescription
+      report(error.localizedDescription)
+      return false
     }
   }
 

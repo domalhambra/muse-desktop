@@ -10,6 +10,12 @@ struct FailingTokenStore: BridgeTokenStore {
   func write(_ token: String) throws { throw WorkspaceError("denied") }
 }
 
+/// A store that keeps an old token and refuses a new one.
+struct StaleTokenStore: BridgeTokenStore {
+  func read() throws -> String? { "stale" }
+  func write(_ token: String) throws { throw WorkspaceError("denied") }
+}
+
 private let bridgeJSON =
   #"{"folder":"/d/bridge","files":{"enabled":false,"running":false},"mcp":{"enabled":false,"running":false,"url":"http://127.0.0.1:7735/mcp","hasToken":true},"activeJobs":0}"#
 
@@ -145,6 +151,40 @@ private func listJSON(_ names: String...) -> String {
   #expect(throws: WorkspaceError("Make a token first.")) { try empty.copyToken() }
 }
 
+@MainActor @Test func copyingWithNoNewTokenReadsTheStore() async throws {
+  let (workspace, _) = await makeWorkspace()
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore("saved"))
+  #expect(try settings.copyToken() == "saved")
+}
+
+@MainActor @Test func copyingAfterTheKeychainRefusedGivesTheTokenOnScreen() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "bridge-token": [reply(id, #""shown""#)]
+    case "bridge-status": [reply(id, bridgeJSON)]
+    default: []
+    }
+  }
+  // The store still holds an older token, which the backend no longer accepts.
+  let settings = SettingsModel(workspace: workspace, tokens: StaleTokenStore())
+  await settings.makeToken()
+  #expect(try settings.copyToken() == "shown")
+}
+
+@MainActor @Test func aKeychainErrorOutlastsAFailedBridgeRead() async {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "bridge-token": [reply(id, #""t""#)]
+    case "bridge-status": [failure(id, "The bridge is not running.")]
+    default: []
+    }
+  }
+  let settings = SettingsModel(workspace: workspace, tokens: FailingTokenStore())
+  await settings.makeToken()
+  #expect(settings.newToken == "t")
+  #expect(settings.errorMessage == "mMac could not save the token in the Keychain: denied")
+}
+
 @MainActor @Test func aBadPortIsRefusedAndTheFieldResets() async {
   let (workspace, backend) = await makeWorkspace { method, _, id in
     switch method {
@@ -175,17 +215,100 @@ private func listJSON(_ names: String...) -> String {
   #expect(requests(backend) == [["preferences", [["theme": "moonlight"]]]])
 }
 
+@MainActor @Test func theWorkspaceShowsAFailedSave() async {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "preferences" ? [failure(id, "The preferences file is read-only.")] : []
+  }
+  #expect(await workspace.save(PreferencesPatch(theme: "moonlight")) == false)
+  #expect(workspace.errorMessage == "The preferences file is read-only.")
+  #expect(workspace.preferences.theme == "muse")
+}
+
 @MainActor @Test func aFailedSaveShowsItsErrorAndKeepsThePreferences() async {
   let (workspace, backend) = await makeWorkspace { method, _, id in
     method == "preferences" ? [failure(id, "The preferences file is read-only.")] : []
   }
   let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
-  #expect(await workspace.save(PreferencesPatch(bridgeMcpEnabled: true)) == false)
-  #expect(workspace.errorMessage == "The preferences file is read-only.")
+  #expect(await settings.save(PreferencesPatch(bridgeMcpEnabled: true)) == false)
+  #expect(settings.errorMessage == "The preferences file is read-only.")
+  #expect(workspace.errorMessage == nil)
   #expect(!workspace.preferences.bridgeMcpEnabled)
-  await settings.save(PreferencesPatch(bridgeMcpEnabled: true))
   // No bridge read after a failed save.
   #expect(!requests(backend).contains { $0.first == "bridge-status" })
+}
+
+@MainActor @Test func aMuseCodePathIsTrimmedSavedThenReconnects() async {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "preferences": [reply(id, #"{"cliPath":"/opt/muse","recentProjects":["/p"]}"#)]
+    case "connect": [reply(id, #"{"state":"ready","version":"1.4.11"}"#)]
+    default: []
+    }
+  }
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
+  await settings.setCLIPath("  /opt/muse \n")
+  #expect(workspace.preferences.cliPath == "/opt/muse")
+  #expect(requests(backend) == [["preferences", [["cliPath": "/opt/muse"]]], ["connect", []]])
+  #expect(settings.errorMessage == nil)
+}
+
+@MainActor @Test func aMuseCodePathThatFailsToSaveDoesNotReconnect() async {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    method == "preferences" ? [failure(id, "denied")] : []
+  }
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
+  await settings.setCLIPath("/opt/muse")
+  #expect(settings.errorMessage == "denied")
+  #expect(workspace.errorMessage == nil)
+  #expect(requests(backend) == [["preferences", [["cliPath": "/opt/muse"]]]])
+}
+
+@MainActor @Test func aFailedReconnectKeepsTheNoticeAndShowsInSettings() async {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "mcp-enabled": [reply(id, "null")]
+    case "mcp-list": [reply(id, listJSON("docs"))]
+    case "connect": [failure(id, "Muse Code is not installed.")]
+    default: []
+    }
+  }
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
+  await settings.setEnabled("docs", true)
+  await settings.reconnect()
+  #expect(settings.needsReconnect)
+  #expect(settings.errorMessage == "Muse Code is not installed.")
+  #expect(workspace.errorMessage == nil)
+}
+
+@MainActor @Test func aChangeDuringAReconnectKeepsTheNotice() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "mcp-enabled": [reply(id, "null")]
+    case "mcp-list": [reply(id, listJSON("docs"))]
+    default: []  // connect waits for the reply pushed below
+    }
+  }
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
+  await settings.setEnabled("docs", true)
+  let reconnecting = Task { await settings.reconnect() }
+  try await eventually { backend.messages.contains { $0["method"] == "connect" } }
+  await settings.setEnabled("docs", false)
+  guard case .number(let id)? = backend.messages.first(where: { $0["method"] == "connect" })?["id"] else {
+    Issue.record("No connect request")
+    return
+  }
+  backend.push(reply(Int(id), #"{"state":"ready","version":"1.4.11"}"#))
+  await reconnecting.value
+  #expect(settings.needsReconnect)
+  #expect(settings.errorMessage == nil)
+}
+
+@MainActor @Test func theWorkspaceReconnectSaysWhetherItConnected() async {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "connect" ? [failure(id, "no")] : []
+  }
+  #expect(await workspace.reconnect() == false)
+  #expect(workspace.errorMessage == "no")
 }
 
 @MainActor @Test func reconnectClearsTheNotice() async {

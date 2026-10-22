@@ -19,9 +19,11 @@ public struct KeychainTokenStore: BridgeTokenStore {
   }
 
   /// mMac's own item. Debug builds take `MMAC_KEYCHAIN_SERVICE`, so test runs never touch it.
-  public static var app: KeychainTokenStore {
+  public static var app: KeychainTokenStore { app(environment: ProcessInfo.processInfo.environment) }
+
+  static func app(environment: [String: String]) -> KeychainTokenStore {
     #if DEBUG
-      if let service = ProcessInfo.processInfo.environment["MMAC_KEYCHAIN_SERVICE"], !service.isEmpty {
+      if let service = environment["MMAC_KEYCHAIN_SERVICE"], !service.isEmpty {
         return KeychainTokenStore(service: service, account: "mcp-bridge")
       }
     #endif
@@ -45,16 +47,20 @@ public struct KeychainTokenStore: BridgeTokenStore {
 
   public func write(_ token: String) throws {
     let data = Data(token.utf8)
-    let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+    var status = update(data)
     if status == errSecItemNotFound {
       var add = query
       add[kSecValueData as String] = data
       add[kSecAttrLabel as String] = "mMac MCP bridge token"
-      let added = SecItemAdd(add as CFDictionary, nil)
-      guard added == errSecSuccess else { throw Self.error(added) }
-    } else if status != errSecSuccess {
-      throw Self.error(status)
+      status = SecItemAdd(add as CFDictionary, nil)
+      // Another writer added the item between the update and the add: update it once more.
+      if status == errSecDuplicateItem { status = update(data) }
     }
+    guard status == errSecSuccess else { throw Self.error(status) }
+  }
+
+  private func update(_ data: Data) -> OSStatus {
+    SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
   }
 
   /// Removes the item. Tests use it to clean up.
@@ -65,6 +71,22 @@ public struct KeychainTokenStore: BridgeTokenStore {
 
   private static func error(_ status: OSStatus) -> WorkspaceError {
     WorkspaceError(SecCopyErrorMessageString(status, nil) as String? ?? "Keychain error \(status).")
+  }
+}
+
+/// The store mMac uses.
+public enum BridgeTokenStores {
+  /// The login Keychain, or in Debug builds with `MMAC_TOKEN_STORE=memory`, memory. UI tests set
+  /// it so they never touch the Keychain: mMac is signed ad hoc, so every build has a new code
+  /// identity, and the Keychain asks for the login password before it lets a new build read an
+  /// item an older build made.
+  public static var app: any BridgeTokenStore { app(environment: ProcessInfo.processInfo.environment) }
+
+  static func app(environment: [String: String]) -> any BridgeTokenStore {
+    #if DEBUG
+      if environment["MMAC_TOKEN_STORE"] == "memory" { return MemoryTokenStore() }
+    #endif
+    return KeychainTokenStore.app(environment: environment)
   }
 }
 

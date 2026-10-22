@@ -3,7 +3,9 @@ import MuseBackend
 import Observation
 
 /// The Settings window's state that is not a preference: the MCP servers and the bridges. Electron
-/// keeps it in `McpSettings.tsx` and `BridgeSettings.tsx`. Preferences go through the Workspace.
+/// keeps it in `McpSettings.tsx` and `BridgeSettings.tsx`. Preferences are the Workspace's, but every
+/// action the Settings window starts goes through here and reports its error in `errorMessage`,
+/// never the Workspace's, which the conversation window shows.
 @MainActor @Observable
 public final class SettingsModel {
   public let workspace: Workspace
@@ -20,6 +22,8 @@ public final class SettingsModel {
   public private(set) var makingToken = false
   public var errorMessage: String?
   private var listSequence = 0
+  /// Counts the MCP changes made, so a reconnect knows whether one came in while it ran.
+  private var changes = 0
 
   public init(workspace: Workspace, tokens: any BridgeTokenStore) {
     self.workspace = workspace
@@ -65,9 +69,12 @@ public final class SettingsModel {
     do { try await client.mcpLogin(name) } catch { errorMessage = error.localizedDescription }
   }
 
+  /// Reconnects Muse Code. The notice stays when the reconnect fails, or when an MCP change was
+  /// made while it ran, which it may not have picked up.
   public func reconnect() async {
-    await workspace.reconnect()
-    needsReconnect = false
+    let before = changes
+    guard await workspace.reconnect(reportingTo: { self.errorMessage = $0 }) else { return }
+    if changes == before { needsReconnect = false }
   }
 
   @discardableResult
@@ -78,6 +85,7 @@ public final class SettingsModel {
       errorMessage = error.localizedDescription
       return false
     }
+    changes += 1
     needsReconnect = true
     await loadServers()
     return true
@@ -89,11 +97,25 @@ public final class SettingsModel {
     do { bridge = try await client.bridgeStatus() } catch { errorMessage = error.localizedDescription }
   }
 
-  /// Saves a preference, and reads the bridge status again when it was a bridge field. A failed
-  /// save shows in the Workspace's `errorMessage`.
-  public func save(_ patch: PreferencesPatch) async {
-    guard await workspace.save(patch) else { return }
+  /// Saves a preference, and reads the bridge status again when it was a bridge field.
+  @discardableResult
+  public func save(_ patch: PreferencesPatch) async -> Bool {
+    do {
+      workspace.preferences = try await client.preferences(patch)
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
+    }
     if patch.touchesBridges { await refreshBridge() }
+    return true
+  }
+
+  /// Saves a custom Muse Code path (empty for automatic detection), then reconnects, as
+  /// `Workspace.setCLIPath(_:)` does.
+  public func setCLIPath(_ path: String) async {
+    // Electron trims the field before saving it.
+    guard await save(PreferencesPatch(cliPath: path.trimmingCharacters(in: .whitespacesAndNewlines))) else { return }
+    await reconnect()
   }
 
   /// Saves the typed port. Returns the text the field should show: the saved port when the typed
@@ -122,16 +144,22 @@ public final class SettingsModel {
       return
     }
     newToken = token
+    var keychainError: String?
     do {
       try tokens.write(token)
     } catch {
-      errorMessage = "mMac could not save the token in the Keychain: \(error.localizedDescription)"
+      keychainError = "mMac could not save the token in the Keychain: \(error.localizedDescription)"
+      errorMessage = keychainError
     }
     await refreshBridge()
+    // A failed status read must not hide that the token was not saved.
+    if let keychainError { errorMessage = keychainError }
   }
 
-  /// The saved token, for Copy token.
+  /// The token for Copy token: the one on screen, which is the only valid one when the Keychain
+  /// refused it, or else the saved one.
   public func copyToken() throws -> String {
+    if let newToken { return newToken }
     guard let token = try tokens.read(), !token.isEmpty else { throw WorkspaceError("Make a token first.") }
     return token
   }
