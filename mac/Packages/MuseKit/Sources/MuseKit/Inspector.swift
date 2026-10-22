@@ -183,9 +183,10 @@ public final class Inspector {
     }
   }
 
-  /// Discards every change to the selected file. The view asks first.
-  public func revertFile() async {
-    guard let path = selected else { return }
+  /// Discards every change to `path`, the file the view asked about. Does nothing when that file
+  /// is no longer the selected one, since the person may move on while the confirmation shows.
+  public func revertFile(_ path: String) async {
+    guard selected == path else { return }
     await act { client, project in
       try await client.revertFile(project: project, path: path)
       return nil

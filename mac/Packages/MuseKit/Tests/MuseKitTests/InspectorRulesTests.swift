@@ -192,3 +192,63 @@ import Testing
   let blank = DiffLine.parse("@@ -1,2 +1,2 @@\n a\n  \n b")
   #expect(blank[2].gutter == "2" && blank[3].gutter == "3")
 }
+
+@Test func changeStatusesAreSpokenInWords() {
+  func spoken(_ status: String) -> String { ChangeLabel.spoken(GitChange(path: "a", status: status, staged: false)) }
+  #expect(spoken("??") == "Untracked")
+  #expect(spoken("M") == "Modified")
+  #expect(spoken("MM") == "Modified")
+  #expect(spoken("AM") == "Added and modified")
+  #expect(spoken("D") == "Deleted")
+  #expect(spoken("R") == "Renamed")
+  #expect(spoken("UU") == "Unmerged")
+  #expect(spoken("") == "Changed")
+}
+
+let reviewDiff = [
+  "Working changes",
+  "diff --git a/a.swift b/a.swift",
+  "index 1..2 100644",
+  "--- a/a.swift",
+  "+++ b/a.swift",
+  "@@ -1,2 +1,2 @@",
+  " let a = 1",
+  "-let b = 2",
+  "+let b = 3",
+  "\\ No newline at end of file",
+  "@@ -9 +9 @@",
+  "+",
+].joined(separator: "\n")
+
+@Test func diffRowsAreSpokenWithTheirKindAndLine() {
+  let rows = DiffLine.parse(reviewDiff)
+  #expect(rows.map(\.spoken) == [
+    "Working changes",
+    "diff --git a/a.swift b/a.swift",
+    "index 1..2 100644",
+    "--- a/a.swift",
+    "+++ b/a.swift",
+    "Hunk, @@ -1,2 +1,2 @@",
+    "Line 1, let a = 1",
+    "Removed, line 2, let b = 2",
+    "Added, line 2, let b = 3",
+    "\\ No newline at end of file",
+    "Hunk, @@ -9 +9 @@",
+    "Added, line 9, blank",
+  ])
+  #expect(DiffLine.parse("+x").first?.spoken == "Added, x")
+}
+
+@Test func aDiffAndAHunkCopyAsTextWithoutGutters() {
+  let rows = DiffLine.parse(reviewDiff)
+  #expect(DiffLine.text(rows) == reviewDiff)
+  #expect(DiffLine.hunkText(rows, at: 5) == "@@ -1,2 +1,2 @@\n let a = 1\n-let b = 2\n+let b = 3\n\\ No newline at end of file")
+  #expect(DiffLine.hunkText(rows, at: 10) == "@@ -9 +9 @@\n+")
+  // A hunk ends at the next file, and at the blank line between the staged and working sections.
+  let sections = DiffLine.parse("Staged changes\n@@ -1 +1 @@\n-a\n+b\n\nWorking changes\n@@ -1 +1 @@\n-b\n+c")
+  #expect(DiffLine.hunkText(sections, at: 1) == "@@ -1 +1 @@\n-a\n+b")
+  let files = DiffLine.parse("@@ -1 +1 @@\n-a\n+b\ndiff --git a/c b/c\n@@ -1 +1 @@\n-c")
+  #expect(DiffLine.hunkText(files, at: 0) == "@@ -1 +1 @@\n-a\n+b")
+  // Not a hunk header: nothing.
+  #expect(DiffLine.hunkText(rows, at: 6) == "")
+}

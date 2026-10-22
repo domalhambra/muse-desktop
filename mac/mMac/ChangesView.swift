@@ -36,10 +36,14 @@ struct ChangesView: View {
             }
             .buttonStyle(.plain)
             .help(change.path)
+            // A button reads its label as one string, so it says the colour-coded status in words.
+            .accessibilityLabel(
+              "\(ChangeLabel.name(change.path)), \(ChangeLabel.folder(change.path)), \(ChangeLabel.spoken(change))")
           }
         }
       } else if inspector.error == nil {
-        if inspector.loading, inspector.git == nil {
+        // Until the first read answers, a project is being read: "No Git repository" must not flash.
+        if inspector.git == nil, !workspace.project.isEmpty {
           HStack(spacing: 8) {
             ProgressView().controlSize(.small)
             Text("Reading your workspace…").foregroundStyle(.secondary)
@@ -75,7 +79,9 @@ struct ChangesView: View {
       title: "Remove the worktree \(name)?",
       message: "Uncommitted changes in it are discarded. \(kept)",
       buttons: ["Remove", "Cancel"])
-    if choice == 0 { await inspector.remove(entry) }
+    // Things may have moved on while the sheet showed: another action, or this worktree opened.
+    guard choice == 0, !inspector.busy, entry.path != workspace.project else { return }
+    await inspector.remove(entry)
   }
 }
 
@@ -179,7 +185,9 @@ struct DiffPane: View {
   let inspector: Inspector
   let path: String
 
-  private var locked: Bool { inspector.busy || workspace.isRunning }
+  /// Also locked while the status reloads after an action or a turn: until the new rows arrive, the
+  /// shown "Revert hunk 2" may not be the backend's hunk 2.
+  private var locked: Bool { inspector.busy || inspector.loading || workspace.isRunning }
   private var lockedHelp: String? { workspace.isRunning ? "Wait for the current turn to finish" : nil }
 
   var body: some View {
@@ -223,6 +231,7 @@ struct DiffPane: View {
         DiffView(rows: rows, locked: locked, lockedHelp: lockedHelp) { index in
           Task { await inspector.revertHunk(index) }
         }
+        .equatable()
       }
     }
     // The pane reads its diff. A read cancelled when the pane went away (another tab, the
@@ -230,6 +239,7 @@ struct DiffPane: View {
     // the inspector's refresh reloads it when a turn ends.
     .task(id: path) {
       if case .loaded = inspector.diff { return }
+      guard inspector.selected == path, !Task.isCancelled else { return }
       await inspector.select(path)
     }
   }
@@ -237,47 +247,106 @@ struct DiffPane: View {
   private func confirmRevert() async {
     let choice = await SheetAlert.present(
       title: "Discard all changes to \(path)?", message: "", buttons: ["Revert file", "Cancel"])
-    if choice == 0 { await inspector.revertFile() }
+    // A turn may have started while the sheet showed. `revertFile` drops a file no longer selected.
+    guard choice == 0, !workspace.isRunning else { return }
+    await inspector.revertFile(path)
   }
 }
 
 /// A line-numbered diff. Each working-tree hunk header carries a labelled Revert hunk button.
-struct DiffView: View {
+/// Equatable without its closure, so a re-render of the conversation (a streamed token) does not
+/// rebuild every row.
+struct DiffView: View, Equatable {
   let rows: [DiffLine]
   let locked: Bool
   let lockedHelp: String?
   let revert: (Int) -> Void
+  /// The gutter's width, from the largest line number's digits.
+  private let gutterWidth: CGFloat
+  /// One width for every row, from the longest line, so row tints line up and the horizontal
+  /// scroller holds still.
+  private let contentWidth: CGFloat
+
+  init(rows: [DiffLine], locked: Bool, lockedHelp: String?, revert: @escaping (Int) -> Void) {
+    self.rows = rows
+    self.locked = locked
+    self.lockedHelp = lockedHelp
+    self.revert = revert
+    let advance = Self.advance
+    let digits = rows.map(\.gutter.count).max() ?? 0
+    gutterWidth = CGFloat(max(digits, 2)) * advance + 4
+    let widest =
+      rows.map { row -> CGFloat in
+        // A tab is counted as eight columns, the most it can take.
+        let columns = row.text.reduce(0) { $0 + ($1 == "\t" ? 8 : 1) }
+        return CGFloat(columns) * advance + (row.hunkIndex == nil ? 0 : Self.hunkButtonWidth)
+      }.max() ?? 0
+    contentWidth = Self.padding * 2 + gutterWidth + Self.spacing + widest
+  }
+
+  nonisolated static func == (lhs: DiffView, rhs: DiffView) -> Bool {
+    lhs.rows == rhs.rows && lhs.locked == rhs.locked && lhs.lockedHelp == rhs.lockedHelp
+  }
+
+  static let padding: CGFloat = 8
+  static let spacing: CGFloat = 8
+  /// Room for the mini "Revert hunk" button and the space before it.
+  static let hunkButtonWidth: CGFloat = 96
+  /// The advance of one character of the diff's font, `.caption` monospaced.
+  static let advance: CGFloat = {
+    let size = NSFont.preferredFont(forTextStyle: .caption1).pointSize
+    let font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    return ceil(("0" as NSString).size(withAttributes: [.font: font]).width * 100) / 100
+  }()
 
   var body: some View {
-    ScrollView([.vertical, .horizontal]) {
-      LazyVStack(alignment: .leading, spacing: 0) {
-        ForEach(rows) { row in
-          DiffRow(row: row, locked: locked, lockedHelp: lockedHelp, revert: revert)
+    GeometryReader { proxy in
+      let width = max(contentWidth, proxy.size.width)
+      ScrollView([.vertical, .horizontal]) {
+        LazyVStack(alignment: .leading, spacing: 0) {
+          ForEach(rows) { row in
+            DiffRow(
+              row: row, gutterWidth: gutterWidth, locked: locked, lockedHelp: lockedHelp, revert: revert,
+              copyHunk: { Self.copy(DiffLine.hunkText(rows, at: row.id)) },
+              copyDiff: { Self.copy(DiffLine.text(rows)) }
+            )
+            .frame(width: width, alignment: .leading)
+          }
         }
+        .padding(.vertical, 6)
       }
-      .padding(.vertical, 6)
     }
     .font(.system(.caption, design: .monospaced))
     .accessibilityIdentifier("diff")
+  }
+
+  static func copy(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
   }
 }
 
 struct DiffRow: View {
   let row: DiffLine
+  let gutterWidth: CGFloat
   let locked: Bool
   let lockedHelp: String?
   let revert: (Int) -> Void
+  let copyHunk: () -> Void
+  let copyDiff: () -> Void
 
   var body: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: DiffView.spacing) {
       Text(row.gutter)
         .foregroundStyle(.tertiary)
-        .frame(width: 40, alignment: .trailing)
+        .frame(width: gutterWidth, alignment: .trailing)
         .accessibilityHidden(true)
       Text(row.text.isEmpty ? " " : row.text)
         .foregroundStyle(foreground)
         .textSelection(.enabled)
         .fixedSize()
+        // "Added, line 12, let b = 3": the tint and the gutter say it only to the eye.
+        .accessibilityLabel(row.spoken)
       if let index = row.hunkIndex {
         Button("Revert hunk") { revert(index) }
           .controlSize(.mini)
@@ -285,27 +354,31 @@ struct DiffRow: View {
           .accessibilityLabel("Revert hunk \(index + 1)")
           .help(lockedHelp ?? "Revert this hunk")
       }
-      Spacer(minLength: 0)
     }
-    .padding(.horizontal, 8)
+    .padding(.horizontal, DiffView.padding)
     .padding(.vertical, 1)
     .background(background)
+    .contextMenu {
+      if row.kind == .hunk {
+        Button("Copy hunk", action: copyHunk)
+      }
+      Button("Copy diff", action: copyDiff)
+    }
   }
 
+  /// Added and removed text stays primary for contrast; the row's tint carries the kind.
   private var foreground: Color {
     switch row.kind {
-    case .added: .green
-    case .removed: .red
     case .hunk: .accentColor
     case .meta: .secondary
-    case .context: .primary
+    case .added, .removed, .context: .primary
     }
   }
 
   private var background: Color {
     switch row.kind {
-    case .added: .green.opacity(0.12)
-    case .removed: .red.opacity(0.12)
+    case .added: .green.opacity(0.15)
+    case .removed: .red.opacity(0.15)
     case .hunk: .accentColor.opacity(0.1)
     case .meta, .context: .clear
     }

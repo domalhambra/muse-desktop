@@ -133,6 +133,22 @@ let worktreesJSON =
   #expect(backend.messages.filter { $0["method"] == "git-diff" }.count == 1)
 }
 
+@MainActor @Test func revertingAFileThatIsNoLongerSelectedDoesNothing() async throws {
+  let (inspector, backend) = await makeInspector { method, _, id in
+    [reply(id, method == "git-status" ? statusJSON(["a.txt", "b.txt"]) : method == "git-diff" ? #""""# : "null")]
+  }
+  // The confirmation was for a.txt; the person moved on to b.txt while it showed.
+  await inspector.select("b.txt")
+  await inspector.revertFile("a.txt")
+  #expect(!backend.messages.contains { $0["method"] == "git-revert-file" })
+  inspector.close()
+  await inspector.revertFile("a.txt")
+  #expect(!backend.messages.contains { $0["method"] == "git-revert-file" })
+  await inspector.select("a.txt")
+  await inspector.revertFile("a.txt")
+  #expect(requests(backend).filter { $0.first == "git-revert-file" } == [["git-revert-file", ["/p", "a.txt"]]])
+}
+
 @MainActor @Test func aDiffThatFailsShowsItsMessage() async throws {
   let (inspector, _) = await makeInspector { method, _, id in
     method == "git-diff" ? [failure(id, "This file no longer has changes. Refresh the changes panel.")] : []
@@ -153,7 +169,7 @@ let worktreesJSON =
   await inspector.select("a.txt")
   await inspector.revertHunk(1)
   await inspector.stage()
-  await inspector.revertFile()
+  await inspector.revertFile("a.txt")
   let names: [JSONValue] = ["git-revert-hunk", "git-stage-file", "git-revert-file"]
   let calls = requests(backend).filter { $0.first.map(names.contains) ?? false }
   #expect(calls == [
@@ -180,13 +196,13 @@ let worktreesJSON =
   await inspector.select("a.txt")
   let staging = Task { await inspector.stage() }
   try await eventually { inspector.busy }
-  await inspector.revertFile()
+  await inspector.revertFile("a.txt")
   #expect(!backend.messages.contains { $0["method"] == "git-revert-file" })
   staging.cancel()
   await staging.value
   // A cancelled action skips its refresh.
   #expect(!backend.messages.contains { $0["method"] == "git-status" })
-  await inspector.revertFile()
+  await inspector.revertFile("a.txt")
   #expect(reported == ["This file has no changes to revert."])
 }
 

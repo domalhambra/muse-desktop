@@ -18,6 +18,40 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
   /// The one gutter Electron draws: the new line number, else the old one.
   public var gutter: String { (newNumber ?? oldNumber).map(String.init) ?? "" }
 
+  /// What VoiceOver reads for the row: "Added, line 12, let b = 3", "Line 5, …", "Hunk, @@ …".
+  public var spoken: String {
+    let line = gutter.isEmpty ? "" : "line \(gutter), "
+    // Added, removed and context rows lose their one-character prefix.
+    let content = text.count > 1 ? String(text.dropFirst()) : "blank"
+    switch kind {
+    case .added: return "Added, \(line)\(content)"
+    case .removed: return "Removed, \(line)\(content)"
+    case .context:
+      guard !gutter.isEmpty else { return text.isEmpty ? "blank" : text }
+      return "Line \(gutter), \(content)"
+    case .hunk: return "Hunk, \(text)"
+    case .meta: return text
+    }
+  }
+
+  /// The diff as text, without gutters: "Copy diff".
+  public static func text(_ rows: [DiffLine]) -> String { rows.map(\.text).joined(separator: "\n") }
+
+  /// The hunk whose header is row `id`, as text without gutters: "Copy hunk". It runs to the next
+  /// hunk, file header or section, or the blank line between sections. Empty for any other row.
+  public static func hunkText(_ rows: [DiffLine], at id: Int) -> String {
+    guard rows.indices.contains(id), rows[id].kind == .hunk else { return "" }
+    var lines = [rows[id].text]
+    for row in rows[(id + 1)...] {
+      let ends =
+        row.kind == .hunk || (row.kind == .meta && !row.text.hasPrefix("\\"))
+        || (row.kind == .context && row.text.isEmpty && row.gutter.isEmpty)
+      if ends { break }
+      lines.append(row.text)
+    }
+    return lines.joined(separator: "\n")
+  }
+
   /// Differs from Electron in these ways:
   /// - A final newline adds no empty row. For an untracked file, `getGitDiff` splits its content on
   ///   "\n", so a file that ends in a newline gives a last row of a bare `+`. That row is dropped too.
@@ -163,6 +197,23 @@ public enum ChangeLabel {
   public static func status(_ change: GitChange) -> String { change.status == "??" ? "U" : change.status }
 
   public static func isDeleted(_ change: GitChange) -> Bool { change.status.contains("D") }
+
+  /// The status in words, for VoiceOver: "Untracked", "Modified", "Added and modified".
+  public static func spoken(_ change: GitChange) -> String {
+    if change.status == "??" { return "Untracked" }
+    let words: [Character: String] = [
+      "M": "modified", "A": "added", "D": "deleted", "R": "renamed", "C": "copied", "U": "unmerged",
+      "T": "type changed",
+    ]
+    var seen: [String] = []
+    for letter in change.status {
+      let word = words[letter] ?? String(letter)
+      if !seen.contains(word) { seen.append(word) }
+    }
+    guard !seen.isEmpty else { return "Changed" }
+    let sentence = seen.joined(separator: " and ")
+    return sentence.prefix(1).uppercased() + sentence.dropFirst()
+  }
 
   public static func name(_ path: String) -> String {
     normalized(path).split(separator: "/").last.map(String.init) ?? path
