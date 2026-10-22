@@ -30,6 +30,8 @@ final class AppController {
   /// The conversation the last Workspace showed or was opening, for the next backend's Workspace.
   private var reopen: String?
   let asks = AskQueue()
+  /// Completion notifications. A click opens its conversation in the current Workspace.
+  let notifications = Notifications()
   private var client: BackendClient?
   private var transport: ProcessTransport?
   private var launching = false
@@ -41,6 +43,14 @@ final class AppController {
   private var stoppedWhileQuitting: BackendClient?
   /// Opens the main window. RootView sets it, because only SwiftUI can open a scene's window.
   @ObservationIgnored var showWindow: (@MainActor () -> Void)?
+
+  init() {
+    notifications.openConversation = { [weak self] sessionId in
+      guard let self, let workspace = self.workspace else { return }
+      self.showMainWindow()
+      Task { await workspace.open(sessionId) }
+    }
+  }
 
   /// Starts a backend. Does nothing while one is starting or running.
   func start() async {
@@ -89,6 +99,16 @@ final class AppController {
       let started = try await client.start(dataFolder: Self.dataFolder(), bridgeToken: token)
       let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
       reopen = nil
+      // Electron checks its window's focus; for a one-window app `NSApp.isActive` is the Mac's.
+      workspace.turnFinished = { [weak self, weak workspace] session, previous in
+        guard let self, let workspace else { return }
+        if CompletionNotice.shouldPost(
+          previous: previous, next: session.status, enabled: workspace.preferences.notifyOnCompletion,
+          focused: NSApp.isActive)
+        {
+          self.notifications.post(for: session)
+        }
+      }
       self.workspace = workspace
       let settings = SettingsModel(workspace: workspace, tokens: tokens)
       settings.errorMessage = tokenError

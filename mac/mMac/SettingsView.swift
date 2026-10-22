@@ -61,7 +61,7 @@ struct SettingsView: View {
   @ViewBuilder private func content(_ pane: Pane) -> some View {
     if let settings = controller.settings {
       switch pane {
-      case .appearance: AppearancePane(settings: settings, notifications: GrantedNotificationPermission())
+      case .appearance: AppearancePane(settings: settings, notifications: controller.notifications)
       case .museCode: MuseCodePane(settings: settings)
       case .mcp: McpPane(settings: settings)
       case .bridges: BridgesPane(settings: settings)

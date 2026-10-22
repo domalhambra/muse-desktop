@@ -6,7 +6,7 @@ import SwiftUI
 /// so its errors show on the Settings window.
 struct AppearancePane: View {
   let settings: SettingsModel
-  let notifications: any NotificationPermission
+  let notifications: Notifications
   /// The choices still being saved. Each control shows its own until the save answers, so it
   /// does not snap back to the old value meanwhile. A save that succeeds has already put the
   /// value in the Workspace's preferences; one that fails shows the saved value again.
@@ -44,9 +44,19 @@ struct AppearancePane: View {
             .foregroundStyle(.themeSecondary)
         }
         .toggleStyle(.switch)
+        if notifications.denied {
+          HStack {
+            Text("Notifications are off for mMac in System Settings.")
+              .foregroundStyle(.themeSecondary)
+            Spacer()
+            Button("Open System Settings") { notifications.openSystemSettings() }
+          }
+        }
       }
     }
     .formStyle(.grouped)
+    // Reads macOS's saved answer without asking, so a refusal made in System Settings shows here.
+    .task { await notifications.refresh() }
   }
 
   /// Shows `value` at once and saves it.
@@ -132,14 +142,4 @@ private struct ThemeCard: View {
     .accessibilityAddTraits(selected ? .isSelected : [])
     .accessibilityIdentifier("theme-\(theme.rawValue)")
   }
-}
-
-/// Asks macOS whether mMac may post notifications.
-@MainActor protocol NotificationPermission {
-  func requestPermission() async -> Bool
-}
-
-/// Stands in until `Notifications` asks macOS: it grants every request without asking.
-struct GrantedNotificationPermission: NotificationPermission {
-  func requestPermission() async -> Bool { true }
 }
