@@ -57,18 +57,24 @@ private func shell(_ script: String) throws -> ProcessTransport {
   #expect(throws: (any Error).self) { try transport.send(Data("late".utf8)) }
 }
 
+@Test(.timeLimit(.minutes(1))) func onlyTheBackendsPipeIsMarkedNotStderr() async throws {
+  // fd 2 may be shared with other writers, so the transport leaves it as it found it.
+  let before = fcntl(FileHandle.standardError.fileDescriptor, F_GETNOSIGPIPE)
+  let transport = try shell("exit 0")
+  for await _ in transport.lines {}
+  #expect(fcntl(FileHandle.standardError.fileDescriptor, F_GETNOSIGPIPE) == before)
+  #expect(before == 0)
+}
+
 @Test(.timeLimit(.minutes(1))) func theTransportKeepsTheChildsLastErrorOutput() async throws {
   let transport = try shell(#"echo "first problem" >&2; echo "second problem" >&2; echo done"#)
   var lines = transport.lines.makeAsyncIterator()
   #expect(await lines.next() == Data("done".utf8))
   #expect(await lines.next() == nil)
-  // stderr can lag stdout a little.
-  let deadline = ContinuousClock.now + .seconds(5)
-  while !transport.recentErrorOutput.contains("second problem"), ContinuousClock.now < deadline {
-    try await Task.sleep(for: .milliseconds(20))
-  }
-  #expect(transport.recentErrorOutput.contains("first problem"))
-  #expect(transport.recentErrorOutput.hasSuffix("second problem"))
+  // stderr can lag stdout a little, so wait for it to end.
+  let errors = await transport.errorOutput(waitingUpTo: .seconds(5))
+  #expect(errors.contains("first problem"))
+  #expect(errors.hasSuffix("second problem"))
 }
 
 @Test func theErrorTailStaysBoundedAndCopiesItsBuffer() {

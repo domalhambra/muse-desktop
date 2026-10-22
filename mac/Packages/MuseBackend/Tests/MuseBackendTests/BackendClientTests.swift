@@ -156,6 +156,57 @@ private let viewJSON = #"""
   }
 }
 
+@Test(.timeLimit(.minutes(1))) func settingsCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "start":
+      return [#"{"id":\#(id),"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#]
+    case "mcp-list":
+      return [#"{"id":\#(id),"ok":true,"value":{"file":"/c/settings.json","servers":[]}}"#]
+    case "bridge-status":
+      return [#"{"id":\#(id),"ok":true,"value":{"folder":"/b","files":{"enabled":false,"running":false},"mcp":{"enabled":false,"running":false,"url":"http://127.0.0.1:7735/mcp","hasToken":false},"activeJobs":0}}"#]
+    case "bridge-token":
+      return [#"{"id":\#(id),"ok":true,"value":"new-token"}"#]
+    default:
+      return [#"{"id":\#(id),"ok":true,"value":null}"#]
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let folder = URL(fileURLWithPath: "/d")
+  #expect(try await client.start(dataFolder: folder).preferences.bridgeMcpPort == 7735)
+  _ = try await client.start(dataFolder: folder, bridgeToken: "")
+  _ = try await client.start(dataFolder: folder, bridgeToken: "secret")
+  #expect(try await client.mcpList().file == "/c/settings.json")
+  try await client.mcpAdd(.stdio(name: "a", command: "node", args: ["x"], env: [:]))
+  try await client.mcpAdd(.http(name: "b", url: "https://e.com/mcp", headers: ["H": "v"]))
+  try await client.mcpSetEnabled("a", false)
+  try await client.mcpRemove("a")
+  try await client.mcpLogin("b")
+  try await client.mcpLogin("b", logout: true)
+  #expect(try await client.bridgeStatus().folder == "/b")
+  #expect(try await client.bridgeNewToken() == "new-token")
+  try await client.revertHunk(project: "/p", path: "a.txt", index: 1, expected: "@@ -1 +1 @@\n-a\n+b\n")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [
+    ["start", [["dataFolder": "/d"]]],
+    ["start", [["dataFolder": "/d"]]],
+    ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]],
+    ["mcp-list", []],
+    ["mcp-add", [["name": "a", "transport": "stdio", "command": "node", "args": ["x"], "env": [:]]]],
+    ["mcp-add", [["name": "b", "transport": "http", "url": "https://e.com/mcp", "headers": ["H": "v"]]]],
+    ["mcp-enabled", ["a", false]],
+    ["mcp-remove", ["a"]],
+    ["mcp-login", ["b", false]],
+    ["mcp-login", ["b", true]],
+    ["bridge-status", []],
+    ["bridge-token", []],
+    ["git-revert-hunk", ["/p", "a.txt", 1, "@@ -1 +1 @@\n-a\n+b\n"]],
+  ])
+}
+
 /// Polls `condition` until it holds. The test's time limit ends a wait that never does.
 private func waitFor(_ condition: () -> Bool) async throws {
   while !condition() { try await Task.sleep(for: .milliseconds(5)) }

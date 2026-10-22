@@ -33,11 +33,8 @@ public enum Launcher {
 
   static var loginShell: String { ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh" }
 
-  /// Runs `process` and returns its stdout once stdout closes, or after `timeout` seconds.
-  /// It returns nil if the process is still running then, and kills it with SIGKILL, because an
-  /// interactive shell ignores SIGTERM. A child the process started, such as a daemon from a
-  /// shell's start-up files, can hold stdout open after the process exits. That case returns
-  /// what was read by the deadline. No thread waits meanwhile.
+  /// Runs `process` and returns its stdout once stdout closes, or after `timeout` seconds. No
+  /// thread waits meanwhile.
   static func output(of process: Process, timeout: TimeInterval) async -> Data? {
     let pipe = Pipe()
     let state = OutputState()
@@ -55,10 +52,12 @@ public enum Launcher {
         return
       }
       let pid = process.processIdentifier
+      // At the deadline, a process still running is killed with SIGKILL, because an interactive
+      // shell ignores SIGTERM, and the reply is nil. The kill applies even after a reply: a shell
+      // that closed stdout but still runs is killed too. A process that exited while a child it
+      // started (such as a daemon from a shell's start-up files) holds stdout open replies with
+      // what was read by the deadline.
       DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-        // Still running at the deadline: kill it and return nil. Exited, but a child holds
-        // stdout: return what was read.
-        // The kill applies even after a reply: a shell that closed stdout but still runs is killed.
         if state.stillRunning {
           kill(pid, SIGKILL)
           state.giveUp()

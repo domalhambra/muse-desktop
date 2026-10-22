@@ -1,6 +1,6 @@
 import Foundation
 
-// The M1 subset of src/shared/protocol.ts. Decoding ignores fields mMac does not use.
+// The subset of src/shared/protocol.ts mMac uses. Decoding ignores fields mMac does not use.
 // Optional fields here are optional or nullable in the zod schemas.
 
 public struct ConnectionStatus: Codable, Equatable, Sendable {
@@ -370,17 +370,53 @@ public struct MuseModel: Codable, Equatable, Sendable, Identifiable {
 }
 
 /// The preferences mMac reads. The backend sends them whole on `start` and after every save.
+/// A field the file lacks takes Electron's default (`src/shared/protocol.ts`).
 public struct Preferences: Codable, Equatable, Sendable {
-  public let cliPath: String
-  public let recentProjects: [String]
-  public let trustedProjects: [String]
-  public let reasoningEffort: String
+  public var cliPath = ""
+  public var recentProjects: [String] = []
+  public var trustedProjects: [String] = []
+  public var reasoningEffort = "high"
+  public var theme = "muse"
+  public var fontSize = "comfortable"
+  public var reduceMotion = false
+  public var notifyOnCompletion = false
+  public var bridgeFilesEnabled = false
+  public var bridgeMcpEnabled = false
+  public var bridgeMcpPort = 7735
 
-  public init(cliPath: String = "", recentProjects: [String] = [], trustedProjects: [String] = [], reasoningEffort: String = "high") {
+  public init(
+    cliPath: String = "", recentProjects: [String] = [], trustedProjects: [String] = [],
+    reasoningEffort: String = "high", theme: String = "muse", fontSize: String = "comfortable",
+    reduceMotion: Bool = false, notifyOnCompletion: Bool = false, bridgeFilesEnabled: Bool = false,
+    bridgeMcpEnabled: Bool = false, bridgeMcpPort: Int = 7735
+  ) {
     self.cliPath = cliPath
     self.recentProjects = recentProjects
     self.trustedProjects = trustedProjects
     self.reasoningEffort = reasoningEffort
+    self.theme = theme
+    self.fontSize = fontSize
+    self.reduceMotion = reduceMotion
+    self.notifyOnCompletion = notifyOnCompletion
+    self.bridgeFilesEnabled = bridgeFilesEnabled
+    self.bridgeMcpEnabled = bridgeMcpEnabled
+    self.bridgeMcpPort = bridgeMcpPort
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let d = Preferences()
+    cliPath = try c.decodeIfPresent(String.self, forKey: .cliPath) ?? d.cliPath
+    recentProjects = try c.decodeIfPresent([String].self, forKey: .recentProjects) ?? d.recentProjects
+    trustedProjects = try c.decodeIfPresent([String].self, forKey: .trustedProjects) ?? d.trustedProjects
+    reasoningEffort = try c.decodeIfPresent(String.self, forKey: .reasoningEffort) ?? d.reasoningEffort
+    theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? d.theme
+    fontSize = try c.decodeIfPresent(String.self, forKey: .fontSize) ?? d.fontSize
+    reduceMotion = try c.decodeIfPresent(Bool.self, forKey: .reduceMotion) ?? d.reduceMotion
+    notifyOnCompletion = try c.decodeIfPresent(Bool.self, forKey: .notifyOnCompletion) ?? d.notifyOnCompletion
+    bridgeFilesEnabled = try c.decodeIfPresent(Bool.self, forKey: .bridgeFilesEnabled) ?? d.bridgeFilesEnabled
+    bridgeMcpEnabled = try c.decodeIfPresent(Bool.self, forKey: .bridgeMcpEnabled) ?? d.bridgeMcpEnabled
+    bridgeMcpPort = try c.decodeIfPresent(Int.self, forKey: .bridgeMcpPort) ?? d.bridgeMcpPort
   }
 }
 
@@ -388,11 +424,32 @@ public struct Preferences: Codable, Equatable, Sendable {
 public struct PreferencesPatch: Encodable, Equatable, Sendable {
   public var cliPath: String?
   public var reasoningEffort: String?
+  public var theme: String?
+  public var fontSize: String?
+  public var reduceMotion: Bool?
+  public var notifyOnCompletion: Bool?
+  public var bridgeFilesEnabled: Bool?
+  public var bridgeMcpEnabled: Bool?
+  public var bridgeMcpPort: Int?
 
-  public init(cliPath: String? = nil, reasoningEffort: String? = nil) {
+  public init(
+    cliPath: String? = nil, reasoningEffort: String? = nil, theme: String? = nil, fontSize: String? = nil,
+    reduceMotion: Bool? = nil, notifyOnCompletion: Bool? = nil, bridgeFilesEnabled: Bool? = nil,
+    bridgeMcpEnabled: Bool? = nil, bridgeMcpPort: Int? = nil
+  ) {
     self.cliPath = cliPath
     self.reasoningEffort = reasoningEffort
+    self.theme = theme
+    self.fontSize = fontSize
+    self.reduceMotion = reduceMotion
+    self.notifyOnCompletion = notifyOnCompletion
+    self.bridgeFilesEnabled = bridgeFilesEnabled
+    self.bridgeMcpEnabled = bridgeMcpEnabled
+    self.bridgeMcpPort = bridgeMcpPort
   }
+
+  /// True when the patch changes a bridge, so the bridge status needs a new read.
+  public var touchesBridges: Bool { bridgeFilesEnabled != nil || bridgeMcpEnabled != nil || bridgeMcpPort != nil }
 }
 
 public struct SessionView: Codable, Equatable, Sendable {
@@ -400,7 +457,7 @@ public struct SessionView: Codable, Equatable, Sendable {
   public var items: [TranscriptItem]
   public var approvals: [Approval]
   public var questions: [UserQuestion]
-  public let usage: Usage?
+  public var usage: Usage?
   public let error: String?
   public let historyNotice: String?
 
@@ -543,5 +600,119 @@ public struct Usage: Codable, Equatable, Sendable {
     self.input = input
     self.output = output
     self.total = total
+  }
+}
+
+// Settings: MCP servers and the bridges, from src/shared/protocol.ts.
+
+/// An MCP server from Muse's settings.json. Secret values never leave the backend.
+public struct McpServer: Codable, Equatable, Sendable, Identifiable {
+  public let name: String
+  /// `stdio` or `http`.
+  public let transport: String
+  public let enabled: Bool
+  public let command: String?
+  public let args: [String]?
+  public let url: String?
+  public let envNames: [String]?
+  public let headerNames: [String]?
+  public var id: String { name }
+  public var isRemote: Bool { transport == "http" }
+  /// The command line or the URL, as Electron's row shows it.
+  public var detail: String { isRemote ? url ?? "" : ([command ?? ""] + (args ?? [])).joined(separator: " ") }
+  /// The names of the env variables or headers, never their values.
+  public var secretNames: [String] { (isRemote ? headerNames : envNames) ?? [] }
+
+  public init(
+    name: String, transport: String, enabled: Bool, command: String? = nil, args: [String]? = nil,
+    url: String? = nil, envNames: [String]? = nil, headerNames: [String]? = nil
+  ) {
+    self.name = name
+    self.transport = transport
+    self.enabled = enabled
+    self.command = command
+    self.args = args
+    self.url = url
+    self.envNames = envNames
+    self.headerNames = headerNames
+  }
+}
+
+/// `mcp-list`'s reply: the servers and the settings file they come from.
+public struct McpServerList: Codable, Equatable, Sendable {
+  public let file: String
+  public let servers: [McpServer]
+
+  public init(file: String, servers: [McpServer]) {
+    self.file = file
+    self.servers = servers
+  }
+}
+
+/// A server to add, in the shape `mcpServerSchema` reads.
+public enum McpServerInput: Encodable, Equatable, Sendable {
+  case stdio(name: String, command: String, args: [String], env: [String: String])
+  case http(name: String, url: String, headers: [String: String])
+
+  private enum Keys: String, CodingKey { case name, transport, command, args, env, url, headers }
+
+  public func encode(to encoder: any Encoder) throws {
+    var c = encoder.container(keyedBy: Keys.self)
+    switch self {
+    case .stdio(let name, let command, let args, let env):
+      try c.encode(name, forKey: .name)
+      try c.encode("stdio", forKey: .transport)
+      try c.encode(command, forKey: .command)
+      try c.encode(args, forKey: .args)
+      try c.encode(env, forKey: .env)
+    case .http(let name, let url, let headers):
+      try c.encode(name, forKey: .name)
+      try c.encode("http", forKey: .transport)
+      try c.encode(url, forKey: .url)
+      try c.encode(headers, forKey: .headers)
+    }
+  }
+}
+
+/// The folder bridge and the MCP bridge, as `bridge-status` reports them.
+public struct BridgeStatus: Codable, Equatable, Sendable {
+  public struct Part: Codable, Equatable, Sendable {
+    public let enabled: Bool
+    public let running: Bool
+    public let error: String?
+
+    public init(enabled: Bool, running: Bool, error: String? = nil) {
+      self.enabled = enabled
+      self.running = running
+      self.error = error
+    }
+  }
+
+  public struct Mcp: Codable, Equatable, Sendable {
+    public let enabled: Bool
+    public let running: Bool
+    public let url: String
+    public let hasToken: Bool
+    public let error: String?
+
+    public init(enabled: Bool, running: Bool, url: String, hasToken: Bool, error: String? = nil) {
+      self.enabled = enabled
+      self.running = running
+      self.url = url
+      self.hasToken = hasToken
+      self.error = error
+    }
+  }
+
+  public let folder: String
+  public let files: Part
+  public let mcp: Mcp
+  public let activeJobs: Int
+
+  public init(folder: String, files: Part, mcp: Mcp, activeJobs: Int) {
+    self.folder = folder
+    self.files = files
+    self.mcp = mcp
+    self.activeJobs = activeJobs
   }
 }

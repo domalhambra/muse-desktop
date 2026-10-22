@@ -63,11 +63,9 @@ public final class ProcessTransport: Transport, Sendable {
       },
       ended: { ended.fire() })
     process.standardError = errors
-    // A write to a backend that has exited must throw, not end mMac with SIGPIPE. Only these
-    // two descriptors are marked: the backend's stdin, and stderr, where its output is copied.
-    // They are marked before the child starts, so its first stderr line is copied safely too.
+    // A write to a backend that has exited must throw, not end mMac with SIGPIPE. Only mMac's
+    // own pipe to the backend's stdin is marked. fd 2 is left alone: other writers share it.
     _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-    _ = fcntl(FileHandle.standardError.fileDescriptor, F_SETNOSIGPIPE, 1)
     do { try process.run() } catch {
       stdout.end()
       errorReader.end()
@@ -75,11 +73,8 @@ public final class ProcessTransport: Transport, Sendable {
     }
   }
 
-  /// Up to the last 4,000 bytes the child wrote to stderr, trimmed.
-  public var recentErrorOutput: String { errorTail.text }
-
-  /// The child's last stderr output, once stderr has ended. A grandchild can hold stderr open
-  /// after the child exits, so this waits at most `limit`.
+  /// Up to the last 4,000 bytes the child wrote to stderr, trimmed, once stderr has ended. A
+  /// grandchild can hold stderr open after the child exits, so this waits at most `limit`.
   public func errorOutput(waitingUpTo limit: Duration = .seconds(1)) async -> String {
     let ended = errorEnded
     await withTaskGroup(of: Void.self) { group in
