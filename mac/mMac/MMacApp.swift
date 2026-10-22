@@ -12,15 +12,24 @@ struct MMacApp: App {
     window.identifier?.rawValue == mainWindow
   }
 
+  #if DEBUG
+    /// The UI tests' own defaults suite, from `MMAC_DEFAULTS_SUITE`. Debug builds only; nil when
+    /// the variable is unset or empty.
+    static let testDefaultsSuite: String? = {
+      guard let suite = ProcessInfo.processInfo.environment["MMAC_DEFAULTS_SUITE"], !suite.isEmpty else {
+        return nil
+      }
+      return suite
+    }()
+  #endif
+
   /// Where `@AppStorage` keeps the window's choices, such as `inspectorShown`. Debug builds take
   /// `MMAC_DEFAULTS_SUITE` from the UI tests: a suite of their own, emptied at launch, so a test
   /// starts from the defaults and never reads or changes Dom's. The test runner is sandboxed and
   /// cannot reach mMac's preferences itself.
   static let appStorage: UserDefaults = {
     #if DEBUG
-      if let suite = ProcessInfo.processInfo.environment["MMAC_DEFAULTS_SUITE"], !suite.isEmpty,
-        let defaults = UserDefaults(suiteName: suite)
-      {
+      if let suite = testDefaultsSuite, let defaults = UserDefaults(suiteName: suite) {
         defaults.removePersistentDomain(forName: suite)
         return defaults
       }
@@ -29,14 +38,13 @@ struct MMacApp: App {
   }()
 
   /// False in Debug builds run with `MMAC_DEFAULTS_SUITE`, as the UI tests run them. AppKit keeps
-  /// the window's frame ("NSWindow Frame main") and the sidebar's width ("NSSplitView Subview
-  /// Frames main, SidebarNavigationSplitView") in the standard defaults, not in `appStorage`, so
-  /// such a run turns those saves off instead: see `WindowStateGuard`.
+  /// the windows' frames ("NSWindow Frame main", "NSWindow Frame com_apple_SwiftUI_Settings_window")
+  /// and the sidebar's width ("NSSplitView Subview Frames main, SidebarNavigationSplitView") in the
+  /// standard defaults, not in `appStorage`, so such a run turns those saves off instead: see
+  /// `WindowStateGuard`.
   static let keepsWindowState: Bool = {
     #if DEBUG
-      if let suite = ProcessInfo.processInfo.environment["MMAC_DEFAULTS_SUITE"], !suite.isEmpty {
-        return false
-      }
+      if testDefaultsSuite != nil { return false }
     #endif
     return true
   }()
@@ -74,6 +82,7 @@ struct MMacApp: App {
       SettingsView(controller: delegate.controller)
         .defaultAppStorage(Self.appStorage)
         .themed(delegate.controller)
+        .background { if !Self.keepsWindowState { WindowStateGuard() } }
     }
   }
 }
@@ -108,35 +117,6 @@ private struct InspectorCommand: View {
   var body: some View {
     Button(inspectorShown ? "Hide Inspector" : "Show Inspector") { inspectorShown.toggle() }
       .keyboardShortcut("i", modifiers: [.command, .option])
-  }
-}
-
-/// Turns off AppKit's frame autosave for the window it is in, and for the window's split views,
-/// when `MMacApp.keepsWindowState` is false. SwiftUI names both autosaves when it builds the
-/// window and the `NavigationSplitView`, so the guard clears them once it is in the window, and
-/// again on the next turn of the run loop, after SwiftUI has set up the views around it.
-struct WindowStateGuard: NSViewRepresentable {
-  func makeNSView(context: Context) -> NSView { GuardView() }
-  func updateNSView(_ view: NSView, context: Context) {}
-
-  final class GuardView: NSView {
-    override func viewDidMoveToWindow() {
-      super.viewDidMoveToWindow()
-      guard !MMacApp.keepsWindowState, let window else { return }
-      WindowStateGuard.forget(in: window)
-      DispatchQueue.main.async { [weak window] in
-        if let window { WindowStateGuard.forget(in: window) }
-      }
-    }
-  }
-
-  static func forget(in window: NSWindow) {
-    if !window.frameAutosaveName.isEmpty { window.setFrameAutosaveName("") }
-    var views = [window.contentView].compactMap { $0 }
-    while let view = views.popLast() {
-      if let split = view as? NSSplitView, split.autosaveName != nil { split.autosaveName = nil }
-      views.append(contentsOf: view.subviews)
-    }
   }
 }
 
