@@ -16,6 +16,7 @@ extension Workspace {
     let startKey = draftKey
     // Taken now, as Electron's submit takes them when called: startNew resets the mode.
     let (mode, effort) = (self.mode, self.effort)
+    let worktree = startInWorktree && canStartInWorktree
     // As Electron's submit: the view changes only while the person stays on this conversation.
     let sequence = openSequence
     var sentId: String?
@@ -26,9 +27,19 @@ extension Workspace {
       if let view {
         current = view
       } else {
-        current = try await client.create(project: project, modelId: modelId.isEmpty ? nil : modelId)
+        current = try await client.create(
+          project: project, modelId: modelId.isEmpty ? nil : modelId, worktree: worktree)
         // Show the new conversation, unless the person opened another one meanwhile.
         if sequence == openSequence, view == nil { view = current }
+        if worktree {
+          startInWorktree = false
+          // As Electron: Muse runs this conversation in its new worktree, so follow it there.
+          if sequence == openSequence, view?.session.sessionId == current.session.sessionId,
+            let root = current.session.workspaceRoot
+          {
+            project = root
+          }
+        }
       }
       let sessionId = current.session.sessionId
       sentId = sessionId
@@ -190,5 +201,30 @@ extension Workspace {
       let output = try await self.client.readOutput(sessionId: sessionId, itemId: item.itemId)
       if sequence == self.openSequence { self.storedOutput[item.itemId] = output }
     }
+  }
+
+  /// "Ask Muse" on a diff: Electron's `onMentionDiff` sentence.
+  public func askAboutChanges(_ path: String) {
+    appendToDraft("Please review the changes in @\(path)\n")
+  }
+
+  /// "Ask Muse" on a file preview: Electron's `onMention` sentence, with the path as a JSON string.
+  public func askAboutFile(_ path: String) {
+    appendToDraft("Please look at the project file: \(Self.jsonString(path))\n")
+  }
+
+  /// Adds `text` on a new line when the draft has text, as Electron does, and focuses the composer.
+  func appendToDraft(_ text: String) {
+    let current = draft
+    draft = current + (current.isEmpty ? "" : "\n") + text
+    composerFocusRequest += 1
+  }
+
+  /// `JSON.stringify` of a string: quoted and escaped, slashes left alone.
+  static func jsonString(_ value: String) -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .withoutEscapingSlashes
+    guard let data = try? encoder.encode(value) else { return "\"\(value)\"" }
+    return String(decoding: data, as: UTF8.self)
   }
 }

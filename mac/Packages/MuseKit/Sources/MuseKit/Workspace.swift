@@ -28,7 +28,21 @@ public final class Workspace {
   private var hasLoadedHistory = false
   public private(set) var historyError: String?
   /// The project filter, and the folder a new conversation starts in. Empty means all projects.
-  public private(set) var project: String
+  /// The inspector follows it.
+  public internal(set) var project: String {
+    didSet { if project != oldValue { inspector.show(project: project) } }
+  }
+  /// The inspector for `project`.
+  public let inspector: Inspector
+  /// Git status per recent project, for the sidebar's badges. A folder whose status could not be
+  /// read has no entry; one outside a repository has a status with `isRepository` false.
+  public internal(set) var projectGit: [String: GitStatus] = [:]
+  /// Start the next new conversation in its own Muse-created Git worktree.
+  public var startInWorktree = false
+  /// Bumped when Ask Muse adds to the draft, so the composer takes keyboard focus.
+  public internal(set) var composerFocusRequest = 0
+  /// The conversation open before a backend restart, opened again once history has loaded.
+  private var reopenSessionId: String?
   public internal(set) var view: SessionView?
   /// The conversation being opened, for a spinner.
   public private(set) var openingSessionId: String?
@@ -50,21 +64,29 @@ public final class Workspace {
   /// await, so a reply for a conversation the person has left does not change the one shown.
   private(set) var openSequence = 0
   private var refreshSequence = 0
+  /// Counts reads of every recent project's badge. An older read that finishes later is dropped.
+  private var projectGitSequence = 0
   private var refreshDelay: Task<Void, Never>?
   /// The pause before a `sessions-changed` event refreshes history. Electron waits 250 ms.
   private let refreshDebounce: Duration
 
-  /// `drafts` are an earlier Workspace's, so a backend restart keeps what the person typed.
+  /// `drafts` are an earlier Workspace's, so a backend restart keeps what the person typed, and
+  /// `reopen` is the conversation that was open then.
   public init(
-    client: BackendClient, started: Started, drafts: [String: String] = [:],
+    client: BackendClient, started: Started, drafts: [String: String] = [:], reopen: String? = nil,
     refreshDebounce: Duration = .milliseconds(250)
   ) {
     self.client = client
     self.drafts = drafts
     status = started.status
     preferences = started.preferences
-    project = started.preferences.recentProjects.first ?? ""
+    let project = started.preferences.recentProjects.first ?? ""
+    inspector = Inspector(client: client, project: project)
+    self.project = project
+    reopenSessionId = reopen
     self.refreshDebounce = refreshDebounce
+    inspector.reportError = { [weak self] message in self?.errorMessage = message }
+    inspector.statusRead = { [weak self] path, status in self?.projectGit[path] = status }
   }
 
   public var sections: [SidebarSection] {
@@ -72,6 +94,8 @@ public final class Workspace {
   }
   public var isConnected: Bool { status.isReady }
   public var isRunning: Bool { view?.session.status == "running" }
+  /// A new conversation can start in a worktree on a CLI that offers Muse's experimental methods.
+  public var canStartInWorktree: Bool { view == nil && status.experimental == true }
   public var effort: String { preferences.reasoningEffort }
 
   /// The composer text for the open conversation, or for a new one in the current project.
@@ -82,11 +106,44 @@ public final class Workspace {
   }
   var draftKey: String { view?.session.sessionId ?? "new:\(project)" }
 
-  /// Loads history and models. Call it once `start` has replied; a later `ready` event calls it again.
+  /// Loads history, models and the project badges, and reopens the conversation open before a
+  /// restart. Call it once `start` has replied; a later `ready` event calls it again.
   public func begin() async {
     guard status.isReady else { return }
     await refreshSessions()
     await loadModels()
+    if let reopen = reopenSessionId {
+      reopenSessionId = nil
+      // Not over a conversation the person opened, or is opening, while history loaded.
+      if view == nil, openingSessionId == nil { await open(reopen) }
+    }
+    await refreshProjectGit()
+  }
+
+  /// Reads the Git status of `only` these projects, or of every recent project, for the badges.
+  public func refreshProjectGit(_ only: [String]? = nil) async {
+    let paths = only ?? preferences.recentProjects
+    var sequence = projectGitSequence
+    if only == nil {
+      projectGitSequence += 1
+      sequence = projectGitSequence
+    }
+    let client = self.client
+    let found = await withTaskGroup(of: (String, GitStatus?).self) { group in
+      for path in paths { group.addTask { (path, try? await client.gitStatus(project: path)) } }
+      var found: [String: GitStatus] = [:]
+      for await (path, status) in group { if let status { found[path] = status } }
+      return found
+    }
+    // A cancelled caller's `try?` reads give no status; keep the badges shown instead.
+    guard !Task.isCancelled else { return }
+    if only == nil {
+      // A newer read of every project, for newer recent projects, already replaced this one.
+      guard sequence == projectGitSequence else { return }
+      projectGit = found
+    } else {
+      for path in paths { projectGit[path] = found[path] }
+    }
   }
 
   public func apply(_ event: AppEvent) {
@@ -96,9 +153,19 @@ public final class Workspace {
       status = next
       if becameReady { Task { await begin() } }
     case .preferences(let next):
+      let projectsChanged = next.recentProjects != preferences.recentProjects
       preferences = next
+      if projectsChanged { Task { await refreshProjectGit() } }
     case .session(let next):
-      if next.session.sessionId == view?.session.sessionId { view = next }
+      if next.session.sessionId == view?.session.sessionId {
+        // A turn that ends may have changed files: read the project's badge again.
+        if view?.session.status == "running", next.session.status != "running",
+          let root = next.session.workspaceRoot
+        {
+          Task { await refreshProjectGit([root]) }
+        }
+        view = next
+      }
       if let index = sessions.firstIndex(where: { $0.sessionId == next.session.sessionId }) {
         // Only on a change: every streamed update sends a session event, and the sidebar
         // rebuilds its sections whenever `sessions` is written.
