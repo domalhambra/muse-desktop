@@ -40,12 +40,12 @@ private func listJSON(_ names: String...) -> String {
   var form = McpForm()
   form.name = "bad name"
   form.command = "npx"
-  #expect(await settings.addServer(form) == false)
-  #expect(settings.errorMessage == "Use letters, numbers, - and _ for the server name.")
+  #expect(await settings.addServer(form) == "Use letters, numbers, - and _ for the server name.")
+  #expect(settings.errorMessage == nil)
   #expect(!settings.needsReconnect)
   #expect(!requests(backend).contains { $0.first == .string("mcp-list") })
   form.name = "good"
-  #expect(await settings.addServer(form))
+  #expect(await settings.addServer(form) == nil)
   #expect(settings.needsReconnect)
   #expect(requests(backend).contains { $0.first == .string("mcp-list") })
   #expect(settings.servers.map(\.name) == ["good"])
@@ -59,8 +59,8 @@ private func listJSON(_ names: String...) -> String {
   form.name = "x"
   form.command = "npx"
   form.environment = "NOEQUALS"
-  #expect(await settings.addServer(form) == false)
-  #expect(settings.errorMessage == "Write each line as name=value: NOEQUALS")
+  #expect(await settings.addServer(form) == "Write each line as name=value: NOEQUALS")
+  #expect(settings.errorMessage == nil)
   #expect(!settings.needsReconnect)
   #expect(requests(backend).isEmpty)
 }

@@ -133,6 +133,10 @@ private struct McpAddSheet: View {
   @State private var form = McpForm()
   @State private var error: String?
   @State private var saving = false
+  /// While a multi-line field has focus, Return makes a new line there, so Add server gives up
+  /// the Return key. A key equivalent is matched before the field sees the key, so the field
+  /// cannot keep Return for itself while the button holds it.
+  @State private var editorFocused = false
   @Environment(\.appearance) private var appearance
 
   var body: some View {
@@ -145,20 +149,21 @@ private struct McpAddSheet: View {
       // The stock selected segment: the theme's light accent under a white label is unreadable.
       .tint(nil)
       field("Name") {
-        TextField("Name", text: $form.name, prompt: Text("filesystem"))
+        PlainTextField(accessibilityLabel: "Name", text: $form.name, placeholder: "filesystem")
       }
       switch form.kind {
       case .local:
         field("Command") {
-          TextField("Command", text: $form.command, prompt: Text("npx"))
+          PlainTextField(accessibilityLabel: "Command", text: $form.command, placeholder: "npx")
         }
-        LinesField(label: "Arguments, one per line", text: $form.arguments, lines: 3)
-        LinesField(label: "Environment, one KEY=value per line", text: $form.environment, lines: 2)
+        LinesField(label: "Arguments, one per line", text: $form.arguments, lines: 3, focused: $editorFocused)
+        LinesField(
+          label: "Environment, one KEY=value per line", text: $form.environment, lines: 2, focused: $editorFocused)
       case .remote:
         field("URL") {
-          TextField("URL", text: $form.url, prompt: Text("https://example.com/mcp"))
+          PlainTextField(accessibilityLabel: "URL", text: $form.url, placeholder: "https://example.com/mcp")
         }
-        LinesField(label: "Headers, one Name: value per line", text: $form.headers, lines: 2)
+        LinesField(label: "Headers, one Name: value per line", text: $form.headers, lines: 2, focused: $editorFocused)
         Text("Leave headers empty for servers that use OAuth, then use the key button to sign in.")
           .font(.caption)
           .foregroundStyle(.themeSecondary)
@@ -168,15 +173,17 @@ private struct McpAddSheet: View {
       }
       HStack {
         Spacer()
-        Button("Cancel", action: close).keyboardShortcut(.cancelAction)
+        // Disabled while saving, so a refusal always has the form to show in.
+        Button("Cancel", action: close)
+          .keyboardShortcut(.cancelAction)
+          .disabled(saving)
         Button("Add server", action: add)
-          .keyboardShortcut(.defaultAction)
+          .keyboardShortcut(editorFocused ? nil : .defaultAction)
           .buttonStyle(.primary)
           .disabled(saving)
           .accessibilityIdentifier("mcp-add-confirm")
       }
     }
-    .textFieldStyle(.roundedBorder)
     .padding(20)
     .frame(width: 460)
     .background(appearance.colors.dialog)
@@ -196,37 +203,32 @@ private struct McpAddSheet: View {
     saving = true
     error = nil
     Task {
-      if await settings.addServer(form) {
+      guard let refusal = await settings.addServer(form) else {
         close()
         return
       }
-      // Shown here, under the form. Cleared on the model, so the Settings window's alert does
-      // not show it a second time behind the sheet.
-      error = settings.errorMessage
-      settings.errorMessage = nil
+      error = refusal
       saving = false
     }
   }
 }
 
-/// A multi-line field with a visible border and a label VoiceOver reads.
+/// A multi-line field with a visible border and a label VoiceOver reads. It shows `lines` lines
+/// and scrolls past them.
 private struct LinesField: View {
   let label: String
   @Binding var text: String
   let lines: Int
+  @Binding var focused: Bool
   @Environment(\.appearance) private var appearance
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(label).accessibilityHidden(true)
-      TextEditor(text: $text)
-        .font(.body.monospaced())
-        .scrollContentBackground(.hidden)
-        .padding(4)
-        .frame(height: CGFloat(lines) * 18 + 8)
+      PlainTextEditor(text: $text, accessibilityLabel: label) { focused = $0 }
+        .frame(height: PlainTextEditor.height(lines: lines))
         .background(appearance.colors.input, in: RoundedRectangle(cornerRadius: 5))
         .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
-        .accessibilityLabel(label)
     }
   }
 }

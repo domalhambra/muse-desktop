@@ -49,10 +49,17 @@ public final class SettingsModel {
     }
   }
 
-  /// Returns true when the server was added, so the view can close the form. On false the view
-  /// keeps the form as typed.
-  public func addServer(_ form: McpForm) async -> Bool {
-    await change { try await self.client.mcpAdd(try form.input()) }
+  /// Returns nil when the server was added, so the view can close the form, or else the refusal,
+  /// which the form shows under itself as typed. A refusal never goes to `errorMessage`, so the
+  /// form never has to clear the Settings window's alert, nor another action's error with it.
+  public func addServer(_ form: McpForm) async -> String? {
+    do {
+      try await client.mcpAdd(try form.input())
+    } catch {
+      return error.localizedDescription
+    }
+    await changed()
+    return nil
   }
 
   public func setEnabled(_ name: String, _ enabled: Bool) async {
@@ -77,18 +84,21 @@ public final class SettingsModel {
     if changes == before { needsReconnect = false }
   }
 
-  @discardableResult
-  private func change(_ work: () async throws -> Void) async -> Bool {
+  private func change(_ work: () async throws -> Void) async {
     do {
       try await work()
     } catch {
       errorMessage = error.localizedDescription
-      return false
+      return
     }
+    await changed()
+  }
+
+  /// After an MCP change: the notice, and the list read again.
+  private func changed() async {
     changes += 1
     needsReconnect = true
     await loadServers()
-    return true
   }
 
   // MARK: Bridges
