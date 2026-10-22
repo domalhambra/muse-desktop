@@ -111,6 +111,30 @@ async function folder(name: string) {
   return path
 }
 
+/** A backend whose Ask starts the quit path before it answers Reconnect. */
+function createBackendWithAskThatQuits(muse: Muse) {
+  let quitting = false
+  const backend = createBackend({
+    muse,
+    emit: () => {},
+    version: '0.2.0',
+    ask: async () => {
+      quitting = true
+      return 0
+    },
+    quitting: () => quitting,
+    quit: vi.fn(),
+  })
+  const call = (name: string, ...args: unknown[]) => backend.methods.get(name)!(...args)
+  return {
+    call,
+    start: async () => {
+      await call('hello', HEADLESS_PROTOCOL)
+      await call('start', { dataFolder: join(dir, 'data-quit') })
+    },
+  }
+}
+
 describe('headless backend', () => {
   it('needs hello, then start, before any other method', async () => {
     const { call } = harness()
@@ -190,7 +214,8 @@ describe('headless backend', () => {
     const { call, start, asks } = harness(muse, [0])
     await start()
     const message = { sessionId: 's1', text: 'hi', attachments: [], effort: 'high', mode: 'steer' }
-    await expect(call('send', { ...message, attachments: ['a1'] })).rejects.toThrow()
+    await expect(call('send', { ...message, attachments: ['a1'] })).rejects.toThrow(/attachments/)
+    expect(muse.send).not.toHaveBeenCalled()
     await expect(call('send', { ...message, text: '   ' })).rejects.toThrow(
       'Write a message first.',
     )
@@ -329,6 +354,55 @@ describe('headless backend, M1 methods', () => {
     await start()
     expect(await call('output', 's1', 'i1')).toBe('stored output')
     expect(asks).toHaveLength(0)
+  })
+  it('asks before reconnecting during a turn, and checks for a quit after the Ask', async () => {
+    const muse = fakeMuse({ hasActiveTurns: vi.fn(() => true) })
+    const { call, start, asks } = harness(muse, [1, 0])
+    await start()
+    muse.connect.mockClear()
+    expect(await call('connect')).toEqual(ready)
+    expect(muse.connect).not.toHaveBeenCalled()
+    expect(asks[0].title).toBe('Reconnect while Muse is working?')
+    expect(asks[0].buttons).toEqual(['Reconnect', 'Cancel'])
+    await call('connect')
+    expect(muse.connect).toHaveBeenCalledTimes(1)
+
+    // A quit that starts while the Ask shows: the answer comes back, but connect must stop.
+    const quitting = createBackendWithAskThatQuits(muse)
+    await quitting.start()
+    muse.connect.mockClear()
+    await expect(quitting.call('connect')).rejects.toThrow('The backend is quitting.')
+    expect(muse.connect).not.toHaveBeenCalled()
+  })
+
+  it('records a worktree session’s parent project, not the worktree', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    const muse = fakeMuse({
+      open: vi.fn(async (sessionId: string) =>
+        view(session({ sessionId, workspaceRoot: worktree })),
+      ),
+    })
+    const { call, start, lastPreferences } = harness(muse)
+    await start()
+    await call('open', 's1')
+    expect(lastPreferences()?.preferences.recentProjects).toEqual([project])
+  })
+
+  it('serializes preference writes, so overlapping saves of different fields both land', async () => {
+    const { call, start, lastPreferences } = harness()
+    await start()
+    await Promise.all([
+      call('preferences', { reasoningEffort: 'low' }),
+      call('preferences', { cliPath: '/opt/muse' }),
+    ])
+    const saved = JSON.parse(await readFile(join(dir, 'data', 'preferences.json'), 'utf8'))
+    expect(saved.reasoningEffort).toBe('low')
+    expect(saved.cliPath).toBe('/opt/muse')
+    expect(lastPreferences()?.preferences).toMatchObject({
+      reasoningEffort: 'low',
+      cliPath: '/opt/muse',
+    })
   })
 })
 
