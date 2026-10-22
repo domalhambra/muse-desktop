@@ -2,11 +2,32 @@ import Foundation
 import Testing
 @testable import MuseBackend
 
-@Test func parseLoginPathSkipsShellNoise() {
-  let output = Data("Last login: today\n".utf8) + Data([0]) + Data("MMAC_PATH".utf8) + Data([0])
-    + Data("/opt/homebrew/bin:/usr/bin".utf8)
-  #expect(Launcher.parseLoginPath(output) == "/opt/homebrew/bin:/usr/bin")
-  #expect(Launcher.parseLoginPath(Data("no marker".utf8)) == nil)
+@Test func parseLoginEnvironmentSkipsShellNoise() {
+  // Separate parts: one long `+` chain is too slow for the type checker.
+  let records = ["motd\n", "MMAC_ENV", "PATH=/opt/bin:/usr/bin", "EMPTY=", "EQUALS=a=b"]
+  let output = Data(records.joined(separator: "\0").utf8) + Data([0])
+  #expect(Launcher.parseLoginEnvironment(output) == ["PATH": "/opt/bin:/usr/bin", "EMPTY": "", "EQUALS": "a=b"])
+  #expect(Launcher.parseLoginEnvironment(Data("no marker".utf8)) == nil)
+  #expect(Launcher.parseLoginEnvironment(Data([0]) + Data("MMAC_ENV".utf8) + Data([0])) == nil)
+}
+
+@Test func theBackendEnvironmentLayersTheLoginShellOverMMac() {
+  let environment = Launcher.backendEnvironment(
+    own: ["PATH": "/usr/bin", "HOME": "/h", "DYLD_X": "1", "NODE_OPTIONS": "--x", "KEEP": "own"],
+    login: ["PATH": "/opt/node/bin", "LANG": "en_US.UTF-8", "SHLVL": "2", "_": "/bin/env", "PWD": "/x", "KEEP": "login"],
+    shell: "/bin/zsh")
+  #expect(environment["PATH"] == "/opt/node/bin:/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin")
+  #expect(environment["LANG"] == "en_US.UTF-8")
+  #expect(environment["KEEP"] == "login")
+  #expect(environment["HOME"] == "/h")
+  #expect(environment["MMAC_LOGIN_SHELL"] == "/bin/zsh")
+  for gone in ["DYLD_X", "NODE_OPTIONS", "SHLVL", "_", "PWD"] { #expect(environment[gone] == nil) }
+  let withoutLogin = Launcher.backendEnvironment(own: ["PATH": "/usr/bin"], login: nil, shell: "/bin/zsh")
+  #expect(withoutLogin["MMAC_LOGIN_SHELL"] == nil)
+  #expect(withoutLogin["PATH"] == "/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin")
+  let inherited = Launcher.backendEnvironment(
+    own: ["PATH": "/usr/bin", "MMAC_LOGIN_SHELL": "/bin/old"], login: nil, shell: "/bin/zsh")
+  #expect(inherited["MMAC_LOGIN_SHELL"] == nil)
 }
 
 @Test func mergePathsKeepsTheFirstCopyOfEachFolder() {
@@ -19,7 +40,7 @@ import Testing
   #expect(Launcher.findNode(path: "/x", isExecutable: { _ in false }) == nil)
 }
 
-/// A `/bin/sh` process for `Launcher.output`, which `loginPath` uses to read the login shell.
+/// A `/bin/sh` process for `Launcher.output`, which `loginEnvironment` uses to read the login shell.
 private func shell(_ script: String) -> Process {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -28,14 +49,20 @@ private func shell(_ script: String) -> Process {
   return process
 }
 
-@Test(.timeLimit(.minutes(1))) func outputGivesUpOnAShellThatIgnoresSIGTERM() {
+@Test(.timeLimit(.minutes(1))) func outputGivesUpOnAShellThatIgnoresSIGTERM() async {
   // An interactive login shell ignores SIGTERM, so the deadline must use SIGKILL.
   let start = ContinuousClock.now
-  #expect(Launcher.output(of: shell(#"trap "" TERM; while :; do sleep 1; done"#), timeout: 1) == nil)
+  #expect(await Launcher.output(of: shell(#"trap "" TERM; while :; do sleep 1; done"#), timeout: 1) == nil)
   #expect(ContinuousClock.now - start < .seconds(3))
 }
 
-@Test(.timeLimit(.minutes(1))) func outputReturnsWhatAShellPrintedWhenAChildHoldsItsStdout() {
+@Test(.timeLimit(.minutes(1))) func outputReturnsWhatAShellPrintedWhenAChildHoldsItsStdout() async {
   // A daemon started from a shell's start-up files can keep stdout open after the shell exits.
-  #expect(Launcher.output(of: shell("printf done; sleep 2 &"), timeout: 1) == Data("done".utf8))
+  #expect(await Launcher.output(of: shell("printf done; sleep 2 &"), timeout: 1) == Data("done".utf8))
+}
+
+@Test(.timeLimit(.minutes(1))) func outputReturnsAtEOFWithoutWaitingForTheDeadline() async {
+  let start = ContinuousClock.now
+  #expect(await Launcher.output(of: shell("printf quick"), timeout: 5) == Data("quick".utf8))
+  #expect(ContinuousClock.now - start < .seconds(2))
 }

@@ -1,6 +1,7 @@
 // A scripted stand-in for src/headless/server.ts, for mMac's UI tests. It speaks the line
 // protocol of src/headless/wire.ts (keep `protocol` below equal to HEADLESS_PROTOCOL) and
-// serves one conversation that asks once, then waits on an approval and a question.
+// serves one conversation that asks once, then waits on an approval and a question. It also
+// answers the inspector's methods from fixed data, and its rename Asks before it replies.
 // Each request and Ask answer is appended to the file FAKE_BACKEND_LOG names.
 import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
@@ -64,7 +65,33 @@ const items = [
     status: 'completed',
     text: 'I need two things from you first.',
   },
+  {
+    itemId: 'h1',
+    kind: 'hookRun',
+    revision: 1,
+    status: 'completed',
+    label: 'Format on save',
+    statusLine: 'Ran prettier',
+  },
 ]
+// The inspector's fixtures: one modified file with one hunk, one untracked file, one Muse worktree.
+const changes = [
+  { path: 'src/app.swift', status: 'M', staged: false },
+  { path: 'notes.md', status: '??', staged: false },
+]
+const diff = [
+  'Working changes',
+  'diff --git a/src/app.swift b/src/app.swift',
+  '--- a/src/app.swift',
+  '+++ b/src/app.swift',
+  '@@ -1,3 +1,3 @@',
+  ' let a = 1',
+  '-let b = 2',
+  '+let b = 3',
+  ' let c = 4',
+  '',
+].join('\n')
+const worktreePath = `${project}/.muse/worktrees/feature`
 let approvals = [
   {
     approvalId: 'appr-1',
@@ -134,6 +161,25 @@ const methods = {
     update()
   },
   preferences: (patch) => Object.assign(preferences, patch),
+  'git-status': () => ({ branch: 'main', isRepository: true, changes }),
+  'git-diff': () => diff,
+  'git-revert-hunk': () => null,
+  'git-stage-file': () => null,
+  'git-revert-file': () => null,
+  files: (_, directory) =>
+    directory === 'src'
+      ? [{ name: 'app.swift', path: 'src/app.swift', directory: false }]
+      : [
+          { name: 'src', path: 'src', directory: true },
+          { name: 'notes.md', path: 'notes.md', directory: false },
+        ],
+  'read-file': () => 'let a = 1\nlet b = 3\nlet c = 4\n',
+  worktrees: () => [
+    { path: project, branch: 'main', isMain: true, sessionIds: [] },
+    { path: worktreePath, branch: 'muse/feature', isMain: false, sessionIds: [] },
+  ],
+  'worktree-merge': () => ({ ok: true, output: 'Merged muse/feature.' }),
+  'worktree-remove': () => null,
   shutdown: () => {
     setTimeout(() => process.exit(0), 50)
     return true
@@ -141,7 +187,8 @@ const methods = {
 }
 
 let asked = false
-let waitingOpen = null
+// A request whose reply waits for the answer to the Ask it raised.
+let pending = null
 createInterface({ input: process.stdin })
   .on('line', (line) => {
     // As wire.ts does: blank lines are skipped.
@@ -149,21 +196,40 @@ createInterface({ input: process.stdin })
     const message = JSON.parse(line)
     if ('answer' in message) {
       record({ answer: message.answer, choice: message.choice })
-      if (waitingOpen !== null) write({ id: waitingOpen, ok: true, value: view() })
-      waitingOpen = null
+      if (pending) write({ id: pending.id, ok: true, value: pending.value() ?? null })
+      pending = null
       return
     }
     record({ method: message.method, args: message.args ?? [] })
     // The first open Asks first, so the test can press Escape on a real Ask sheet.
     if (message.method === 'open' && !asked) {
       asked = true
-      waitingOpen = message.id
+      pending = { id: message.id, value: view }
       write({
         ask: 1,
         kind: 'confirm',
         title: 'Open the fake conversation?',
         message: 'Press Escape to choose the last button.',
         buttons: ['Open', 'Open anyway'],
+      })
+      return
+    }
+    // A rename Asks while mMac's rename sheet is still open, as a trust prompt can.
+    if (message.method === 'rename') {
+      pending = {
+        id: message.id,
+        value: () => {
+          session.name = message.args[1]
+          update()
+          write({ event: { type: 'sessions-changed' } })
+        },
+      }
+      write({
+        ask: 2,
+        kind: 'confirm',
+        title: 'Rename needs an answer',
+        message: 'The fake asks while the rename sheet is open.',
+        buttons: ['Go on', 'Cancel'],
       })
       return
     }

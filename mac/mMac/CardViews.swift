@@ -21,7 +21,7 @@ struct ApprovalCard: View {
     VStack(alignment: .leading, spacing: 10) {
       Label("Approval required", systemImage: "hand.raised").font(.headline)
       Text(ApprovalPresentation.heading(approval))
-      MonospacedBox(text: ApprovalPresentation.subject(approval))
+      MonospacedBox(text: ApprovalPresentation.subject(approval), label: "Approval request")
       HStack(alignment: .top, spacing: 8) {
         ForEach(approval.availableChoices) { choice in
           VStack(spacing: 2) {
@@ -70,25 +70,39 @@ struct QuestionCard: View {
       ForEach(question.questions) { prompt in
         VStack(alignment: .leading, spacing: 6) {
           Text(prompt.question).bold()
-          // By index: two options with the same label must still be two rows.
-          ForEach(Array(prompt.options.enumerated()), id: \.offset) { _, option in
-            Button {
-              form.choose(option.label, in: prompt.id)
-            } label: {
-              HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: icon(prompt, option))
-                VStack(alignment: .leading, spacing: 1) {
-                  Text(option.label).bold()
-                  if let description = option.description {
-                    Text(description).font(.caption).foregroundStyle(.secondary)
-                  }
-                }
+          if prompt.selection.mode == "multiple" {
+            ForEach(Array(prompt.options.enumerated()), id: \.offset) { _, option in
+              Toggle(
+                isOn: Binding(
+                  get: { form.isChosen(option.label, in: prompt.id) },
+                  set: { _ in form.choose(option.label, in: prompt.id) })
+              ) {
+                OptionLabel(option: option)
+              }
+              .toggleStyle(.checkbox)
+              .accessibilityLabel(option.label)
+              .accessibilityHint(option.description ?? "")
+            }
+          } else {
+            // Rows go by index, so two options with the same label are still two rows. The answer
+            // goes by label, so the first of them shows as chosen.
+            Picker(
+              prompt.header,
+              selection: Binding(
+                get: { prompt.options.firstIndex { form.isChosen($0.label, in: prompt.id) } },
+                set: { index in if let index { form.choose(prompt.options[index].label, in: prompt.id) } })
+            ) {
+              ForEach(Array(prompt.options.enumerated()), id: \.offset) { index, option in
+                // Without `.ignore`, the radio button joins its own text to these: "Blue, Blue".
+                OptionLabel(option: option)
+                  .tag(Optional(index))
+                  .accessibilityElement(children: .ignore)
+                  .accessibilityLabel(option.label)
+                  .accessibilityHint(option.description ?? "")
               }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(option.label)
-            .accessibilityHint(option.description ?? "")
-            .accessibilityAddTraits(form.isChosen(option.label, in: prompt.id) ? .isSelected : [])
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
           }
           TextField(
             "Or write your own answer…",
@@ -118,10 +132,18 @@ struct QuestionCard: View {
     guard form.canContinue, !workspace.answeringQuestions.contains(question.userInputId) else { return }
     Task { await workspace.answer(question, answers: form.submission) }
   }
+}
 
-  private func icon(_ prompt: UserQuestion.Prompt, _ option: UserQuestion.Option) -> String {
-    let chosen = form.isChosen(option.label, in: prompt.id)
-    if prompt.selection.mode == "multiple" { return chosen ? "checkmark.square.fill" : "square" }
-    return chosen ? "largecircle.fill.circle" : "circle"
+/// An option's label, bold as in Electron, with its description under it.
+struct OptionLabel: View {
+  let option: UserQuestion.Option
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 1) {
+      Text(option.label).bold()
+      if let description = option.description {
+        Text(description).font(.caption).foregroundStyle(.secondary)
+      }
+    }
   }
 }

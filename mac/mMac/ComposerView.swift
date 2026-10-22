@@ -13,14 +13,13 @@ struct ComposerView: View {
   @State private var pendingModel: String?
   @State private var pendingEffort: String?
 
-  static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       if workspace.isRunning { runningBar }
       ComposerTextView(
         text: $workspace.draft, height: $inputHeight, placeholder: placeholder,
-        isEnabled: workspace.openingSessionId == nil, onSubmit: submit
+        isEnabled: workspace.openingSessionId == nil, focusRequest: workspace.composerFocusRequest,
+        onSubmit: submit
       )
       .frame(height: inputHeight)
       .padding(10)
@@ -38,9 +37,26 @@ struct ComposerView: View {
         .disabled(workspace.submitting || workspace.models.isEmpty)
         .accessibilityIdentifier("model-picker")
         Picker("Reasoning effort", selection: effortSelection) {
-          ForEach(Self.efforts, id: \.self) { effort in Text(Self.label(effort)).tag(effort) }
+          ForEach(ReasoningEffort.allCases) { effort in Text(effort.label).tag(effort.rawValue) }
+          // A newer CLI's effort that this list does not know still shows.
+          if ReasoningEffort(rawValue: workspace.effort) == nil {
+            Text(workspace.effort).tag(workspace.effort)
+          }
         }
         .fixedSize()
+        if workspace.canStartInWorktree {
+          let label =
+            workspace.startInWorktree
+            ? "Starts in a new Git worktree (click to use the project folder)"
+            : "Start in a new Git worktree"
+          Toggle(isOn: $workspace.startInWorktree) {
+            Image(systemName: "arrow.triangle.branch")
+          }
+          .toggleStyle(.button)
+          .disabled(workspace.submitting)
+          .accessibilityLabel(label)
+          .help(label)
+        }
         Spacer()
         Text("↵ Send · ⇧ ↵ New line").font(.caption).foregroundStyle(.tertiary)
         Button(action: submit) {
@@ -87,17 +103,16 @@ struct ComposerView: View {
     .font(.callout)
   }
 
-  static func label(_ effort: String) -> String {
-    effort == "xhigh" ? "Extra high" : effort.prefix(1).uppercased() + effort.dropFirst()
-  }
-
   private var placeholder: String {
     workspace.project.isEmpty ? "Ask Muse anything…" : "Ask Muse about your project…"
   }
 
   private var footnote: String? {
-    workspace.view == nil && workspace.project.isEmpty
-      ? "Select a project when you send your first message." : nil
+    if workspace.view == nil, workspace.project.isEmpty { return "Select a project when you send your first message." }
+    if workspace.startInWorktree, workspace.canStartInWorktree {
+      return "Muse will create a separate Git worktree for this conversation."
+    }
+    return nil
   }
 
   private var canSend: Bool {

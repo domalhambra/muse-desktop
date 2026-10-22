@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -67,6 +68,7 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     answer: vi.fn(async () => {}),
     cancelQuestion: vi.fn(async () => {}),
     readOutput: vi.fn(async () => 'stored output'),
+    listWorktrees: vi.fn(async () => []),
     ...overrides,
   } satisfies Muse
 }
@@ -107,6 +109,30 @@ async function folder(name: string) {
   const path = join(dir, name)
   await mkdir(path)
   return path
+}
+
+/** A backend whose Ask starts the quit path before it answers Reconnect. */
+function createBackendWithAskThatQuits(muse: Muse) {
+  let quitting = false
+  const backend = createBackend({
+    muse,
+    emit: () => {},
+    version: '0.2.0',
+    ask: async () => {
+      quitting = true
+      return 0
+    },
+    quitting: () => quitting,
+    quit: vi.fn(),
+  })
+  const call = (name: string, ...args: unknown[]) => backend.methods.get(name)!(...args)
+  return {
+    call,
+    start: async () => {
+      await call('hello', HEADLESS_PROTOCOL)
+      await call('start', { dataFolder: join(dir, 'data-quit') })
+    },
+  }
 }
 
 describe('headless backend', () => {
@@ -188,7 +214,8 @@ describe('headless backend', () => {
     const { call, start, asks } = harness(muse, [0])
     await start()
     const message = { sessionId: 's1', text: 'hi', attachments: [], effort: 'high', mode: 'steer' }
-    await expect(call('send', { ...message, attachments: ['a1'] })).rejects.toThrow()
+    await expect(call('send', { ...message, attachments: ['a1'] })).rejects.toThrow(/attachments/)
+    expect(muse.send).not.toHaveBeenCalled()
     await expect(call('send', { ...message, text: '   ' })).rejects.toThrow(
       'Write a message first.',
     )
@@ -327,5 +354,226 @@ describe('headless backend, M1 methods', () => {
     await start()
     expect(await call('output', 's1', 'i1')).toBe('stored output')
     expect(asks).toHaveLength(0)
+  })
+
+  it('asks before reconnecting during a turn, and checks for a quit after the Ask', async () => {
+    const muse = fakeMuse({ hasActiveTurns: vi.fn(() => true) })
+    const { call, start, asks } = harness(muse, [1, 0])
+    await start()
+    await call('preferences', { cliPath: '/opt/muse' })
+    vi.mocked(muse.connect).mockClear()
+    expect(await call('connect')).toEqual(ready)
+    expect(muse.connect).not.toHaveBeenCalled()
+    expect(asks[0].title).toBe('Reconnect while Muse is working?')
+    expect(asks[0].buttons).toEqual(['Reconnect', 'Cancel'])
+    await call('connect')
+    expect(asks).toHaveLength(2)
+    expect(muse.connect).toHaveBeenCalledTimes(1)
+    expect(muse.connect).toHaveBeenCalledWith('/opt/muse')
+
+    // A quit that starts while the Ask shows: the answer comes back, but connect must stop.
+    const quitting = createBackendWithAskThatQuits(muse)
+    await quitting.start()
+    vi.mocked(muse.connect).mockClear()
+    await expect(quitting.call('connect')).rejects.toThrow('The backend is quitting.')
+    expect(muse.connect).not.toHaveBeenCalled()
+  })
+
+  it('records a worktree session’s parent project, not the worktree', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    const muse = fakeMuse({
+      open: vi.fn(async (sessionId: string) =>
+        view(session({ sessionId, workspaceRoot: worktree })),
+      ),
+    })
+    const { call, start, lastPreferences } = harness(muse)
+    await start()
+    await call('open', 's1')
+    expect(lastPreferences()?.preferences.recentProjects).toEqual([project])
+  })
+
+  it('serializes preference writes, so overlapping saves of different fields both land', async () => {
+    const { call, start, lastPreferences } = harness()
+    await start()
+    await Promise.all([
+      call('preferences', { reasoningEffort: 'low' }),
+      call('preferences', { cliPath: '/opt/muse' }),
+    ])
+    const saved = JSON.parse(await readFile(join(dir, 'data', 'preferences.json'), 'utf8'))
+    expect(saved.reasoningEffort).toBe('low')
+    expect(saved.cliPath).toBe('/opt/muse')
+    expect(lastPreferences()?.preferences).toMatchObject({
+      reasoningEffort: 'low',
+      cliPath: '/opt/muse',
+    })
+  })
+})
+
+/** A Git repository with one commit of `a.txt`. Git's global config is kept out. */
+async function repository(name = 'repo') {
+  const path = await folder(name)
+  const git = (...args: string[]) => gitIn(path, ...args)
+  const gitIn = (cwd: string, ...args: string[]) =>
+    execFileSync('git', args, {
+      cwd,
+      stdio: 'pipe',
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null' },
+    }).toString()
+  git('init', '-q', '-b', 'main')
+  git('config', 'user.email', 'test@example.com')
+  git('config', 'user.name', 'Test')
+  git('config', 'commit.gpgsign', 'false')
+  await writeFile(join(path, 'a.txt'), 'one\ntwo\nthree\n' + 'x\n'.repeat(20) + 'ten\neleven\n')
+  git('add', '.')
+  git('commit', '-q', '-m', 'first')
+  return { path, git, gitIn }
+}
+
+describe('headless backend, M2 inspector methods', () => {
+  // The backend's own git calls inherit this environment, so keep global config out of them.
+  beforeEach(() => {
+    vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('reads Git status and a diff for a known project only', async () => {
+    const { path } = await repository()
+    await writeFile(join(path, 'b.txt'), 'new\n')
+    await writeFile(join(path, 'a.txt'), 'one\nTWO\nthree\n' + 'x\n'.repeat(20) + 'ten\neleven\n')
+    const { call, start } = harness()
+    await start()
+    await expect(call('git-status', path)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    await call('add-project', path)
+    const status = (await call('git-status', path)) as {
+      branch: string
+      isRepository: boolean
+      changes: { path: string; status: string; staged: boolean }[]
+    }
+    expect(status.branch).toBe('main')
+    expect(status.isRepository).toBe(true)
+    expect(status.changes).toEqual([
+      { path: 'a.txt', status: 'M', staged: false },
+      { path: 'b.txt', status: '??', staged: false },
+    ])
+    expect(await call('git-diff', path, 'a.txt')).toContain('Working changes\ndiff --git')
+    expect(await call('git-diff', path, 'b.txt')).toBe('--- /dev/null\n+++ b/b.txt\n+new\n+')
+    expect(await call('git-raw-diff', path, 'a.txt')).toContain('+TWO')
+  })
+
+  it('reverts a hunk, reverts a file and stages a file', async () => {
+    const { path, git } = await repository()
+    await writeFile(
+      join(path, 'a.txt'),
+      'one\nTWO\nthree\n' + 'x\n'.repeat(20) + 'ten\nten and a half\neleven\n',
+    )
+    await writeFile(join(path, 'b.txt'), 'new\n')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    const before = await readFile(join(path, 'a.txt'), 'utf8')
+    await expect(call('git-revert-hunk', path, 'a.txt', -1)).rejects.toThrow()
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).toBe(before)
+    await call('git-revert-hunk', path, 'a.txt', 0)
+    const afterHunk = await readFile(join(path, 'a.txt'), 'utf8')
+    expect(afterHunk).toContain('two\n')
+    expect(afterHunk).toContain('ten and a half\n')
+    await call('git-stage-file', path, 'a.txt')
+    expect(git('diff', '--cached', '--name-only')).toBe('a.txt\n')
+    await call('git-revert-file', path, 'b.txt')
+    await call('git-revert-file', path, 'a.txt')
+    expect(git('status', '--porcelain')).toBe('')
+  })
+
+  it('lists files and reads one, inside the project only', async () => {
+    const { path } = await repository()
+    await mkdir(join(path, 'src'))
+    await writeFile(join(path, 'src', 'app.ts'), 'export {}\n')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    expect(await call('files', path, '')).toEqual([
+      { name: 'src', path: 'src', directory: true },
+      { name: 'a.txt', path: 'a.txt', directory: false },
+    ])
+    expect(await call('files', path, 'src')).toEqual([
+      { name: 'app.ts', path: 'src/app.ts', directory: false },
+    ])
+    expect(await call('read-file', path, 'src/app.ts')).toBe('export {}\n')
+    await writeFile(join(dir, 'outside.txt'), 'secret\n')
+    await expect(call('read-file', path, '../outside.txt')).rejects.toThrow(
+      'This path is outside the selected project.',
+    )
+    await expect(call('files', path, '..')).rejects.toThrow(
+      'This path is outside the selected project.',
+    )
+  })
+
+  it('lists worktrees through Muse', async () => {
+    const { path } = await repository()
+    const entry = { path, branch: 'main', isMain: true, sessionIds: [] }
+    const muse = fakeMuse({ listWorktrees: vi.fn(async () => [entry]) })
+    const { call, start } = harness(muse)
+    await start()
+    await call('add-project', path)
+    expect(await call('worktrees', path)).toEqual([entry])
+    expect(muse.listWorktrees).toHaveBeenCalledWith(path)
+  })
+
+  it('merges and removes only Muse worktrees, and keeps a busy one', async () => {
+    const { path, git, gitIn } = await repository()
+    const worktree = join(path, '.muse', 'worktrees', 'w1')
+    git('worktree', 'add', '-q', '-b', 'muse/w1', worktree)
+    await writeFile(join(worktree, 'c.txt'), 'from the worktree\n')
+    gitIn(worktree, 'add', '.')
+    gitIn(worktree, 'commit', '-q', '-m', 'worktree work')
+    let status = 'running'
+    const muse = fakeMuse({
+      listWorktrees: vi.fn(async () => [
+        { path, branch: 'main', isMain: true, sessionIds: [] },
+        { path: worktree, branch: 'muse/w1', isMain: false, sessionIds: ['s9'] },
+      ]),
+      getSession: vi.fn(() => session({ sessionId: 's9', status })),
+    })
+    const { call, start } = harness(muse)
+    await start()
+    await call('add-project', path)
+    await expect(call('worktree-merge', path, path)).rejects.toThrow(
+      'Only worktrees Muse created in this project can be changed here.',
+    )
+    // Uncommitted work in the worktree blocks the merge and changes nothing.
+    await writeFile(join(worktree, 'd.txt'), 'not committed\n')
+    expect(await call('worktree-merge', path, worktree)).toEqual({
+      ok: false,
+      output: 'The worktree has uncommitted changes. Commit them on muse/w1 first, or ask Muse to.',
+    })
+    expect(git('log', '--oneline')).not.toContain('worktree work')
+    await rm(join(worktree, 'd.txt'))
+    expect(await call('worktree-merge', path, worktree)).toEqual({
+      ok: true,
+      output: expect.any(String),
+    })
+    expect(await readFile(join(path, 'c.txt'), 'utf8')).toBe('from the worktree\n')
+    await expect(call('worktree-remove', path, worktree)).rejects.toThrow(
+      'A conversation is still working in this worktree.',
+    )
+    status = 'idle'
+    await call('worktree-remove', path, worktree)
+    expect(git('worktree', 'list')).not.toContain('w1')
+    expect(git('branch', '--list', 'muse/w1')).toContain('muse/w1')
+  })
+
+  it('creates with a null model and the worktree option', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse()
+    const { call, start } = harness(muse, [0])
+    await start()
+    await call('add-project', project)
+    await call('create', project, null, { worktree: true })
+    expect(muse.create).toHaveBeenCalledWith(project, undefined, { worktree: true })
   })
 })

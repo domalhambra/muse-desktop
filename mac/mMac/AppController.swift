@@ -20,6 +20,8 @@ final class AppController {
   private(set) var workspace: Workspace?
   /// The last Workspace's unsent drafts, for the next backend's Workspace.
   private var drafts: [String: String] = [:]
+  /// The conversation the last Workspace showed or was opening, for the next backend's Workspace.
+  private var reopen: String?
   let asks = AskQueue()
   private var client: BackendClient?
   private var transport: ProcessTransport?
@@ -36,8 +38,9 @@ final class AppController {
   /// Starts a backend. Does nothing while one is starting or running.
   func start() async {
     guard client == nil, !launching else { return }
+    // Cleared before `begin()` and on failure, never by a `defer`: a Restart while `begin()`
+    // runs starts a newer launch, whose flag this start's late return must not clear.
     launching = true
-    defer { launching = false }
     phase = .starting
     dropWorkspace()
     stoppedWhileQuitting = nil
@@ -45,9 +48,8 @@ final class AppController {
     do {
       let repository = try Self.repository()
       let arguments = Self.backendArguments()
-      let transport = try await Task.detached {
-        try Launcher.launch(repository: repository, arguments: arguments)
-      }.value
+      // A nonisolated async function, so it runs off the main actor.
+      let transport = try await Launcher.launch(repository: repository, arguments: arguments)
       launched = transport
       self.transport = transport
       // Asks are tied to this backend's generation: one that arrives after the queue was
@@ -66,17 +68,23 @@ final class AppController {
       }
       _ = try await client.hello()
       let started = try await client.start(dataFolder: Self.dataFolder())
-      let workspace = Workspace(client: client, started: started, drafts: drafts)
+      let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
+      reopen = nil
       self.workspace = workspace
       phase = .running
+      // A backend that stops while history loads shows the stopped screen. Its Restart must not
+      // find this start still under way.
+      launching = false
       await workspace.begin()
     } catch {
-      // A backend that failed to start is dropped, and its input closed so it quits.
+      // A backend that failed to start is dropped, and its input closed so it quits. Closing it
+      // first lets stderr end at once, though its tail may then include the shutdown output.
+      launching = false
       client = nil
       transport = nil
       asks.cancelAll()
-      let details = await Self.errorOutput(of: launched)
       launched?.close()
+      let details = await Self.errorOutput(of: launched)
       phase = .setupFailed(message: error.localizedDescription, details: details)
     }
   }
@@ -132,19 +140,21 @@ final class AppController {
       details: details)
   }
 
-  /// Drops the Workspace and keeps its drafts. A send the stop cut off has put its text back by
-  /// now: `BackendError.stopped` reaches it before the event stream ends this backend.
+  /// Drops the Workspace and keeps its drafts and the conversation it showed, for the next
+  /// backend's Workspace. A send the stop cut off has put its text back by now:
+  /// `BackendError.stopped` reaches it before the event stream ends this backend.
   private func dropWorkspace() {
-    if let workspace { drafts = workspace.drafts }
+    if let workspace {
+      drafts = workspace.drafts
+      // A reopen the Workspace had not done yet, if it stopped while history loaded, carries on.
+      reopen = workspace.openingSessionId ?? workspace.view?.session.sessionId ?? workspace.pendingReopen
+    }
     workspace = nil
   }
 
-  /// The backend's last stderr output. stderr is read on its own queue, so the last lines of a
-  /// crash can land just after stdout ends; a short pause lets them in.
+  /// The backend's last stderr output, once stderr has ended.
   private static func errorOutput(of transport: ProcessTransport?) async -> String {
-    guard let transport else { return "" }
-    try? await Task.sleep(for: .milliseconds(250))
-    return transport.recentErrorOutput
+    await transport?.errorOutput() ?? ""
   }
 
   /// Shows an Ask from the backend of `generation`, opening the window first if it is closed,
@@ -169,15 +179,17 @@ final class AppController {
 
   /// "Open project…": adds the chosen folder and selects it.
   func openProject() async {
-    guard let workspace, let folder = Self.chooseProjectFolder() else { return }
+    guard let workspace, let folder = await Self.chooseProjectFolder() else { return }
     await workspace.addProject(folder)
   }
 
   /// Sends the draft. With no project yet, asks for one first, as Electron does.
-  /// `send(addingProject:)` moves the draft to the new project's key, so no copy is left behind.
+  /// `send(addingProject:)` moves the draft to the chosen project's composer when that is empty.
+  /// When it already holds a draft, the text is sent from where it was written and the older
+  /// draft stays.
   func send() async {
     guard let workspace else { return }
-    guard await workspace.send() == .needsProject, let folder = Self.chooseProjectFolder() else { return }
+    guard await workspace.send() == .needsProject, let folder = await Self.chooseProjectFolder() else { return }
     _ = await workspace.send(addingProject: folder)
   }
 
@@ -189,7 +201,7 @@ final class AppController {
     panel.canChooseFiles = true
     panel.canChooseDirectories = false
     panel.showsHiddenFiles = true
-    guard panel.runModal() == .OK, let url = panel.url else { return }
+    guard let url = await SheetAlert.run(panel) else { return }
     await workspace.setCLIPath(url.path)
   }
 
@@ -200,7 +212,7 @@ final class AppController {
     panel.prompt = "Use this checkout"
     panel.canChooseFiles = false
     panel.canChooseDirectories = true
-    guard panel.runModal() == .OK, let url = panel.url else { return }
+    guard let url = await SheetAlert.run(panel) else { return }
     // A folder that is not a checkout is refused, and the saved choice stays as it was.
     do {
       _ = try Self.checkout(at: url.path)
@@ -262,7 +274,7 @@ final class AppController {
 
   /// The folder for "Open project". The open panel runs in another process that UI tests cannot
   /// drive, so Debug builds take `MMAC_TEST_PROJECT` instead when it is set.
-  static func chooseProjectFolder() -> URL? {
+  static func chooseProjectFolder() async -> URL? {
     #if DEBUG
       if let folder = ProcessInfo.processInfo.environment["MMAC_TEST_PROJECT"], !folder.isEmpty {
         return URL(fileURLWithPath: folder)
@@ -274,6 +286,6 @@ final class AppController {
     panel.canChooseFiles = false
     panel.canChooseDirectories = true
     panel.canCreateDirectories = true
-    return panel.runModal() == .OK ? panel.url : nil
+    return await SheetAlert.run(panel)
   }
 }

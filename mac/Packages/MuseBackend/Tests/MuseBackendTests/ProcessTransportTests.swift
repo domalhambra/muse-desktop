@@ -49,6 +49,9 @@ private func shell(_ script: String) throws -> ProcessTransport {
 }
 
 @Test(.timeLimit(.minutes(1))) func sendAfterTheChildExitsThrows() async throws {
+  // With SIGPIPE at its default, a write to the closed pipe would end this test process. The
+  // transport must mark its own pipe instead of ignoring SIGPIPE for the whole process.
+  signal(SIGPIPE, SIG_DFL)
   let transport = try shell("exit 0")
   for await _ in transport.lines {}
   #expect(throws: (any Error).self) { try transport.send(Data("late".utf8)) }
@@ -84,4 +87,28 @@ private func shell(_ script: String) throws -> ProcessTransport {
   #expect(!tail.text.contains("\u{FFFD}"))
   #expect(tail.text.hasPrefix("é"))
   #expect(tail.text.hasSuffix("z"))
+}
+
+@Test(.timeLimit(.minutes(1))) func errorOutputWaitsForStderrToEnd() async throws {
+  // The child writes its last line to stderr after stdout has closed, as a crash trace can.
+  let transport = try shell(#"exec 1>&-; sleep 0.3; echo "last words" >&2"#)
+  for await _ in transport.lines {}
+  let start = ContinuousClock.now
+  #expect(await transport.errorOutput(waitingUpTo: .seconds(5)) == "last words")
+  // Well below the 5-second limit: the end of stderr, not the limit, ended the wait.
+  #expect(ContinuousClock.now - start < .seconds(2))
+}
+
+@Test(.timeLimit(.minutes(1))) func errorOutputStopsWaitingWhenAGrandchildHoldsStderr() async throws {
+  // The background `sleep 30` redirects only stdout, so it keeps stderr open after the child
+  // exits. Its pid comes first on stdout, so the test can kill it.
+  let transport = try shell(#"echo "started" >&2; sleep 30 >/dev/null & echo $!; exit 0"#)
+  var lines = transport.lines.makeAsyncIterator()
+  let line = try #require(await lines.next())
+  let grandchild = try #require(pid_t(String(decoding: line, as: UTF8.self)))
+  defer { kill(grandchild, SIGKILL) }
+  #expect(await lines.next() == nil)
+  let start = ContinuousClock.now
+  #expect(await transport.errorOutput(waitingUpTo: .milliseconds(300)) == "started")
+  #expect(ContinuousClock.now - start < .seconds(2))
 }

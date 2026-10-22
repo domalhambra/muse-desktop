@@ -88,28 +88,74 @@ public enum ToolPresentation {
     first(stored, item.visibleOutput, item.result?.text, item.failureReason, item.finalSummary)
   }
 
-  /// Pretty-printed JSON, or `args` unchanged when it is not JSON. Electron's
-  /// `JSON.stringify(value, null, 2)` keeps key order and writes `"b": 1`; this sorts keys and
-  /// writes `"b" : 1`. Numbers go through `JSONEncoder`, which prints 0.7 as 0.7, as JavaScript does.
+  /// Valid JSON laid out as `JSON.stringify(value, null, 2)` lays it out: two-space indents,
+  /// `"key": value`, `{}` and `[]` on one line, keys in their own order. Every token stays as
+  /// typed, so numbers and string escapes are not reformatted. Anything else comes back unchanged.
+  /// It walks Unicode scalars, not Characters: a string that starts with a combining mark would
+  /// otherwise join its opening quote into one Character, and the quote would be missed.
   public static func formattedArgs(_ args: String) -> String {
-    guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(args.utf8)),
-      let pretty = try? argsEncoder.encode(value)
-    else { return args }
-    let text = String(decoding: pretty, as: UTF8.self)
-    // Foundation writes an empty object or array over three lines; JSON.stringify writes {} and [].
-    // The encoder escapes every newline inside a string, so a bare newline is always layout.
-    return emptyContainer.stringByReplacingMatches(
-      in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1$2")
+    guard (try? JSONDecoder().decode(JSONValue.self, from: Data(args.utf8))) != nil else { return args }
+    var out = String.UnicodeScalarView()
+    var indent = 0
+    var inString = false
+    var escaped = false
+    let scalars = Array(args.unicodeScalars)
+    var index = 0
+    func newline() {
+      out.append("\n")
+      out.append(contentsOf: String(repeating: "  ", count: indent).unicodeScalars)
+    }
+    while index < scalars.count {
+      let scalar = scalars[index]
+      if inString {
+        out.append(scalar)
+        if escaped {
+          escaped = false
+        } else if scalar == "\\" {
+          escaped = true
+        } else if scalar == "\"" {
+          inString = false
+        }
+        index += 1
+        continue
+      }
+      switch scalar {
+      case "\"":
+        inString = true
+        out.append(scalar)
+      case "{", "[":
+        var next = index + 1
+        while next < scalars.count, layoutSpace.contains(scalars[next]) { next += 1 }
+        if next < scalars.count, scalars[next] == (scalar == "{" ? "}" : "]") {
+          out.append(scalar)
+          out.append(scalars[next])
+          index = next
+        } else {
+          out.append(scalar)
+          indent += 1
+          newline()
+        }
+      case "}", "]":
+        indent -= 1
+        newline()
+        out.append(scalar)
+      case ",":
+        out.append(scalar)
+        newline()
+      case ":":
+        out.append(contentsOf: ": ".unicodeScalars)
+      case _ where layoutSpace.contains(scalar):
+        break
+      default:
+        out.append(scalar)
+      }
+      index += 1
+    }
+    return String(out)
   }
 
-  // Built once. NSRegularExpression is immutable and documented as thread-safe.
-  static let emptyContainer = try! NSRegularExpression(pattern: #"([{\[])\n\s*([}\]])"#)
-
-  static let argsEncoder: JSONEncoder = {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-    return encoder
-  }()
+  /// JSON whitespace between tokens.
+  static let layoutSpace: Set<Unicode.Scalar> = [" ", "\t", "\n", "\r"]
 
   /// `+3 −1`, with the minus sign U+2212, whenever the tool has a patch summary, even `+0 −0`,
   /// as in Electron. nil when it has none.

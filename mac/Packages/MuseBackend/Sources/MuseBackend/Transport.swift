@@ -21,6 +21,7 @@ public final class ProcessTransport: Transport, Sendable {
   private let stdout: PipeReader
   private let errorReader: PipeReader
   private let errorTail = ErrorTail()
+  private let errorEnded = OneShot()
 
   /// The Node arguments that start mMac's backend.
   public static let serverArguments = ["--import", "tsx", "src/headless/server.ts"]
@@ -34,8 +35,6 @@ public final class ProcessTransport: Transport, Sendable {
 
   /// Starts any executable. Tests use it to run `/bin/sh` in place of Node.
   public init(executable: URL, arguments: [String], directory: URL, environment: [String: String]) throws {
-    // A write to a backend that has exited must throw, not end mMac with SIGPIPE.
-    signal(SIGPIPE, SIG_IGN)
     let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
     lines = stream
     let output = Pipe()
@@ -54,6 +53,7 @@ public final class ProcessTransport: Transport, Sendable {
     process.standardOutput = output
     let errors = Pipe()
     let tail = errorTail
+    let ended = errorEnded
     errorReader = PipeReader(
       errors.fileHandleForReading,
       received: { data in
@@ -61,8 +61,13 @@ public final class ProcessTransport: Transport, Sendable {
         try? FileHandle.standardError.write(contentsOf: data)
         tail.append(data)
       },
-      ended: {})
+      ended: { ended.fire() })
     process.standardError = errors
+    // A write to a backend that has exited must throw, not end mMac with SIGPIPE. Only these
+    // two descriptors are marked: the backend's stdin, and stderr, where its output is copied.
+    // They are marked before the child starts, so its first stderr line is copied safely too.
+    _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+    _ = fcntl(FileHandle.standardError.fileDescriptor, F_SETNOSIGPIPE, 1)
     do { try process.run() } catch {
       stdout.end()
       errorReader.end()
@@ -72,6 +77,19 @@ public final class ProcessTransport: Transport, Sendable {
 
   /// Up to the last 4,000 bytes the child wrote to stderr, trimmed.
   public var recentErrorOutput: String { errorTail.text }
+
+  /// The child's last stderr output, once stderr has ended. A grandchild can hold stderr open
+  /// after the child exits, so this waits at most `limit`.
+  public func errorOutput(waitingUpTo limit: Duration = .seconds(1)) async -> String {
+    let ended = errorEnded
+    await withTaskGroup(of: Void.self) { group in
+      group.addTask { await ended.wait() }
+      group.addTask { try? await Task.sleep(for: limit) }
+      await group.next()
+      group.cancelAll()
+    }
+    return errorTail.text
+  }
 
   public func send(_ line: Data) throws {
     try input.fileHandleForWriting.write(contentsOf: line + Data([0x0A]))
@@ -165,6 +183,39 @@ final class ErrorTail: @unchecked Sendable {
       let start = data.firstIndex { $0 & 0xC0 != 0x80 } ?? data.endIndex
       return String(decoding: data[start...], as: UTF8.self)
         .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+  }
+}
+
+/// Fires once. Waiters resume when it fires or when their task is cancelled.
+final class OneShot: @unchecked Sendable {
+  private let lock = NSLock()
+  private var fired = false
+  private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+  func fire() {
+    let waiting = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+      guard !fired else { return [] }
+      fired = true
+      defer { waiters = [:] }
+      return Array(waiters.values)
+    }
+    for waiter in waiting { waiter.resume() }
+  }
+
+  func wait() async {
+    let id = UUID()
+    await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        let resumeNow = lock.withLock { () -> Bool in
+          if fired || Task.isCancelled { return true }
+          waiters[id] = continuation
+          return false
+        }
+        if resumeNow { continuation.resume() }
+      }
+    } onCancel: {
+      lock.withLock { waiters.removeValue(forKey: id) }?.resume()
     }
   }
 }

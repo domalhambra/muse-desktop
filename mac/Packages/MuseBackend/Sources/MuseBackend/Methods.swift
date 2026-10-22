@@ -38,9 +38,16 @@ extension BackendClient {
     try await call("sessions", cursor.map { [.string($0)] } ?? [])
   }
 
-  /// Starts a conversation. The backend may Ask to trust the project first.
-  public func create(project: String, modelId: String? = nil) async throws -> SessionView {
-    try await call("create", [.string(project)] + (modelId.map { [.string($0)] } ?? []))
+  /// Starts a conversation. The backend may Ask to trust the project first. With `worktree`, Muse
+  /// creates a Git worktree for it under `<project>/.muse/worktrees/`.
+  public func create(project: String, modelId: String? = nil, worktree: Bool = false) async throws -> SessionView {
+    var args: [JSONValue] = [.string(project)]
+    if worktree {
+      args += [modelId.map { .string($0) } ?? .null, ["worktree": true]]
+    } else if let modelId {
+      args.append(.string(modelId))
+    }
+    return try await call("create", args)
   }
 
   /// Reads a conversation and subscribes to its updates, without claiming it.
@@ -91,6 +98,58 @@ extension BackendClient {
   /// A tool item's full stored output, up to 1 MB.
   public func readOutput(sessionId: String, itemId: String) async throws -> String {
     try await call("output", [.string(sessionId), .string(itemId)])
+  }
+
+  // The inspector. Each checks that the project was opened in mMac.
+
+  public func gitStatus(project: String) async throws -> GitStatus {
+    try await call("git-status", [.string(project)])
+  }
+
+  /// The staged and working diffs, labelled, or a message for an untracked or binary file.
+  public func gitDiff(project: String, path: String) async throws -> String {
+    try await call("git-diff", [.string(project), .string(path)])
+  }
+
+  /// The plain working-tree diff, whose hunks `revertHunk` counts.
+  public func gitRawDiff(project: String, path: String) async throws -> String {
+    try await call("git-raw-diff", [.string(project), .string(path)])
+  }
+
+  public func revertFile(project: String, path: String) async throws {
+    _ = try await request("git-revert-file", [.string(project), .string(path)])
+  }
+
+  /// Reverts one working-tree hunk, counted from 0 in the raw diff.
+  public func revertHunk(project: String, path: String, index: Int) async throws {
+    _ = try await request("git-revert-hunk", [.string(project), .string(path), .number(Double(index))])
+  }
+
+  public func stageFile(project: String, path: String) async throws {
+    _ = try await request("git-stage-file", [.string(project), .string(path)])
+  }
+
+  /// The entries of `directory` (empty for the root), folders first.
+  public func files(project: String, directory: String = "") async throws -> [ProjectFile] {
+    try await call("files", [.string(project), .string(directory)])
+  }
+
+  /// A text file of at most 512 KB.
+  public func readFile(project: String, path: String) async throws -> String {
+    try await call("read-file", [.string(project), .string(path)])
+  }
+
+  public func worktrees(project: String) async throws -> [WorktreeEntry] {
+    try await call("worktrees", [.string(project)])
+  }
+
+  public func mergeWorktree(project: String, path: String) async throws -> MergeResult {
+    try await call("worktree-merge", [.string(project), .string(path)])
+  }
+
+  /// Removes a Muse worktree. Its branch is kept.
+  public func removeWorktree(project: String, path: String) async throws {
+    _ = try await request("worktree-remove", [.string(project), .string(path)])
   }
 
   /// Asks the backend to quit, then waits for it to exit.

@@ -10,8 +10,13 @@ struct SidebarView: View {
   /// Changed after the open panel closes, so the picker draws the current project again
   /// instead of the "Open another project…" entry the person clicked.
   @State private var pickerGeneration = 0
+  /// The row the arrow keys moved to. Nil when the highlight follows the open conversation.
+  @State private var highlighted: String?
+  /// Read in `body`, so a change redraws the list: after a deselect, or at midnight.
+  @State private var redraw = 0
 
   var body: some View {
+    let _ = redraw
     List(selection: selection) {
       Section {
         Button {
@@ -26,7 +31,7 @@ struct SidebarView: View {
         Picker("Current project", selection: projectSelection) {
           Text("All projects").tag("")
           ForEach(projects, id: \.self) { path in
-            Text(ProjectPath.name(of: path)).tag(path)
+            Text(projectLabel(path)).tag(path)
           }
           Divider()
           Text("Open another project…").tag(Self.openAnother)
@@ -34,10 +39,35 @@ struct SidebarView: View {
         // The label is for VoiceOver only, as in Electron, so project names fit at 240 points.
         .labelsHidden()
         .id(pickerGeneration)
+        // The folder's own status: a worktree shows its branch once read, never its parent's.
+        if let git = workspace.projectBadge, git.isRepository {
+          HStack(spacing: 6) {
+            Label(git.branch, systemImage: "arrow.triangle.branch")
+              .lineLimit(1)
+              .accessibilityLabel("Branch \(git.branch)")
+            GitBadgeView(status: git)
+          }
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .accessibilityElement(children: .combine)
+          .accessibilityIdentifier("project-git-badge")
+        }
       }
       history
     }
     .listStyle(.sidebar)
+    .onKeyPress(.return) {
+      guard let sessionId = highlighted else { return .ignored }
+      highlighted = nil
+      Task { await workspace.open(sessionId) }
+      return .handled
+    }
+    .onChange(of: workspace.view?.session.sessionId) { highlighted = nil }
+    .onChange(of: workspace.project) { highlighted = nil }
+    // `sections` groups by `.now` each time the list draws, so this moves yesterday's rows.
+    .onReceive(
+      NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)
+    ) { _ in redraw += 1 }
     .safeAreaInset(edge: .bottom) { connectionFooter }
   }
 
@@ -46,6 +76,13 @@ struct SidebarView: View {
     let recent = workspace.preferences.recentProjects
     return workspace.project.isEmpty || recent.contains(workspace.project)
       ? recent : recent + [workspace.project]
+  }
+
+  /// "muse-desktop — main · 3 changed", as Electron's project cards show branch and changes.
+  private func projectLabel(_ path: String) -> String {
+    let name = ProjectPath.name(of: path)
+    guard let status = workspace.projectGit[path], let summary = GitBadge.summary(status) else { return name }
+    return "\(name) — \(summary)"
   }
 
   private var projectSelection: Binding<String> {
@@ -63,13 +100,32 @@ struct SidebarView: View {
       })
   }
 
-  /// The conversation being opened, else the open one. A click highlights its row at once.
+  /// The row the arrow keys moved to, else the conversation being opened, else the open one.
+  /// As Electron, a row opens on a click or Return, not as the arrow keys pass it.
   private var selection: Binding<String?> {
     Binding(
-      get: { workspace.openingSessionId ?? workspace.view?.session.sessionId },
+      get: { highlighted ?? workspace.openingSessionId ?? workspace.view?.session.sessionId },
       set: { sessionId in
-        if let sessionId { Task { await workspace.open(sessionId) } }
+        guard let sessionId else {
+          // A Command-click on the open row: draw it highlighted again.
+          highlighted = nil
+          redraw += 1
+          return
+        }
+        if Self.isKeyEvent(NSApp.currentEvent) {
+          highlighted = sessionId
+          return
+        }
+        highlighted = nil
+        Task { await workspace.open(sessionId) }
       })
+  }
+
+  /// A key press that is still being handled. `currentEvent` keeps the last event after it is
+  /// handled, so an older key press must not turn a later change into a highlight.
+  private static func isKeyEvent(_ event: NSEvent?) -> Bool {
+    guard let event, event.type == .keyDown else { return false }
+    return ProcessInfo.processInfo.systemUptime - event.timestamp < 1.0
   }
 
   @ViewBuilder private var history: some View {
@@ -89,6 +145,16 @@ struct SidebarView: View {
         ForEach(section.sessions) { session in
           SessionRow(session: session, showProject: workspace.project.isEmpty)
             .tag(session.sessionId)
+            .contentShape(.rect)
+            // A click on the row the arrow keys moved to: the selection does not change, so the
+            // binding is not set. An ordinary click clears `highlighted` on mouse-down first, so
+            // it does not open twice.
+            .simultaneousGesture(
+              TapGesture().onEnded {
+                guard highlighted == session.sessionId else { return }
+                highlighted = nil
+                Task { await workspace.open(session.sessionId) }
+              })
         }
       }
     }

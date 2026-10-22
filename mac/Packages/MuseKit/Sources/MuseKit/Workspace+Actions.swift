@@ -5,17 +5,20 @@ import MuseBackend
 // src/renderer/src/App.tsx (submit, changeModel, rename) and Transcript.tsx (the cards).
 extension Workspace {
   /// Sends the draft. With no conversation open, it creates one in the current project first.
-  public func send() async -> SendOutcome {
-    let text = draft
+  public func send() async -> SendOutcome { await send(text: draft, from: draftKey) }
+
+  /// Sends `text`, written under the draft key `startKey`. A cancelled caller still waits for the
+  /// backend's answer, and `submitting` stays true until it comes.
+  func send(text: String, from startKey: String) async -> SendOutcome {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !submitting else {
       return .notSent
     }
     if view == nil, project.isEmpty { return .needsProject }
     submitting = true
     defer { submitting = false }
-    let startKey = draftKey
     // Taken now, as Electron's submit takes them when called: startNew resets the mode.
     let (mode, effort) = (self.mode, self.effort)
+    let worktree = startInWorktree && canStartInWorktree
     // As Electron's submit: the view changes only while the person stays on this conversation.
     let sequence = openSequence
     var sentId: String?
@@ -26,9 +29,25 @@ extension Workspace {
       if let view {
         current = view
       } else {
-        current = try await client.create(project: project, modelId: modelId.isEmpty ? nil : modelId)
+        // Its own task, like the send below: a cancelled caller still gets the conversation that
+        // was created, so none is left behind and the next send does not create a second one.
+        let client = self.client
+        let (folder, model) = (project, modelId.isEmpty ? nil : modelId)
+        let creating = Task.detached {
+          try await client.create(project: folder, modelId: model, worktree: worktree)
+        }
+        current = try await creating.value
         // Show the new conversation, unless the person opened another one meanwhile.
         if sequence == openSequence, view == nil { view = current }
+        if worktree {
+          startInWorktree = false
+          // As Electron: Muse runs this conversation in its new worktree, so follow it there.
+          if sequence == openSequence, view?.session.sessionId == current.session.sessionId,
+            let root = current.session.workspaceRoot
+          {
+            project = root
+          }
+        }
       }
       let sessionId = current.session.sessionId
       sentId = sessionId
@@ -47,12 +66,16 @@ extension Workspace {
       }
       // Clear the draft only where it still holds what was sent.
       for key in [startKey, sessionId] where drafts[key] == text { drafts[key] = nil }
-      try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode)
+      // Its own detached task: cancelling the caller must not stop the wait, or a rejection that
+      // comes later would leave the conversation shown as running. Detached, so the task
+      // inherits neither the caller's cancellation nor the main actor: the error path below is
+      // one main-actor hop away, which `AppController.dropWorkspace()` relies on.
+      let client = self.client
+      let request = Task.detached {
+        try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode)
+      }
+      try await request.value
       return .sent
-    } catch is CancellationError {
-      // The caller stopped waiting, but the backend still finishes the request, so the message
-      // may have gone. Keep it shown and the draft cleared; the next session event settles it.
-      return .notSent
     } catch {
       let stillShown = sequence == openSequence && sentId != nil && view?.session.sessionId == sentId
       if stillShown {
@@ -69,16 +92,18 @@ extension Workspace {
   }
 
   /// Sends the draft in a new conversation in a folder chosen in the open panel, after `send()`
-  /// returned `.needsProject`. The draft moves to the new project, so it does not stay behind
-  /// under All projects. If the folder cannot be added, the draft stays where it was.
+  /// returned `.needsProject`. The draft moves to the new project, unless that project's new
+  /// composer already holds a draft, which is kept; the text is then sent from where it was
+  /// written. If the folder cannot be added, the draft stays where it was.
   public func send(addingProject folder: URL) async -> SendOutcome {
     let text = draft
     let startKey = draftKey
     guard await addProject(folder) else { return .notSent }
-    if draftKey != startKey {
-      drafts[draftKey] = text
-      drafts[startKey] = nil
+    guard draftKey != startKey, (drafts[draftKey] ?? "").isEmpty else {
+      return await send(text: text, from: startKey)
     }
+    drafts[draftKey] = text
+    drafts[startKey] = nil
     return await send()
   }
 
@@ -190,5 +215,30 @@ extension Workspace {
       let output = try await self.client.readOutput(sessionId: sessionId, itemId: item.itemId)
       if sequence == self.openSequence { self.storedOutput[item.itemId] = output }
     }
+  }
+
+  /// "Ask Muse" on a diff: Electron's `onMentionDiff` sentence.
+  public func askAboutChanges(_ path: String) {
+    appendToDraft("Please review the changes in @\(path)\n")
+  }
+
+  /// "Ask Muse" on a file preview: Electron's `onMention` sentence, with the path as a JSON string.
+  public func askAboutFile(_ path: String) {
+    appendToDraft("Please look at the project file: \(Self.jsonString(path))\n")
+  }
+
+  /// Adds `text` on a new line when the draft has text, as Electron does, and focuses the composer.
+  func appendToDraft(_ text: String) {
+    let current = draft
+    draft = current + (current.isEmpty ? "" : "\n") + text
+    composerFocusRequest += 1
+  }
+
+  /// `JSON.stringify` of a string: quoted and escaped, slashes left alone.
+  static func jsonString(_ value: String) -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .withoutEscapingSlashes
+    guard let data = try? encoder.encode(value) else { return "\"\(value)\"" }
+    return String(decoding: data, as: UTF8.self)
   }
 }

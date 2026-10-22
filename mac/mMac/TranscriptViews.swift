@@ -18,6 +18,12 @@ struct TranscriptView: View {
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 18) {
+          // Centred, as Electron's `conversation-beginning`.
+          HStack(spacing: 8) {
+            Avatar(kind: .muse)
+            Text("Conversation with Muse").font(.callout).foregroundStyle(.secondary)
+          }
+          .frame(maxWidth: .infinity)
           if let notice = view.historyNotice {
             Text(notice).font(.callout).foregroundStyle(.secondary)
           }
@@ -105,7 +111,26 @@ struct EntryView: View {
   }
 }
 
+/// Electron's round avatars: "Y" for you, the Muse mark for Muse.
+struct Avatar: View {
+  enum Kind { case user, muse }
+  let kind: Kind
+
+  var body: some View {
+    ZStack {
+      Circle().fill(kind == .user ? Color.secondary.opacity(0.25) : Color.accentColor.opacity(0.25))
+      switch kind {
+      case .user: Text("Y").font(.caption.bold())
+      case .muse: Image(systemName: "sparkle").font(.caption.bold()).foregroundStyle(.tint)
+      }
+    }
+    .frame(width: 22, height: 22)
+    .accessibilityHidden(true)
+  }
+}
+
 struct MessageHeader: View {
+  let avatar: Avatar.Kind
   let name: String
   /// Only user messages show their time, as in Electron.
   var recordedAt: String?
@@ -114,6 +139,7 @@ struct MessageHeader: View {
 
   var body: some View {
     HStack(spacing: 8) {
+      Avatar(kind: avatar)
       Text(name).font(.subheadline.bold())
       if let recordedAt, let date = RelativeTime.date(recordedAt) {
         Text(date.formatted(date: .omitted, time: .shortened))
@@ -166,7 +192,7 @@ struct UserMessageView: View {
   var body: some View {
     let text = ToolPresentation.messageText(item)
     VStack(alignment: .leading, spacing: 6) {
-      MessageHeader(name: "You", recordedAt: item.recordedAt, copyText: text)
+      MessageHeader(avatar: .user, name: "You", recordedAt: item.recordedAt, copyText: text)
       Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
     }
   }
@@ -174,16 +200,27 @@ struct UserMessageView: View {
 
 struct AgentMessageView: View {
   let item: TranscriptItem
+  /// Bumped after a pause in a streamed reply. `MarkdownCache` parses an in-progress item at most
+  /// once per 100 ms, so without it the last text received could stay unparsed until the next
+  /// update, or forever for an item that never leaves "inProgress".
+  @State private var catchUp = 0
 
   var body: some View {
     let text = item.text ?? ""
+    let _ = catchUp
     VStack(alignment: .leading, spacing: 6) {
-      MessageHeader(name: "Muse", composing: item.status == "inProgress", copyText: text)
+      MessageHeader(avatar: .muse, name: "Muse", composing: item.status == "inProgress", copyText: text)
       if text.isEmpty, item.status == "inProgress" {
         Text("…").foregroundStyle(.secondary)
       } else {
-        MarkdownView(blocks: MarkdownCache.shared.blocks(id: item.itemId, text: text))
+        MarkdownView(
+          blocks: MarkdownCache.shared.blocks(id: item.itemId, text: text, final: item.status != "inProgress"))
       }
+    }
+    .task(id: text) {
+      guard item.status == "inProgress" else { return }
+      try? await Task.sleep(for: .milliseconds(110))
+      if !Task.isCancelled { catchUp += 1 }
     }
   }
 }
@@ -307,10 +344,10 @@ struct ToolView: View {
         if let objective = item.objective, !objective.isEmpty { Text(objective) }
         if let args = item.args, !args.isEmpty {
           Text("INPUT").font(.caption2.bold()).foregroundStyle(.secondary)
-          MonospacedBox(text: ToolPresentation.formattedArgs(args))
+          MonospacedBox(text: ToolPresentation.formattedArgs(args), label: "Tool input")
         }
         if let output = ToolPresentation.output(item, stored: workspace.storedOutput[item.itemId]) {
-          MonospacedBox(text: output)
+          MonospacedBox(text: output, label: "Tool output")
         }
         if item.truncated == true {
           Text("Muse shortened the displayed output.").font(.caption).foregroundStyle(.secondary)
@@ -353,41 +390,31 @@ struct ToolGroupView: View {
   }
 }
 
-/// Tool input or output: monospaced, selectable, scrolling past 320 points. Shows at most the
-/// first 256 KB, so a 1 MB stored output stays quick to draw.
+/// Tool input or output: monospaced, selectable, and whole. Lines wrap, as Electron's
+/// `white-space: pre-wrap`. It grows with its text up to 320 points, then scrolls. AppKit's text
+/// view draws a megabyte of stored output quickly.
 struct MonospacedBox: View {
   let text: String
+  /// What VoiceOver calls the text, such as "Tool output".
+  var label = ""
+  /// The wrapped height the text view measured at its width. Until then, the box takes the line
+  /// count's height, so expanding a row draws it near its final size at once.
+  @State private var measured: CGFloat?
 
-  static let limit = 256 * 1024
+  static let maxHeight: CGFloat = 320
 
   var body: some View {
-    let (shown, cut) = Self.prefix(text)
-    VStack(alignment: .leading, spacing: 4) {
-      ScrollView([.horizontal, .vertical]) {
-        Text(shown)
-          .font(.system(.caption, design: .monospaced))
-          .textSelection(.enabled)
-          .fixedSize()
-          .padding(8)
-          .frame(maxWidth: .infinity, alignment: .leading)
-      }
-      .frame(maxHeight: 320)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-      if cut {
-        Text("Showing the first 256 KB of this output.").font(.caption).foregroundStyle(.secondary)
-      }
-    }
-  }
-
-  /// The first `limit` UTF-8 bytes of `text`, cut back to a whole character, and whether it cut.
-  static func prefix(_ text: String) -> (String, Bool) {
-    let bytes = text.utf8
-    guard bytes.count > limit else { return (text, false) }
-    var end = bytes.index(bytes.startIndex, offsetBy: limit)
-    while end > bytes.startIndex, end.samePosition(in: text) == nil {
-      end = bytes.index(before: end)
-    }
-    return (String(text[..<end]), true)
+    let height =
+      measured
+      ?? ReadOnlyTextView.height(
+        of: text, font: ReadOnlyTextView.defaultFont, inset: ReadOnlyTextView.inset.height, scroller: 0,
+        maxHeight: Self.maxHeight)
+    ReadOnlyTextView(
+      text: text, label: label, wraps: true,
+      measuredHeight: Binding(get: { height }, set: { measured = $0 }), maxHeight: Self.maxHeight
+    )
+    .frame(height: min(max(height, 28), Self.maxHeight))
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
   }
 }
 

@@ -222,6 +222,14 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
     public let path: String?
     public let host: String?
     public let target: String?
+
+    public init(kind: String, command: String? = nil, path: String? = nil, host: String? = nil, target: String? = nil) {
+      self.kind = kind
+      self.command = command
+      self.path = path
+      self.host = host
+      self.target = target
+    }
   }
 
   public struct Choice: Codable, Equatable, Sendable, Identifiable {
@@ -233,6 +241,18 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
     public let rulePreview: String?
     public let acceptsFeedback: Bool?
     public var id: String { choiceId }
+
+    public init(
+      choiceId: String, label: String, decision: String, scope: String, rulePreview: String? = nil,
+      acceptsFeedback: Bool? = nil
+    ) {
+      self.choiceId = choiceId
+      self.label = label
+      self.decision = decision
+      self.scope = scope
+      self.rulePreview = rulePreview
+      self.acceptsFeedback = acceptsFeedback
+    }
   }
 
   public let approvalId: String
@@ -242,6 +262,18 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
   public let subject: Subject
   public let availableChoices: [Choice]
   public var id: String { approvalId }
+
+  public init(
+    approvalId: String, sessionId: String, toolName: String, rawArgs: String, subject: Subject,
+    availableChoices: [Choice]
+  ) {
+    self.approvalId = approvalId
+    self.sessionId = sessionId
+    self.toolName = toolName
+    self.rawArgs = rawArgs
+    self.subject = subject
+    self.availableChoices = availableChoices
+  }
 }
 
 public struct UserQuestion: Codable, Equatable, Sendable, Identifiable {
@@ -249,6 +281,11 @@ public struct UserQuestion: Codable, Equatable, Sendable, Identifiable {
     public let label: String
     public let description: String?
     public var id: String { label }
+
+    public init(label: String, description: String? = nil) {
+      self.label = label
+      self.description = description
+    }
   }
 
   public struct Selection: Codable, Equatable, Sendable {
@@ -256,6 +293,12 @@ public struct UserQuestion: Codable, Equatable, Sendable, Identifiable {
     public let mode: String
     public let minSelections: Int?
     public let maxSelections: Int?
+
+    public init(mode: String, minSelections: Int? = nil, maxSelections: Int? = nil) {
+      self.mode = mode
+      self.minSelections = minSelections
+      self.maxSelections = maxSelections
+    }
   }
 
   public struct Prompt: Codable, Equatable, Sendable, Identifiable {
@@ -264,12 +307,26 @@ public struct UserQuestion: Codable, Equatable, Sendable, Identifiable {
     public let question: String
     public let options: [Option]
     public let selection: Selection
+
+    public init(id: String, header: String, question: String, options: [Option], selection: Selection) {
+      self.id = id
+      self.header = header
+      self.question = question
+      self.options = options
+      self.selection = selection
+    }
   }
 
   public let userInputId: String
   public let sessionId: String
   public let questions: [Prompt]
   public var id: String { userInputId }
+
+  public init(userInputId: String, sessionId: String, questions: [Prompt]) {
+    self.userInputId = userInputId
+    self.sessionId = sessionId
+    self.questions = questions
+  }
 }
 
 /// One answer to one prompt. It carries either a selection or free text, never both.
@@ -298,6 +355,18 @@ public struct MuseModel: Codable, Equatable, Sendable, Identifiable {
   public let isActive: Bool
   public let contextLimit: Int?
   public var id: String { modelId }
+
+  public init(
+    modelId: String, displayLabel: String, providerId: String, isDefault: Bool, isActive: Bool,
+    contextLimit: Int? = nil
+  ) {
+    self.modelId = modelId
+    self.displayLabel = displayLabel
+    self.providerId = providerId
+    self.isDefault = isDefault
+    self.isActive = isActive
+    self.contextLimit = contextLimit
+  }
 }
 
 /// The preferences mMac reads. The backend sends them whole on `start` and after every save.
@@ -331,17 +400,20 @@ public struct SessionView: Codable, Equatable, Sendable {
   public var items: [TranscriptItem]
   public var approvals: [Approval]
   public var questions: [UserQuestion]
+  public let usage: Usage?
   public let error: String?
   public let historyNotice: String?
 
   public init(
     session: Session, items: [TranscriptItem] = [], approvals: [Approval] = [],
-    questions: [UserQuestion] = [], error: String? = nil, historyNotice: String? = nil
+    questions: [UserQuestion] = [], usage: Usage? = nil, error: String? = nil,
+    historyNotice: String? = nil
   ) {
     self.session = session
     self.items = items
     self.approvals = approvals
     self.questions = questions
+    self.usage = usage
     self.error = error
     self.historyNotice = historyNotice
   }
@@ -389,5 +461,87 @@ public enum AppEvent: Decodable, Equatable, Sendable {
     case "error": self = .error(try container.decode(String.self, forKey: .message))
     default: self = .other(type)
     }
+  }
+}
+
+// The inspector's replies, from src/shared/protocol.ts.
+
+public struct GitChange: Codable, Equatable, Sendable, Identifiable {
+  public let path: String
+  /// The porcelain status without spaces: `M`, `A`, `D`, `R`, `MM`, or `??` for untracked.
+  public let status: String
+  public let staged: Bool
+  public var id: String { path }
+
+  public init(path: String, status: String, staged: Bool) {
+    self.path = path
+    self.status = status
+    self.staged = staged
+  }
+}
+
+public struct GitStatus: Codable, Equatable, Sendable {
+  /// The branch name, `Detached HEAD`, or empty outside a repository.
+  public let branch: String
+  public let changes: [GitChange]
+  public let isRepository: Bool
+
+  public init(branch: String, changes: [GitChange], isRepository: Bool) {
+    self.branch = branch
+    self.changes = changes
+    self.isRepository = isRepository
+  }
+}
+
+public struct ProjectFile: Codable, Equatable, Sendable, Identifiable {
+  public let name: String
+  /// Relative to the project root, with `/`.
+  public let path: String
+  public let directory: Bool
+  public var id: String { path }
+
+  public init(name: String, path: String, directory: Bool) {
+    self.name = name
+    self.path = path
+    self.directory = directory
+  }
+}
+
+public struct WorktreeEntry: Codable, Equatable, Sendable, Identifiable {
+  public let path: String
+  public let branch: String?
+  public let isMain: Bool
+  public let sessionIds: [String]
+  public var id: String { path }
+
+  public init(path: String, branch: String? = nil, isMain: Bool, sessionIds: [String] = []) {
+    self.path = path
+    self.branch = branch
+    self.isMain = isMain
+    self.sessionIds = sessionIds
+  }
+}
+
+/// `worktree-merge` answers with this instead of failing, so its message reaches the person.
+public struct MergeResult: Codable, Equatable, Sendable {
+  public let ok: Bool
+  public let output: String
+
+  public init(ok: Bool, output: String) {
+    self.ok = ok
+    self.output = output
+  }
+}
+
+/// A conversation's token counts.
+public struct Usage: Codable, Equatable, Sendable {
+  public let input: Int
+  public let output: Int
+  public let total: Int
+
+  public init(input: Int, output: Int, total: Int) {
+    self.input = input
+    self.output = output
+    self.total = total
   }
 }

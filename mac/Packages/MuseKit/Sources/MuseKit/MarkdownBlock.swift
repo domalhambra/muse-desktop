@@ -8,6 +8,15 @@ public struct MarkdownListItem: Equatable, Sendable {
   public let blocks: [MarkdownBlock]
 }
 
+/// A table column's alignment, from `:--`, `:-:` and `--:`.
+public enum TableAlignment: Equatable, Sendable { case leading, center, trailing }
+
+/// A block with an id for SwiftUI.
+public struct IdentifiedBlock: Identifiable, Equatable, Sendable {
+  public let id: String
+  public let block: MarkdownBlock
+}
+
 /// Markdown as blocks of attributed text, ready for SwiftUI. Inline styles travel as
 /// `inlinePresentationIntent` and links as `.link`, which SwiftUI's `Text` draws.
 public enum MarkdownBlock: Equatable, Sendable {
@@ -17,8 +26,27 @@ public enum MarkdownBlock: Equatable, Sendable {
   case code(language: String?, code: String)
   case quote([MarkdownBlock])
   case list(ordered: Bool, start: Int, items: [MarkdownListItem])
-  case table(header: [AttributedString], rows: [[AttributedString]])
+  case table(header: [AttributedString], rows: [[AttributedString]], alignments: [TableAlignment])
   case rule
+
+  /// The block's kind, part of its id.
+  var kind: String {
+    switch self {
+    case .heading(let level, _): "h\(level)"
+    case .paragraph: "p"
+    case .code: "code"
+    case .quote: "quote"
+    case .list(let ordered, _, _): ordered ? "ol" : "ul"
+    case .table: "table"
+    case .rule: "hr"
+    }
+  }
+
+  /// Ids from position and kind. A block keeps its id while it grows in a streamed reply, and gets
+  /// a new one when it changes kind, so view state such as "Copied" never moves to another block.
+  public static func identified(_ blocks: [MarkdownBlock]) -> [IdentifiedBlock] {
+    blocks.enumerated().map { IdentifiedBlock(id: "\($0.offset):\($0.element.kind)", block: $0.element) }
+  }
 
   /// Markdown nested deeper than this shows as plain text. A 10-level list is about 23.
   static let maximumDepth = 32
@@ -31,7 +59,7 @@ public enum MarkdownBlock: Equatable, Sendable {
     guard MarkdownDepth.deepest(in: source) <= maximumDepth else {
       return [.paragraph(AttributedString(source))]
     }
-    return blocks(in: Document(parsing: source, options: .disableSmartOpts))
+    return blocks(in: Document(parsing: Footnotes.rewrite(source), options: .disableSmartOpts))
   }
 
   static func blocks(in container: Markup) -> [MarkdownBlock] {
@@ -57,7 +85,14 @@ public enum MarkdownBlock: Equatable, Sendable {
     if let table = markup as? Table {
       return .table(
         header: table.head.cells.map { inline($0) },
-        rows: table.body.rows.map { row in row.cells.map { inline($0) } })
+        rows: table.body.rows.map { row in row.cells.map { inline($0) } },
+        alignments: table.columnAlignments.map { alignment in
+          switch alignment {
+          case .center?: .center
+          case .right?: .trailing
+          default: .leading
+          }
+        })
     }
     if markup is ThematicBreak { return .rule }
     if let html = markup as? HTMLBlock {
@@ -139,16 +174,27 @@ public enum MarkdownBlock: Equatable, Sendable {
     guard let linkDetector else { return text }
     let whole = NSRange(string.startIndex..., in: string)
     for match in linkDetector.matches(in: string, range: whole) {
-      guard let found = Range(match.range, in: string), let range = Range(match.range, in: text)
-      else { continue }
-      let candidate = String(string[found])
+      guard let found = Range(match.range, in: string) else { continue }
+      let candidate = balancedParentheses(string[found])
+      let kept = found.lowerBound..<candidate.endIndex
+      guard let range = Range(NSRange(kept, in: string), in: text) else { continue }
       let lower = candidate.lowercased()
       let destination =
         lower.hasPrefix("http://") || lower.hasPrefix("https://")
-        ? candidate : lower.hasPrefix("www.") ? "https://" + candidate : nil
+        ? String(candidate) : lower.hasPrefix("www.") ? "https://" + candidate : nil
       if let url = webURL(destination) { text[range].link = url }
     }
     return text
+  }
+
+  /// remark-gfm leaves out a trailing ")" that has no "(" to match: "(see https://a.com/x)" links
+  /// `https://a.com/x`, while `https://en.wikipedia.org/wiki/A_(b)` keeps its ")".
+  static func balancedParentheses(_ candidate: Substring) -> Substring {
+    var url = candidate
+    while url.hasSuffix(")"), url.filter({ $0 == ")" }).count > url.filter({ $0 == "(" }).count {
+      url = url.dropLast()
+    }
+    return url
   }
 
   static func styled(_ string: String, _ intent: InlinePresentationIntent, _ link: URL?)
@@ -170,7 +216,9 @@ public enum MarkdownBlock: Equatable, Sendable {
 }
 
 /// Parsed Markdown per transcript item, so a streamed update re-parses only the item that changed.
-/// Keyed by item id, with at most `limit` items.
+/// Keyed by item id, with at most `limit` items. An item still streaming parses at most once per
+/// `throttle`: a 30 KB reply takes about 11.5 ms to parse in a Release build (measured
+/// 2026-10-21), more than half a frame at 60 Hz.
 @MainActor
 public final class MarkdownCache {
   public static let shared = MarkdownCache()
@@ -178,6 +226,7 @@ public final class MarkdownCache {
   struct Entry {
     let text: String
     let blocks: [MarkdownBlock]
+    let parsedAt: ContinuousClock.Instant
   }
 
   /// One entry per item id. A streamed item replaces its own entry as its text grows.
@@ -185,22 +234,29 @@ public final class MarkdownCache {
   /// Item ids, oldest first, for eviction past `limit`.
   private var order: [String] = []
   private let limit = 400
-  /// How many times `blocks(id:text:)` parsed. Tests read it.
+  private let throttle = Duration.milliseconds(100)
+  /// How many times `blocks(id:text:final:)` parsed. Tests read it.
   private(set) var parseCount = 0
 
   public init() {}
 
   var count: Int { entries.count }
 
-  public func blocks(id: String, text: String) -> [MarkdownBlock] {
-    if let entry = entries[id], entry.text == text { return entry.blocks }
+  /// `final` is false while the item is still streaming. Then, within `throttle` of the item's
+  /// last parse, the last blocks come back unparsed. The completed update arrives as its own
+  /// event with `final` true, so the last text always parses.
+  public func blocks(id: String, text: String, final: Bool = true) -> [MarkdownBlock] {
+    if let entry = entries[id] {
+      if entry.text == text { return entry.blocks }
+      if !final, ContinuousClock.now - entry.parsedAt < throttle { return entry.blocks }
+    }
     let parsed = MarkdownBlock.parse(text)
     parseCount += 1
     if entries[id] == nil {
       order.append(id)
       if order.count > limit { entries[order.removeFirst()] = nil }
     }
-    entries[id] = Entry(text: text, blocks: parsed)
+    entries[id] = Entry(text: text, blocks: parsed, parsedAt: .now)
     return parsed
   }
 }

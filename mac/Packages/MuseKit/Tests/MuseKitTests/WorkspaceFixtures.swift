@@ -35,6 +35,7 @@ func makeWorkspace(
   status: ConnectionStatus = ConnectionStatus(state: "ready", version: "1.4.11"),
   refreshDebounce: Duration = .milliseconds(10),
   drafts: [String: String] = [:],
+  reopen: String? = nil,
   script: @escaping @Sendable (String, [JSONValue], Int) -> [String] = { _, _, _ in [] }
 ) async -> (Workspace, ScriptedBackend) {
   let backend = ScriptedBackend { message in
@@ -47,7 +48,7 @@ func makeWorkspace(
   await client.run()
   let workspace = Workspace(
     client: client, started: Started(preferences: preferences, status: status),
-    drafts: drafts, refreshDebounce: refreshDebounce)
+    drafts: drafts, reopen: reopen, refreshDebounce: refreshDebounce)
   return (workspace, backend)
 }
 
