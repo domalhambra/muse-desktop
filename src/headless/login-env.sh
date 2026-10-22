@@ -4,10 +4,12 @@
 # SHELL here, so this answers that read from the environment the backend already has, with the
 # real shell put back. Any other command goes to the real shell unchanged.
 login_shell="${MMAC_LOGIN_SHELL:-/bin/zsh}"
+# A login shell that names this stub would exec itself forever.
+[ "$login_shell" -ef "$0" ] && login_shell=/bin/zsh
 case "$2" in
   *MUSE_DESKTOP_ENV*)
     printf '\0MUSE_DESKTOP_ENV\0'
     SHELL="$login_shell" exec /usr/bin/env -0
     ;;
 esac
-exec "$login_shell" "$@"
+SHELL="$login_shell" exec "$login_shell" "$@"

@@ -24,10 +24,10 @@ import Testing
   for gone in ["DYLD_X", "NODE_OPTIONS", "SHLVL", "_", "PWD"] { #expect(environment[gone] == nil) }
   let withoutLogin = Launcher.backendEnvironment(own: ["PATH": "/usr/bin"], login: nil, shell: "/bin/zsh")
   #expect(withoutLogin["MMAC_LOGIN_SHELL"] == nil)
+  #expect(withoutLogin["PATH"] == "/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin")
   let inherited = Launcher.backendEnvironment(
     own: ["PATH": "/usr/bin", "MMAC_LOGIN_SHELL": "/bin/old"], login: nil, shell: "/bin/zsh")
   #expect(inherited["MMAC_LOGIN_SHELL"] == nil)
-  #expect(withoutLogin["PATH"] == "/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin")
 }
 
 @Test func mergePathsKeepsTheFirstCopyOfEachFolder() {
