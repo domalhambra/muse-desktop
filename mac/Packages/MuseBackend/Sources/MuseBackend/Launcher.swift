@@ -78,7 +78,7 @@ public enum Launcher {
       guard let equals = text.firstIndex(of: "="), equals != text.startIndex else { continue }
       environment[String(text[..<equals])] = String(text[text.index(after: equals)...])
     }
-    return environment
+    return environment.isEmpty ? nil : environment
   }
 
   /// mMac's own environment, without what Xcode injects, with the login shell's on top. Shell
@@ -86,7 +86,8 @@ public enum Launcher {
   /// backend it need not read the shell again.
   static func backendEnvironment(own: [String: String], login: [String: String]?, shell: String) -> [String: String] {
     // Xcode's debug launches inject DYLD_ variables and NODE_OPTIONS, which Node must not inherit.
-    let dropped: Set<String> = ["NODE_OPTIONS", "_", "SHLVL", "PWD", "OLDPWD"]
+    // An inherited MMAC_LOGIN_SHELL must not survive a failed login read.
+    let dropped: Set<String> = ["NODE_OPTIONS", "MMAC_LOGIN_SHELL", "_", "SHLVL", "PWD", "OLDPWD"]
     let keep = { (key: String) in !key.hasPrefix("DYLD_") && !dropped.contains(key) }
     var environment = own.filter { keep($0.key) }
     for (key, value) in login ?? [:] where keep(key) { environment[key] = value }

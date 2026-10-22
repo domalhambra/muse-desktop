@@ -8,6 +8,7 @@ import Testing
   let output = Data(records.joined(separator: "\0").utf8) + Data([0])
   #expect(Launcher.parseLoginEnvironment(output) == ["PATH": "/opt/bin:/usr/bin", "EMPTY": "", "EQUALS": "a=b"])
   #expect(Launcher.parseLoginEnvironment(Data("no marker".utf8)) == nil)
+  #expect(Launcher.parseLoginEnvironment(Data([0]) + Data("MMAC_ENV".utf8) + Data([0])) == nil)
 }
 
 @Test func theBackendEnvironmentLayersTheLoginShellOverMMac() {
@@ -23,6 +24,9 @@ import Testing
   for gone in ["DYLD_X", "NODE_OPTIONS", "SHLVL", "_", "PWD"] { #expect(environment[gone] == nil) }
   let withoutLogin = Launcher.backendEnvironment(own: ["PATH": "/usr/bin"], login: nil, shell: "/bin/zsh")
   #expect(withoutLogin["MMAC_LOGIN_SHELL"] == nil)
+  let inherited = Launcher.backendEnvironment(
+    own: ["PATH": "/usr/bin", "MMAC_LOGIN_SHELL": "/bin/old"], login: nil, shell: "/bin/zsh")
+  #expect(inherited["MMAC_LOGIN_SHELL"] == nil)
   #expect(withoutLogin["PATH"] == "/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin")
 }
 
