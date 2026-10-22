@@ -20,7 +20,7 @@ struct InspectorView: View {
       Divider()
       Group {
         switch inspector.tab {
-        case .changes: Text("Changes").frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .changes: ChangesView(workspace: workspace, inspector: inspector)
         case .files: Text("Files").frame(maxWidth: .infinity, maxHeight: .infinity)
         case .activity: ActivityView(entries: entries)
         }

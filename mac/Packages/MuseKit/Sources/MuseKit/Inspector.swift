@@ -140,6 +140,15 @@ public final class Inspector {
     await loadDiff()
   }
 
+  /// Shows a changed file's diff pane at once, without reading the diff. The pane reads it with
+  /// `select(_:)` from its `.task`, so a read cancelled when the pane goes away runs again when it
+  /// comes back. A read for an earlier file is dropped.
+  public func open(change path: String) {
+    selected = path
+    diffSequence += 1
+    diff = .loading
+  }
+
   /// Back to the list of changed files.
   public func close() {
     selected = nil

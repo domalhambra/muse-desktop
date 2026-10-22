@@ -116,6 +116,23 @@ let worktreesJSON =
   #expect(inspector.diff == .loaded(DiffLine.parse("for b")))
 }
 
+@MainActor @Test func openingAChangeShowsItsPaneWithoutReadingAndDropsAnEarlierRead() async throws {
+  let (inspector, backend) = await makeInspector()  // nothing answers until pushed
+  let first = Task { await inspector.select("a.txt") }
+  try await eventually { backend.messages.contains { $0["method"] == "git-diff" } }
+  inspector.open(change: "b.txt")
+  #expect(inspector.selected == "b.txt")
+  #expect(inspector.diff == .loading)
+  guard case .number(let late)? = backend.messages.first(where: { $0["method"] == "git-diff" })?["id"] else {
+    Issue.record("No first diff request")
+    return
+  }
+  backend.push(reply(Int(late), #""for a""#))
+  await first.value
+  #expect(inspector.diff == .loading)
+  #expect(backend.messages.filter { $0["method"] == "git-diff" }.count == 1)
+}
+
 @MainActor @Test func aDiffThatFailsShowsItsMessage() async throws {
   let (inspector, _) = await makeInspector { method, _, id in
     method == "git-diff" ? [failure(id, "This file no longer has changes. Refresh the changes panel.")] : []
