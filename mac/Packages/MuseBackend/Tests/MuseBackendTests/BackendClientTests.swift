@@ -277,7 +277,8 @@ private func waitFor(_ condition: () -> Bool) async throws {
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
   let started = try await client.handshake(
-    dataFolder: URL(fileURLWithPath: "/d"), bridgeToken: "secret", timeout: .seconds(10))
+    dataFolder: URL(fileURLWithPath: "/d"), bridgeToken: "secret", helloTimeout: .seconds(10),
+    startTimeout: .seconds(10))
   #expect(started.status.state == "ready")
   let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
   #expect(sent == [["hello", [1]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
@@ -290,7 +291,8 @@ private func waitFor(_ condition: () -> Bool) async throws {
   await client.run()
   let timeout = Duration.milliseconds(200)
   await #expect(throws: BackendError.noAnswer(method: "hello", after: timeout)) {
-    _ = try await client.handshake(dataFolder: URL(fileURLWithPath: "/d"), timeout: timeout)
+    _ = try await client.handshake(
+      dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: timeout, startTimeout: .seconds(10))
   }
   #expect(backend.messages.map { $0["method"] } == ["hello"])
 }
@@ -303,8 +305,51 @@ private func waitFor(_ condition: () -> Bool) async throws {
   await client.run()
   let timeout = Duration.milliseconds(200)
   await #expect(throws: BackendError.noAnswer(method: "start", after: timeout)) {
-    _ = try await client.handshake(dataFolder: URL(fileURLWithPath: "/d"), timeout: timeout)
+    _ = try await client.handshake(
+      dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: .seconds(10), startTimeout: timeout)
   }
-  #expect(BackendError.noAnswer(method: "start", after: .seconds(15)).localizedDescription
-    == "The Muse backend did not answer start within 15 seconds.")
+  #expect(BackendError.noAnswer(method: "start", after: .seconds(45)).localizedDescription
+    == "The Muse backend did not answer start within 45 seconds.")
+}
+
+@Test func theHandshakeGivesStartLongerThanHello() {
+  // start waits for Muse to connect: `muse --version` (6 s a candidate), then Muse's initialize
+  // (15 s, muse-host.ts), then the bridges. Its limit must outlast Muse's own 15-second message.
+  #expect(BackendClient.helloTimeout == .seconds(15))
+  #expect(BackendClient.startTimeout == .seconds(45))
+}
+
+@Test(.timeLimit(.minutes(1))) func startHasItsOwnLimitAfterHello() async throws {
+  // hello answers at once; start answers after hello's limit has passed but within its own.
+  let backend = ScriptedBackend { message in
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let late = Task {
+    try await Task.sleep(for: .milliseconds(500))
+    backend.push(#"{"id":2,"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#)
+  }
+  let started = try await client.handshake(
+    dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: .milliseconds(200), startTimeout: .seconds(10))
+  try await late.value
+  #expect(started.status.state == "ready")
+}
+
+@Test(.timeLimit(.minutes(1))) func aReplyAfterTheTimeoutIsIgnoredAndTheClientStillWorks() async throws {
+  // hello (id 1) is never answered in time. sessions (id 2) is answered at once.
+  let backend = ScriptedBackend { message in
+    message["method"] == "sessions" ? [#"{"id":2,"ok":true,"value":"fresh"}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let timeout = Duration.milliseconds(200)
+  await #expect(throws: BackendError.noAnswer(method: "hello", after: timeout)) {
+    _ = try await client.handshake(
+      dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: timeout, startTimeout: timeout)
+  }
+  // The late hello Reply arrives now. Nothing waits for id 1, so it is dropped.
+  backend.push(#"{"id":1,"ok":true,"value":"stale"}"#)
+  #expect(try await client.request("sessions") == "fresh")
+  #expect(backend.messages.map { $0["method"] } == ["hello", "sessions"])
 }

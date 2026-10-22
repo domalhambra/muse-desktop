@@ -103,8 +103,9 @@ final class AppController {
         }
         await self.backendStopped(client)
       }
-      // Fails after 15 seconds when the backend runs but never answers, so the setup screen and
-      // its Try again show instead of a spinner for ever.
+      // Fails when the backend runs but never answers (hello within 15 seconds, start within 45,
+      // as BackendClient sets), so the setup screen and its Try again show instead of a spinner
+      // for ever.
       let started = try await client.handshake(dataFolder: Self.dataFolder(), bridgeToken: token)
       let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
       reopen = nil
