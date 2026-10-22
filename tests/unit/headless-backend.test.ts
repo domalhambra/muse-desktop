@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -67,6 +68,7 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     answer: vi.fn(async () => {}),
     cancelQuestion: vi.fn(async () => {}),
     readOutput: vi.fn(async () => 'stored output'),
+    listWorktrees: vi.fn(async () => []),
     ...overrides,
   } satisfies Muse
 }
@@ -327,5 +329,154 @@ describe('headless backend, M1 methods', () => {
     await start()
     expect(await call('output', 's1', 'i1')).toBe('stored output')
     expect(asks).toHaveLength(0)
+  })
+})
+
+/** A Git repository with one commit of `a.txt`. Git's global config is kept out. */
+async function repository(name = 'repo') {
+  const path = await folder(name)
+  const git = (...args: string[]) =>
+    execFileSync('git', args, {
+      cwd: path,
+      stdio: 'pipe',
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null' },
+    }).toString()
+  git('init', '-q', '-b', 'main')
+  git('config', 'user.email', 'test@example.com')
+  git('config', 'user.name', 'Test')
+  git('config', 'commit.gpgsign', 'false')
+  await writeFile(join(path, 'a.txt'), 'one\ntwo\nthree\n' + 'x\n'.repeat(20) + 'ten\neleven\n')
+  git('add', '.')
+  git('commit', '-q', '-m', 'first')
+  return { path, git }
+}
+
+describe('headless backend, M2 inspector methods', () => {
+  it('reads Git status and a diff for a known project only', async () => {
+    const { path } = await repository()
+    await writeFile(join(path, 'b.txt'), 'new\n')
+    await writeFile(join(path, 'a.txt'), 'one\nTWO\nthree\n' + 'x\n'.repeat(20) + 'ten\neleven\n')
+    const { call, start } = harness()
+    await start()
+    await expect(call('git-status', path)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    await call('add-project', path)
+    const status = (await call('git-status', path)) as {
+      branch: string
+      isRepository: boolean
+      changes: { path: string; status: string; staged: boolean }[]
+    }
+    expect(status.branch).toBe('main')
+    expect(status.isRepository).toBe(true)
+    expect(status.changes).toEqual([
+      { path: 'a.txt', status: 'M', staged: false },
+      { path: 'b.txt', status: '??', staged: false },
+    ])
+    expect(await call('git-diff', path, 'a.txt')).toContain('Working changes\ndiff --git')
+    expect(await call('git-diff', path, 'b.txt')).toBe('--- /dev/null\n+++ b/b.txt\n+new\n+')
+    expect(await call('git-raw-diff', path, 'a.txt')).toContain('+TWO')
+  })
+
+  it('reverts a hunk, reverts a file and stages a file', async () => {
+    const { path, git } = await repository()
+    await writeFile(
+      join(path, 'a.txt'),
+      'one\nTWO\nthree\n' + 'x\n'.repeat(20) + 'ten\nten and a half\neleven\n',
+    )
+    await writeFile(join(path, 'b.txt'), 'new\n')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    await expect(call('git-revert-hunk', path, 'a.txt', -1)).rejects.toThrow()
+    await call('git-revert-hunk', path, 'a.txt', 0)
+    const afterHunk = await readFile(join(path, 'a.txt'), 'utf8')
+    expect(afterHunk).toContain('two\n')
+    expect(afterHunk).toContain('ten and a half\n')
+    await call('git-stage-file', path, 'a.txt')
+    expect(git('diff', '--cached', '--name-only')).toBe('a.txt\n')
+    await call('git-revert-file', path, 'b.txt')
+    await call('git-revert-file', path, 'a.txt')
+    expect(git('status', '--porcelain')).toBe('')
+  })
+
+  it('lists files and reads one, inside the project only', async () => {
+    const { path } = await repository()
+    await mkdir(join(path, 'src'))
+    await writeFile(join(path, 'src', 'app.ts'), 'export {}\n')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    expect(await call('files', path, '')).toEqual([
+      { name: 'src', path: 'src', directory: true },
+      { name: 'a.txt', path: 'a.txt', directory: false },
+    ])
+    expect(await call('files', path, 'src')).toEqual([
+      { name: 'app.ts', path: 'src/app.ts', directory: false },
+    ])
+    expect(await call('read-file', path, 'src/app.ts')).toBe('export {}\n')
+    await expect(call('read-file', path, '../outside.txt')).rejects.toThrow()
+    await expect(call('files', path, '..')).rejects.toThrow(
+      'This path is outside the selected project.',
+    )
+  })
+
+  it('lists worktrees through Muse', async () => {
+    const { path } = await repository()
+    const entry = { path, branch: 'main', isMain: true, sessionIds: [] }
+    const muse = fakeMuse({ listWorktrees: vi.fn(async () => [entry]) })
+    const { call, start } = harness(muse)
+    await start()
+    await call('add-project', path)
+    expect(await call('worktrees', path)).toEqual([entry])
+    expect(muse.listWorktrees).toHaveBeenCalledWith(path)
+  })
+
+  it('merges and removes only Muse worktrees, and keeps a busy one', async () => {
+    const { path, git } = await repository()
+    const worktree = join(path, '.muse', 'worktrees', 'w1')
+    git('worktree', 'add', '-q', '-b', 'muse/w1', worktree)
+    await writeFile(join(worktree, 'c.txt'), 'from the worktree\n')
+    execFileSync('git', ['add', '.'], { cwd: worktree })
+    execFileSync('git', ['commit', '-q', '-m', 'worktree work'], {
+      cwd: worktree,
+      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' },
+    })
+    let status = 'running'
+    const muse = fakeMuse({
+      listWorktrees: vi.fn(async () => [
+        { path, branch: 'main', isMain: true, sessionIds: [] },
+        { path: worktree, branch: 'muse/w1', isMain: false, sessionIds: ['s9'] },
+      ]),
+      getSession: vi.fn(() => session({ sessionId: 's9', status })),
+    })
+    const { call, start } = harness(muse)
+    await start()
+    await call('add-project', path)
+    await expect(call('worktree-merge', path, path)).rejects.toThrow(
+      'Only worktrees Muse created in this project can be changed here.',
+    )
+    expect(await call('worktree-merge', path, worktree)).toEqual({
+      ok: true,
+      output: expect.any(String),
+    })
+    expect(await readFile(join(path, 'c.txt'), 'utf8')).toBe('from the worktree\n')
+    await expect(call('worktree-remove', path, worktree)).rejects.toThrow(
+      'A conversation is still working in this worktree.',
+    )
+    status = 'idle'
+    await call('worktree-remove', path, worktree)
+    expect(git('worktree', 'list')).not.toContain('w1')
+    expect(git('branch', '--list', 'muse/w1')).toContain('muse/w1')
+  })
+
+  it('creates with a null model and the worktree option', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse()
+    const { call, start } = harness(muse, [0])
+    await start()
+    await call('add-project', project)
+    await call('create', project, null, { worktree: true })
+    expect(muse.create).toHaveBeenCalledWith(project, undefined, { worktree: true })
   })
 })

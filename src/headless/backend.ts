@@ -9,9 +9,19 @@ import {
   type AppEvent,
   type Preferences,
 } from '../shared/protocol'
+import { listProjectFiles, readProjectFile } from '../main/files'
+import {
+  getGitDiff,
+  getGitStatus,
+  getRawDiff,
+  revertFile,
+  revertHunk,
+  stageFile,
+} from '../main/git'
 import type { MuseHost } from '../main/muse-host'
 import { readPreferences, writePreferences } from '../main/preferences'
 import { projectRoot, worktreeParent } from '../shared/worktree'
+import { mergeWorktree, removeWorktree } from '../main/worktrees'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
 // mMac's backend methods and the state they share. src/headless/server.ts owns
@@ -39,6 +49,7 @@ export type Muse = Pick<
   | 'answer'
   | 'cancelQuestion'
   | 'readOutput'
+  | 'listWorktrees'
 >
 
 export type BackendDeps = {
@@ -230,7 +241,7 @@ export function createBackend({ muse, ask, emit, version, quitting, quit }: Back
     await trustProject(root)
     const { worktree } =
       z.object({ worktree: z.boolean().optional() }).optional().parse(options) ?? {}
-    return muse.create(root, z.string().optional().parse(modelId), { worktree })
+    return muse.create(root, z.string().nullish().parse(modelId) ?? undefined, { worktree })
   })
 
   method('open', async (value) => {
@@ -302,6 +313,63 @@ export function createBackend({ muse, ask, emit, version, quitting, quit }: Back
   })
 
   method('output', (session, item) => muse.readOutput(id.parse(session), id.parse(item)))
+
+  // The inspector, as src/main/index.ts registers it. Like Electron, these check that the
+  // project is known but do not ask to trust it.
+  method('git-status', async (project) => getGitStatus(await knownProject(project)))
+
+  method('git-diff', async (project, path) =>
+    getGitDiff(await knownProject(project), pathSchema.parse(path)),
+  )
+
+  method('git-raw-diff', async (project, path) =>
+    getRawDiff(await knownProject(project), pathSchema.parse(path)),
+  )
+
+  method('git-revert-file', async (project, path) =>
+    revertFile(await knownProject(project), pathSchema.parse(path)),
+  )
+
+  method('git-revert-hunk', async (project, path, index) =>
+    revertHunk(
+      await knownProject(project),
+      pathSchema.parse(path),
+      z.number().int().min(0).parse(index),
+    ),
+  )
+
+  method('git-stage-file', async (project, path) =>
+    stageFile(await knownProject(project), pathSchema.parse(path)),
+  )
+
+  method('files', async (project, directory) =>
+    listProjectFiles(await knownProject(project), z.string().max(4096).parse(directory)),
+  )
+
+  method('read-file', async (project, path) =>
+    readProjectFile(await knownProject(project), pathSchema.parse(path)),
+  )
+
+  method('worktrees', async (project) => muse.listWorktrees(await knownProject(project)))
+
+  method('worktree-merge', async (project, path) =>
+    mergeWorktree(projectRoot(await knownProject(project)), pathSchema.parse(path)),
+  )
+
+  method('worktree-remove', async (project, path) => {
+    const root = projectRoot(await knownProject(project))
+    const target = await realpath(pathSchema.parse(path))
+    const entry = (await muse.listWorktrees(root)).find((worktree) => worktree.path === target)
+    const busy = entry?.sessionIds.some((sessionId) => {
+      try {
+        return muse.getSession(sessionId).status === 'running'
+      } catch {
+        return false
+      }
+    })
+    if (busy) throw new Error('A conversation is still working in this worktree.')
+    await removeWorktree(root, target)
+  })
 
   method('shutdown', async () => {
     if (muse.hasActiveTurns()) {

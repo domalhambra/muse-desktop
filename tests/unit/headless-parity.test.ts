@@ -48,20 +48,9 @@ const notYet = [
   'mcp-login',
   'bridge-status',
   'bridge-token',
-  'worktrees',
-  'worktree-merge',
-  'worktree-remove',
   'compact',
   'attachments',
   'remove-attachment',
-  'git-status',
-  'git-diff',
-  'git-raw-diff',
-  'git-revert-file',
-  'git-revert-hunk',
-  'git-stage-file',
-  'files',
-  'read-file',
   'terminal',
   'cli-terminal',
   'export',
@@ -74,7 +63,7 @@ function duplicates(list: string[]) {
 describe('headless method parity', () => {
   it('finds both front doors', () => {
     expect(electron).toHaveLength(53)
-    expect(headless).toHaveLength(18)
+    expect(headless).toHaveLength(29)
   })
 
   it('finds every Electron channel the preload calls', () => {
