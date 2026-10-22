@@ -129,10 +129,10 @@
     {
       "id": 19,
       "subject": "Task 19: The full gate and the PR",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The whole gate passes on `mac-m3`, and the PR into `extensions` is open for Dom.\n\n**Files:** none.\n\n**Acceptance Criteria:**\n\n- [ ] Every command in \"Prove a change\" in `docs/changing-things.md` passes:\n  - `npm run typecheck`, `npm test`, `npm run build`, `npm run format:check`\n  - `npm run test:integration`, `npm run test:headless`, `npm run test:e2e`, then `git checkout -- docs/screenshots`\n  - `swift test` for `MuseBackend` and `MuseKit`\n  - `xcodebuild test`\n- [ ] The branch is pushed to `origin` (`domalhambra/muse-desktop`) as `mac-m3`, never to upstream.\n- [ ] The PR is \"mMac M3: Settings\", base `extensions`. Its body says what M3 adds, how it was verified (a table of the gate), what was not run if anything, and the parity items ticked. It ends with the Claude Code line.\n- [ ] Dom merges the PR. Nobody else does unless Dom asks in the conversation.\n\n**Verify:** `gh pr view --repo domalhambra/muse-desktop --json url,baseRefName,state` shows the PR open on `extensions`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"`gh pr view --repo domalhambra/muse-desktop --json url,baseRefName,state` shows the PR open on `extensions`.\", \"acceptanceCriteria\": [\"Every command in \\\"Prove a change\\\" in `docs/changing-things.md` passes: - `npm run typecheck`, `npm test`, `npm run build`, `npm run format:check` - `npm run test:integration`, `npm run test:headless`, `npm run test:e2e`, then `git checkout -- docs/screenshots` - `swift test` for `MuseBackend` and `MuseKit` - `xcodebuild test`\", \"The branch is pushed to `origin` (`domalhambra/muse-desktop`) as `mac-m3`, never to upstream.\", \"The PR is \\\"mMac M3: Settings\\\", base `extensions`. Its body says what M3 adds, how it was verified (a table of the gate), what was not run if anything, and the parity items ticked. It ends with the Claude Code line.\", \"Dom merges the PR. Nobody else does unless Dom asks in the conversation.\"]}\n```",
       "blockedBy": [18]
     }
   ],
-  "lastUpdated": "2026-10-22T22:09:56.584065+00:00"
+  "lastUpdated": "2026-10-22T22:11:16.050711+00:00"
 }
