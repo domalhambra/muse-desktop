@@ -32,13 +32,17 @@ struct SidebarView: View {
         Picker("Current project", selection: projectSelection) {
           Text("All projects").tag("")
           ForEach(projects, id: \.self) { path in
-            Text(projectLabel(path)).tag(path)
+            Text(projectLabel(path)).lineLimit(1).truncationMode(.middle).tag(path)
           }
           Divider()
           Text("Open another project…").tag(Self.openAnother)
         }
         // The label is for VoiceOver only, as in Electron, so project names fit at 240 points.
         .labelsHidden()
+        // A long name loses its middle, so the folder's end stays visible; the tooltip has it all.
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .help(workspace.project.isEmpty ? "All projects" : workspace.project)
         // The stock bezel: the theme's light accent under a white label is unreadable.
         .tint(nil)
         .id(pickerGeneration)

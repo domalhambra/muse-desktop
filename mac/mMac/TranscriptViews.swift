@@ -124,7 +124,17 @@ struct Avatar: View {
       Circle().fill(kind == .user ? appearance.colors.secondary.opacity(0.25) : appearance.colors.accent.opacity(0.25))
       switch kind {
       case .user: Text("Y").font(.caption.bold())
-      case .muse: Image(systemName: "sparkle").font(.caption.bold()).foregroundStyle(.tint)
+      case .muse:
+        // Electron's MuseMark (muse-logo.png), 19 points in a 26-point avatar there. The Muse
+        // theme draws it white, as Electron's `filter: brightness(0) invert(1)`; Moonlight keeps
+        // its blue.
+        Image("MuseMark")
+          .renderingMode(appearance.theme == .muse ? .template : .original)
+          .resizable()
+          .interpolation(.high)
+          .aspectRatio(contentMode: .fit)
+          .frame(width: 16, height: 16)
+          .foregroundStyle(.white)
       }
     }
     .frame(width: 22, height: 22)

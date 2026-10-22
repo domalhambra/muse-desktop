@@ -28,6 +28,7 @@ struct RootView: View {
       }
     }
     .background(ThemeBackground(palette: appearance.palette))
+    .background { if !MMacApp.keepsWindowState { WindowStateGuard() } }
     // The controller reopens this window for an Ask or a Dock click after it was closed.
     .onAppear { controller.showWindow = { [openWindow] in openWindow(id: MMacApp.mainWindow) } }
   }
@@ -62,6 +63,8 @@ struct MainView: View {
         }
     }
     .themedToolbar()
+    // The split views exist only from here on.
+    .background { if !MMacApp.keepsWindowState { WindowStateGuard() } }
     .alert(
       "Muse",
       isPresented: Binding(

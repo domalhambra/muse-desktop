@@ -85,8 +85,7 @@ struct ReadOnlyTextView: NSViewRepresentable {
     textView.drawsBackground = false
     textView.font = font
     textView.textColor = .labelColor
-    // The scroll view's find bar is ready for when the app gains a Find menu item. mMac has none
-    // yet, so Command-F does nothing here.
+    // Edit › Find (`TextFinder` in MMacApp.swift) opens the scroll view's find bar.
     textView.usesFindBar = true
     textView.isIncrementalSearchingEnabled = true
     textView.textContainerInset = Self.inset

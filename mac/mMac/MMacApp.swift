@@ -28,6 +28,19 @@ struct MMacApp: App {
     return .standard
   }()
 
+  /// False in Debug builds run with `MMAC_DEFAULTS_SUITE`, as the UI tests run them. AppKit keeps
+  /// the window's frame ("NSWindow Frame main") and the sidebar's width ("NSSplitView Subview
+  /// Frames main, SidebarNavigationSplitView") in the standard defaults, not in `appStorage`, so
+  /// such a run turns those saves off instead: see `WindowStateGuard`.
+  static let keepsWindowState: Bool = {
+    #if DEBUG
+      if let suite = ProcessInfo.processInfo.environment["MMAC_DEFAULTS_SUITE"], !suite.isEmpty {
+        return false
+      }
+    #endif
+    return true
+  }()
+
   var body: some Scene {
     // One window. The backend belongs to the app, so closing this window keeps it.
     Window("mMac", id: Self.mainWindow) {
@@ -36,12 +49,24 @@ struct MMacApp: App {
         .themed(delegate.controller)
         .defaultAppStorage(Self.appStorage)
     }
+    // A test run does not reopen its window at the next launch.
+    .restorationBehavior(Self.keepsWindowState ? .automatic : .disabled)
     .commands {
       CommandGroup(replacing: .newItem) {
         FileCommands(controller: delegate.controller)
       }
       CommandGroup(after: .sidebar) {
         InspectorCommand()
+      }
+      // Edit › Find, for the find bars of the file preview and of stored output.
+      CommandGroup(after: .textEditing) {
+        Menu("Find") {
+          Button("Find…") { TextFinder.send(.showFindInterface) }.keyboardShortcut("f")
+          Button("Find Next") { TextFinder.send(.nextMatch) }.keyboardShortcut("g")
+          Button("Find Previous") { TextFinder.send(.previousMatch) }
+            .keyboardShortcut("g", modifiers: [.command, .shift])
+          Button("Use Selection for Find") { TextFinder.send(.setSearchString) }.keyboardShortcut("e")
+        }
       }
     }
     // mMac › Settings… (Command-comma). Its panes show only while a backend runs.
@@ -83,6 +108,51 @@ private struct InspectorCommand: View {
   var body: some View {
     Button(inspectorShown ? "Hide Inspector" : "Show Inspector") { inspectorShown.toggle() }
       .keyboardShortcut("i", modifiers: [.command, .option])
+  }
+}
+
+/// Turns off AppKit's frame autosave for the window it is in, and for the window's split views,
+/// when `MMacApp.keepsWindowState` is false. SwiftUI names both autosaves when it builds the
+/// window and the `NavigationSplitView`, so the guard clears them once it is in the window, and
+/// again on the next turn of the run loop, after SwiftUI has set up the views around it.
+struct WindowStateGuard: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSView { GuardView() }
+  func updateNSView(_ view: NSView, context: Context) {}
+
+  final class GuardView: NSView {
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      guard !MMacApp.keepsWindowState, let window else { return }
+      WindowStateGuard.forget(in: window)
+      DispatchQueue.main.async { [weak window] in
+        if let window { WindowStateGuard.forget(in: window) }
+      }
+    }
+  }
+
+  static func forget(in window: NSWindow) {
+    if !window.frameAutosaveName.isEmpty { window.setFrameAutosaveName("") }
+    var views = [window.contentView].compactMap { $0 }
+    while let view = views.popLast() {
+      if let split = view as? NSSplitView, split.autosaveName != nil { split.autosaveName = nil }
+      views.append(contentsOf: view.subviews)
+    }
+  }
+}
+
+/// Sends a find action down the responder chain, as AppKit's own Find menu items do: the action
+/// is the sender's tag. Only a text view with a find bar takes it. `ReadOnlyTextView` has one; the
+/// composer and the Settings fields have none, so there the items do nothing, as in Electron.
+@MainActor enum TextFinder {
+  static func send(_ action: NSTextFinder.Action) {
+    let selector = #selector(NSResponder.performTextFinderAction(_:))
+    let item = NSMenuItem(title: "", action: selector, keyEquivalent: "")
+    item.tag = action.rawValue
+    // NSTextView refuses the action unless it uses a find bar or panel, as AppKit's own menu
+    // validation would.
+    guard let target = NSApp.target(forAction: selector, to: nil, from: item) else { return }
+    if let validating = target as? NSUserInterfaceValidations, !validating.validateUserInterfaceItem(item) { return }
+    NSApp.sendAction(selector, to: target, from: item)
   }
 }
 

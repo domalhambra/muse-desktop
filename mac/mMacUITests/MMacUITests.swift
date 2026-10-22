@@ -44,8 +44,9 @@ final class MMacUITests: XCTestCase {
       // launch, so no test inherits the inspector's state or changes Dom's.
       "MMAC_DEFAULTS_SUITE": "com.domalhambra.mmac.uitests",
     ].merging(extra) { $1 }
-    // Run the backend from this checkout, whatever the build recorded.
-    app.launchArguments = ["-MMacRepository", repository.path]
+    // Run the backend from this checkout, whatever the build recorded. NSQuitAlwaysKeepsWindows
+    // in the argument domain, which writes nothing, keeps the window out of the next launch.
+    app.launchArguments = ["-MMacRepository", repository.path, "-NSQuitAlwaysKeepsWindows", "NO"]
     app.launch()
     // A test that fails partway still stops the app, and with it the backend, before tearDown
     // deletes the temporary folder.

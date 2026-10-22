@@ -43,9 +43,11 @@ struct ComposerView: View {
         .accessibilityIdentifier("model-picker")
         Picker("Reasoning effort", selection: effortSelection) {
           ForEach(ReasoningEffort.allCases) { effort in Text(effort.label).tag(effort.rawValue) }
-          // A newer CLI's effort that this list does not know still shows.
-          if ReasoningEffort(rawValue: workspace.effort) == nil {
-            Text(workspace.effort).tag(workspace.effort)
+          // A newer CLI's effort that this list does not know still shows, including one being
+          // saved, which the picker shows until the save ends.
+          let shown = pendingEffort ?? workspace.effort
+          if ReasoningEffort(rawValue: shown) == nil {
+            Text(shown).tag(shown)
           }
         }
         .fixedSize()
