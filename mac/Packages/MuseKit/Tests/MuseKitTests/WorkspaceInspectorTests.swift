@@ -120,7 +120,7 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
     default: []
     }
   }
-  workspace.inspector.isShown = true
+  workspace.inspector.refreshesOnStatusChange = true
   await workspace.open("s1")
   workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
   // InspectorView reads again when the open conversation's status changes.
@@ -128,6 +128,60 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   try await settle(workspace, backend, marker: "/m1")
   #expect(statusReads(backend, "/p") == 1)
   #expect(workspace.projectGit["/p"]?.changes.count == 1)
+  // The inspector's read landed, so moving on reads nothing more for /p.
+  workspace.selectProject("/q")
+  try await settle(workspace, backend, marker: "/m2")
+  #expect(statusReads(backend, "/p") == 1)
+}
+
+@MainActor @Test func aTurnEndReadLeftToTheInspectorIsMadeUpWhenTheProjectChangesFirst() async throws {
+  // The inspector's read of /p gets no answer; the person picks /q before it lands.
+  let reads = Counter()
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "open": return [reply(id, viewJSON(sessionJSON("s1", status: "running")))]
+    case "worktrees": return [reply(id, "[]")]
+    case "git-status":
+      if args.first == "/p", reads.next() == 1 { return [] }
+      return [reply(id, statusJSON(["a.txt"]))]
+    default: return []
+    }
+  }
+  workspace.inspector.refreshesOnStatusChange = true
+  await workspace.open("s1")
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
+  let refreshing = Task { await workspace.inspector.refresh() }
+  try await eventually { statusReads(backend, "/p") == 1 }
+  workspace.selectProject("/q")
+  try await eventually { statusReads(backend, "/p") == 2 }
+  try await eventually { workspace.projectGit["/p"]?.changes.count == 1 }
+  refreshing.cancel()
+  await refreshing.value
+}
+
+@MainActor @Test func aTurnEndReadLeftToTheInspectorIsMadeUpWhenTheInspectorsReadFails() async throws {
+  let reads = Counter()
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "open": return [reply(id, viewJSON(sessionJSON("s1", status: "running")))]
+    case "worktrees": return [reply(id, "[]")]
+    case "git-status":
+      if args.first == "/p", reads.next() == 1 { return [failure(id, "git failed")] }
+      return [reply(id, statusJSON(["a.txt"]))]
+    default: return []
+    }
+  }
+  workspace.inspector.refreshesOnStatusChange = true
+  await workspace.open("s1")
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
+  await workspace.inspector.refresh()
+  #expect(workspace.inspector.error == "git failed")
+  try await eventually { statusReads(backend, "/p") == 2 }
+  try await eventually { workspace.projectGit["/p"]?.changes.count == 1 }
+  // Made up once: moving on reads nothing more for /p.
+  workspace.selectProject("/q")
+  try await settle(workspace, backend, marker: "/m1")
+  #expect(statusReads(backend, "/p") == 2)
 }
 
 @MainActor @Test func aShownInspectorOnAnotherFolderLeavesTheBadgeReadToTheWorkspace() async throws {
@@ -140,7 +194,7 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
     default: []
     }
   }
-  workspace.inspector.isShown = true
+  workspace.inspector.refreshesOnStatusChange = true
   await workspace.open("w1")
   #expect(workspace.inspector.project == worktree)
   workspace.apply(.session(try decodeView(viewJSON(sessionJSON("w1", root: "/p", status: "idle")))))

@@ -33,6 +33,8 @@ public final class Workspace {
   public internal(set) var project: String {
     didSet {
       guard project != oldValue else { return }
+      // The inspector's read for the old project is dropped now, so read the badge it was to write.
+      if pendingTurnEndRead == oldValue { makeUpTurnEndRead() }
       inspector.show(project: project)
       if !project.isEmpty, beginsRunning == 0 { startBadgeRead([project]) }
     }
@@ -50,9 +52,12 @@ public final class Workspace {
   public var startInWorktree = false
   /// Called for every `session` event, with the status that conversation had in the event before
   /// it (nil for the first one this Workspace sees). The app posts the completion notice from it.
-  public var turnFinished: (@MainActor (Session, _ previous: String?) -> Void)?
+  @ObservationIgnored public var turnFinished: (@MainActor (Session, _ previous: String?) -> Void)?
   /// The last status each `session` event gave, for every conversation the events name.
-  private var lastStatus: [String: String] = [:]
+  @ObservationIgnored private var lastStatus: [String: String] = [:]
+  /// The folder whose turn-end badge read was left to the inspector's refresh, until that refresh
+  /// writes it. If the project changes first, or the inspector's read fails, the Workspace reads it.
+  @ObservationIgnored private var pendingTurnEndRead: String?
   /// Bumped when Ask Muse adds to the draft, so the composer takes keyboard focus.
   public internal(set) var composerFocusRequest = 0
   /// The conversation open before a backend restart, opened again once history has loaded.
@@ -106,7 +111,14 @@ public final class Workspace {
     reopenSessionId = reopen
     self.refreshDebounce = refreshDebounce
     inspector.reportError = { [weak self] message in self?.errorMessage = message }
-    inspector.statusRead = { [weak self] path, status in self?.projectGit[path] = status }
+    inspector.statusRead = { [weak self] path, status in
+      guard let self else { return }
+      projectGit[path] = status
+      if pendingTurnEndRead == path { pendingTurnEndRead = nil }
+    }
+    inspector.statusFailed = { [weak self] path in
+      if let self, pendingTurnEndRead == path { makeUpTurnEndRead() }
+    }
   }
 
   public var sections: [SidebarSection] {
@@ -169,6 +181,13 @@ public final class Workspace {
     }
   }
 
+  /// Reads the badge a turn end left to the inspector, whose read will not write it.
+  private func makeUpTurnEndRead() {
+    guard let root = pendingTurnEndRead else { return }
+    pendingTurnEndRead = nil
+    startBadgeRead([root])
+  }
+
   /// The folders one badge read covers, and its sequence when it reads every project.
   private struct BadgeRead: Sendable {
     let paths: [String]
@@ -225,14 +244,17 @@ public final class Workspace {
       if next.session.sessionId == view?.session.sessionId {
         // A turn that ends may have changed files: read the folder's badge again. A recent project
         // and the current project have badges, so a worktree conversation's own folder does too.
-        // A shown inspector on that folder reads its status when the open conversation's status
-        // changes (`InspectorView`), and that read writes the badge through `statusRead`, so the
-        // turn's end needs no second read.
+        // An inspector on that folder whose refresh is live reads its status when the open
+        // conversation's status changes (`InspectorView`), and that read writes the badge through
+        // `statusRead`, so the turn's end needs no second read unless that one does not land.
         if view?.session.status == "running", next.session.status != "running",
-          let root = next.session.workspaceRoot, preferences.recentProjects.contains(root) || root == project,
-          !(inspector.isShown && inspector.project == root)
+          let root = next.session.workspaceRoot, preferences.recentProjects.contains(root) || root == project
         {
-          startBadgeRead([root])
+          if inspector.refreshesOnStatusChange, inspector.project == root {
+            pendingTurnEndRead = root
+          } else {
+            startBadgeRead([root])
+          }
         }
         view = next
       }

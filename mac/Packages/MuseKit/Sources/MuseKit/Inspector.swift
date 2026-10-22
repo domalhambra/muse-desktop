@@ -50,9 +50,16 @@ public final class Inspector {
   @ObservationIgnored var reportError: @MainActor (String) -> Void = { _ in }
   /// Receives each status read, so the sidebar's badge for this project stays current.
   @ObservationIgnored var statusRead: @MainActor (String, GitStatus) -> Void = { _, _ in }
-  /// True while `InspectorView` is on screen. A shown inspector refreshes when the open
-  /// conversation's status changes, so the Workspace leaves a turn end's badge read to it.
-  @ObservationIgnored public var isShown = false
+  /// True while a view keeps a refresh live that runs `refresh()` whenever the open conversation's
+  /// status changes, as `InspectorView`'s `.task(id:)` does. On macOS 15 that view is built when
+  /// the window opens and stays built, its task restarting on each change, while the inspector is
+  /// collapsed; so this means "the refresh task is live", not "the inspector is on screen".
+  /// The Workspace leaves a turn end's badge read to that refresh. Whatever sets this true must
+  /// keep the refresh alive until it sets it false.
+  @ObservationIgnored public var refreshesOnStatusChange = false
+  /// Receives the project whose status read failed, so the Workspace can read a badge it left to
+  /// this inspector.
+  @ObservationIgnored var statusFailed: @MainActor (String) -> Void = { _ in }
 
   /// Bumped by `show(project:)`. A reply for an earlier project compares it and is dropped, as is
   /// a confirmation the view showed before the inspector moved to another project.
@@ -142,6 +149,7 @@ public final class Inspector {
     } catch {
       guard current() else { return }
       self.error = error.localizedDescription
+      statusFailed(project)
     }
   }
 

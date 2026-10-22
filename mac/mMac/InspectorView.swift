@@ -36,9 +36,10 @@ struct InspectorView: View {
     .task(id: RefreshKey(project: workspace.project, status: workspace.view?.session.status)) {
       await inspector.refresh()
     }
-    // While this refresh runs on a status change, a turn's end needs no badge read of its own.
-    .onAppear { inspector.isShown = true }
-    .onDisappear { inspector.isShown = false }
+    // This view stays built, and the task above live, while the inspector is collapsed, so the
+    // Workspace leaves a turn end's badge read to it. Set together: the flag promises the task.
+    .onAppear { inspector.refreshesOnStatusChange = true }
+    .onDisappear { inspector.refreshesOnStatusChange = false }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Project inspector")
   }
