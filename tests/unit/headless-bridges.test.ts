@@ -113,6 +113,9 @@ describe('headless bridges', () => {
     )
     await value.sync()
     try {
+      // A port taken between freePort() and the bind fails here, with the real reason.
+      const status = await value.status()
+      expect(status.mcp.running, status.mcp.error).toBe(true)
       const url = `http://127.0.0.1:${port}/mcp`
       const body = JSON.stringify({
         jsonrpc: '2.0',

@@ -320,8 +320,9 @@ try {
   assert.equal(backend.asks.length, 1, 'Shutdown should not raise an Ask.')
   await until(() => ownedGone(backend), 'muse serve to stop after shutdown')
   console.log('PASS · shutdown exits 0 and leaves no muse process')
-  assert(!(await listening(bridgePort)), `Port ${bridgePort} should be closed after shutdown.`)
-  console.log('PASS · No bridge port stays open after shutdown')
+  // Process exit closes the port too; the stopBridges unit test covers the quit wiring.
+  assert(!(await listening(bridgePort)), `Port ${bridgePort} should be closed after the exit.`)
+  console.log('PASS · No bridge port stays open after the backend exits')
   assert(!(await readFile(join(dataFolder, 'preferences.json'), 'utf8')).includes(bridgeToken))
   assert(!JSON.stringify(backend.events).includes(bridgeToken), 'An event carried the token.')
   assert(!backend.stderr().includes(bridgeToken), 'stderr carried the token.')
