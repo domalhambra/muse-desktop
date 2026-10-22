@@ -10,6 +10,7 @@ import type {
   SessionView,
 } from '../../src/shared/protocol'
 import type { AgentApi, AgentPolicy } from '../../src/main/agent-api'
+import { splitHunks } from '../../src/main/git'
 import { createBackend, type Muse } from '../../src/headless/backend'
 import type { BridgeFactories } from '../../src/headless/bridges'
 import { HEADLESS_PROTOCOL, type Ask } from '../../src/headless/wire'
@@ -77,7 +78,11 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
 }
 
 /** A backend wired to fakes. `answers` are the choices the fake app gives, in order. */
-function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
+function harness(
+  muse: Muse = fakeMuse(),
+  answers: number[] = [],
+  options: { askStartsQuit?: boolean } = {},
+) {
   const asks: Ask[] = []
   const events: AppEvent[] = []
   const terminal: string[] = []
@@ -112,6 +117,11 @@ function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
     bridgeFactories,
     ask: async (value) => {
       asks.push(value)
+      // A quit that starts while the Ask shows: the answer still comes back.
+      if (options.askStartsQuit) {
+        quitting = true
+        return 0
+      }
       return answers.shift() ?? -1
     },
     quitting: () => quitting,
@@ -139,6 +149,8 @@ function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
     start,
     lastPreferences,
     backend,
+    /** The file the backend saves preferences in. */
+    preferencesFile: join(dir, 'data', 'preferences.json'),
     /** The policy the backend gave the agent factory in start. */
     agentPolicy: () => {
       const policy = policies.at(-1)
@@ -153,30 +165,6 @@ async function folder(name: string) {
   const path = join(dir, name)
   await mkdir(path)
   return path
-}
-
-/** A backend whose Ask starts the quit path before it answers Reconnect. */
-function createBackendWithAskThatQuits(muse: Muse) {
-  let quitting = false
-  const backend = createBackend({
-    muse,
-    emit: () => {},
-    version: '0.2.0',
-    ask: async () => {
-      quitting = true
-      return 0
-    },
-    quitting: () => quitting,
-    quit: vi.fn(),
-  })
-  const call = (name: string, ...args: unknown[]) => backend.methods.get(name)!(...args)
-  return {
-    call,
-    start: async () => {
-      await call('hello', HEADLESS_PROTOCOL)
-      await call('start', { dataFolder: join(dir, 'data-quit') })
-    },
-  }
 }
 
 describe('headless backend', () => {
@@ -416,7 +404,7 @@ describe('headless backend, M1 methods', () => {
     expect(muse.connect).toHaveBeenCalledWith('/opt/muse')
 
     // A quit that starts while the Ask shows: the answer comes back, but connect must stop.
-    const quitting = createBackendWithAskThatQuits(muse)
+    const quitting = harness(muse, [], { askStartsQuit: true })
     await quitting.start()
     vi.mocked(muse.connect).mockClear()
     await expect(quitting.call('connect')).rejects.toThrow('The backend is quitting.')
@@ -438,13 +426,13 @@ describe('headless backend, M1 methods', () => {
   })
 
   it('serializes preference writes, so overlapping saves of different fields both land', async () => {
-    const { call, start, lastPreferences } = harness()
+    const { call, start, lastPreferences, preferencesFile } = harness()
     await start()
     await Promise.all([
       call('preferences', { reasoningEffort: 'low' }),
       call('preferences', { cliPath: '/opt/muse' }),
     ])
-    const saved = JSON.parse(await readFile(join(dir, 'data', 'preferences.json'), 'utf8'))
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
     expect(saved.reasoningEffort).toBe('low')
     expect(saved.cliPath).toBe('/opt/muse')
     expect(lastPreferences()?.preferences).toMatchObject({
@@ -509,18 +497,25 @@ describe('headless backend, M2 inspector methods', () => {
     expect(await call('git-raw-diff', path, 'a.txt')).toContain('+TWO')
   })
 
+  /** A repository whose a.txt changed in two places, so its diff has two hunks. */
+  async function repositoryWithTwoHunks() {
+    const repo = await repository()
+    await writeFile(join(repo.path, 'a.txt'), twoHunks)
+    await writeFile(join(repo.path, 'b.txt'), 'new\n')
+    return repo
+  }
+  const twoHunks = 'one\nTWO\nthree\n' + 'x\n'.repeat(20) + 'ten\nten and a half\neleven\n'
+
   it('reverts a hunk, reverts a file and stages a file', async () => {
-    const { path, git } = await repository()
-    await writeFile(
-      join(path, 'a.txt'),
-      'one\nTWO\nthree\n' + 'x\n'.repeat(20) + 'ten\nten and a half\neleven\n',
-    )
-    await writeFile(join(path, 'b.txt'), 'new\n')
+    const { path, git } = await repositoryWithTwoHunks()
     const { call, start } = harness()
     await start()
     await call('add-project', path)
     const before = await readFile(join(path, 'a.txt'), 'utf8')
-    await expect(call('git-revert-hunk', path, 'a.txt', -1)).rejects.toThrow()
+    // The index check runs before revertHunk, which would say "That hunk no longer exists".
+    await expect(call('git-revert-hunk', path, 'a.txt', -1)).rejects.toThrow(
+      /Too small: expected number to be >=0/,
+    )
     expect(await readFile(join(path, 'a.txt'), 'utf8')).toBe(before)
     await call('git-revert-hunk', path, 'a.txt', 0)
     const afterHunk = await readFile(join(path, 'a.txt'), 'utf8')
@@ -531,6 +526,29 @@ describe('headless backend, M2 inspector methods', () => {
     await call('git-revert-file', path, 'b.txt')
     await call('git-revert-file', path, 'a.txt')
     expect(git('status', '--porcelain')).toBe('')
+  })
+
+  it('refuses to revert a hunk that changed since the diff was read', async () => {
+    const { path } = await repositoryWithTwoHunks()
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    const raw = (await call('git-raw-diff', path, 'a.txt')) as string
+    const hunks = splitHunks(raw).hunks
+    expect(hunks).toHaveLength(2)
+    // An outside edit changes the first hunk after mMac read the diff.
+    await writeFile(join(path, 'a.txt'), twoHunks.replace('TWO', 'TWO, edited outside'))
+    const before = await readFile(join(path, 'a.txt'), 'utf8')
+    await expect(call('git-revert-hunk', path, 'a.txt', 0, hunks[0])).rejects.toThrow(
+      'The file changed since this diff was read. Refresh the diff, then try again.',
+    )
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).toBe(before)
+    // The current hunk text goes through, and a call without it works as in M2.
+    const current = splitHunks((await call('git-raw-diff', path, 'a.txt')) as string).hunks
+    await call('git-revert-hunk', path, 'a.txt', 0, current[0])
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).toContain('two\n')
+    await call('git-revert-hunk', path, 'a.txt', 0)
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).not.toContain('ten and a half')
   })
 
   it('lists files and reads one, inside the project only', async () => {

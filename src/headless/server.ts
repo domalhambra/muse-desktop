@@ -1,11 +1,11 @@
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
-import { fileURLToPath } from 'node:url'
 import type { AppEvent } from '../shared/protocol'
 import { AgentApi } from '../main/agent-api'
 import { MuseHost, messageOf } from '../main/muse-host'
 import { publish } from '../main/event-bus'
 import { createBackend } from './backend'
+import { loginEnvShell } from './login-env'
 import { Wire } from './wire'
 
 // mMac's backend process: the fork's core in one plain Node process, driven over
@@ -18,8 +18,7 @@ console.dir = (value: unknown) => console.error(value)
 
 // mMac passes the login shell's environment and names the real shell in MMAC_LOGIN_SHELL.
 // discoverCli would start the login shell again; the stub answers from this environment.
-if (process.env.MMAC_LOGIN_SHELL)
-  process.env.SHELL = fileURLToPath(new URL('./login-env.sh', import.meta.url))
+if (process.env.MMAC_LOGIN_SHELL) process.env.SHELL = loginEnvShell()
 
 const { version } = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),

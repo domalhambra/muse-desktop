@@ -19,6 +19,7 @@ import {
   getRawDiff,
   revertFile,
   revertHunk,
+  splitHunks,
   stageFile,
 } from '../main/git'
 import {
@@ -386,13 +387,18 @@ export function createBackend({
     revertFile(await knownProject(project), pathSchema.parse(path)),
   )
 
-  method('git-revert-hunk', async (project, path, index) =>
-    revertHunk(
-      await knownProject(project),
-      pathSchema.parse(path),
-      z.number().int().min(0).parse(index),
-    ),
-  )
+  method('git-revert-hunk', async (project, path, index, expected) => {
+    const root = await knownProject(project)
+    const file = pathSchema.parse(path)
+    const at = z.number().int().min(0).parse(index)
+    const text = z.string().max(5_000_000).optional().parse(expected)
+    // mMac sends the hunk it showed. An outside edit may have moved the hunks since.
+    if (text !== undefined && splitHunks(await getRawDiff(root, file)).hunks[at] !== text)
+      throw new Error(
+        'The file changed since this diff was read. Refresh the diff, then try again.',
+      )
+    return revertHunk(root, file, at)
+  })
 
   method('git-stage-file', async (project, path) =>
     stageFile(await knownProject(project), pathSchema.parse(path)),
