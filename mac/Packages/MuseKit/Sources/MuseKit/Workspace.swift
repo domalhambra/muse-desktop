@@ -43,6 +43,9 @@ public final class Workspace {
   public internal(set) var composerFocusRequest = 0
   /// The conversation open before a backend restart, opened again once history has loaded.
   private var reopenSessionId: String?
+  /// How many `begin()` calls are running. Each ends by reading every badge, so a `preferences`
+  /// event meanwhile (history loading saves the recent projects) does not read them too.
+  private var beginsRunning = 0
   public internal(set) var view: SessionView?
   /// The conversation being opened, for a spinner.
   public private(set) var openingSessionId: String?
@@ -110,12 +113,15 @@ public final class Workspace {
   /// restart. Call it once `start` has replied; a later `ready` event calls it again.
   public func begin() async {
     guard status.isReady else { return }
+    beginsRunning += 1
+    defer { beginsRunning -= 1 }
     await refreshSessions()
     await loadModels()
     if let reopen = reopenSessionId {
       reopenSessionId = nil
-      // Not over a conversation the person opened, or is opening, while history loaded.
-      if view == nil, openingSessionId == nil { await open(reopen) }
+      // Not over a conversation the person opened, is opening, or is sending a first message to
+      // while history loaded.
+      if view == nil, openingSessionId == nil, !submitting { await open(reopen) }
     }
     await refreshProjectGit()
   }
@@ -123,7 +129,7 @@ public final class Workspace {
   /// Reads the Git status of `only` these projects, or of every recent project, for the badges.
   public func refreshProjectGit(_ only: [String]? = nil) async {
     let paths = only ?? preferences.recentProjects
-    var sequence = projectGitSequence
+    var sequence: Int?
     if only == nil {
       projectGitSequence += 1
       sequence = projectGitSequence
@@ -137,7 +143,7 @@ public final class Workspace {
     }
     // A cancelled caller's `try?` reads give no status; keep the badges shown instead.
     guard !Task.isCancelled else { return }
-    if only == nil {
+    if let sequence {
       // A newer read of every project, for newer recent projects, already replaced this one.
       guard sequence == projectGitSequence else { return }
       projectGit = found
@@ -155,12 +161,14 @@ public final class Workspace {
     case .preferences(let next):
       let projectsChanged = next.recentProjects != preferences.recentProjects
       preferences = next
-      if projectsChanged { Task { await refreshProjectGit() } }
+      // A running `begin()` reads them all once it ends.
+      if projectsChanged, beginsRunning == 0 { Task { await refreshProjectGit() } }
     case .session(let next):
       if next.session.sessionId == view?.session.sessionId {
-        // A turn that ends may have changed files: read the project's badge again.
+        // A turn that ends may have changed files: read the project's badge again. Only a recent
+        // project has a badge; a worktree conversation's folder does not.
         if view?.session.status == "running", next.session.status != "running",
-          let root = next.session.workspaceRoot
+          let root = next.session.workspaceRoot, preferences.recentProjects.contains(root)
         {
           Task { await refreshProjectGit([root]) }
         }

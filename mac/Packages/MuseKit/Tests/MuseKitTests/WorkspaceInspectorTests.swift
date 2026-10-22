@@ -4,6 +4,11 @@ import MuseBackendTesting
 import Testing
 @testable import MuseKit
 
+/// How many `git-status` requests the backend received for `path`.
+private func statusReads(_ backend: ScriptedBackend, _ path: JSONValue) -> Int {
+  requests(backend).filter { $0 == ["git-status", [path]] }.count
+}
+
 /// The id of the first request for `method` with these arguments.
 private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONValue? = nil) -> Int? {
   let found = backend.messages.first { message in
@@ -96,6 +101,95 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
   try await eventually { requests(backend).contains(["git-status", ["/p"]]) }
   try await eventually { workspace.projectGit["/p"] != nil }
+}
+
+@MainActor @Test func onlyATurnThatEndsReadsTheBadge() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1", status: "running")))]
+    case "git-status": [reply(id, statusJSON([]))]
+    default: []
+    }
+  }
+  await workspace.open("s1")
+  // running to running: a streamed update mid-turn.
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "running")))))
+  try await Task.sleep(for: .milliseconds(30))
+  #expect(statusReads(backend, "/p") == 0)
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
+  try await eventually { statusReads(backend, "/p") == 1 }
+  // idle to idle: a rename or a history update after the turn.
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
+  try await Task.sleep(for: .milliseconds(30))
+  #expect(statusReads(backend, "/p") == 1)
+}
+
+@MainActor @Test func aTurnThatEndsOutsideTheRecentProjectsReadsNoBadge() async throws {
+  let root = "/p/.muse/worktrees/w1"
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("w1", root: root, status: "running")))]
+    case "git-status": [reply(id, statusJSON([]))]
+    default: []
+    }
+  }
+  await workspace.open("w1")
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("w1", root: root, status: "idle")))))
+  try await Task.sleep(for: .milliseconds(30))
+  #expect(statusReads(backend, .string(root)) == 0)
+  #expect(workspace.projectGit[root] == nil)
+}
+
+@MainActor @Test func recentProjectsSavedDuringBeginAreReadOnceByBegin() async throws {
+  // sessions gets no answer until the test pushes one; history loading saves the recent projects.
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "sessions": []
+    case "models": [reply(id, "[]")]
+    case "git-status": [reply(id, statusJSON([]))]
+    default: [reply(id, "[]")]
+    }
+  }
+  let beginning = Task { await workspace.begin() }
+  try await eventually { backend.messages.contains { $0["method"] == "sessions" } }
+  workspace.apply(.preferences(Preferences(recentProjects: ["/p", "/new"])))
+  try await Task.sleep(for: .milliseconds(30))
+  #expect(!requests(backend).contains { $0.first == "git-status" })
+  let id = try #require(firstId(backend, "sessions"))
+  backend.push(reply(id, #"{"sessions":[],"nextCursor":null}"#))
+  await beginning.value
+  try await Task.sleep(for: .milliseconds(30))
+  #expect(statusReads(backend, "/p") == 1)
+  #expect(statusReads(backend, "/new") == 1)
+  #expect(workspace.projectGit.keys.sorted() == ["/new", "/p"])
+  // After begin, a change reads them again.
+  workspace.apply(.preferences(Preferences(recentProjects: ["/p", "/new", "/later"])))
+  try await eventually { statusReads(backend, "/later") == 1 }
+}
+
+@MainActor @Test func aSendDuringHistoryLoadIsNotHiddenByTheReopen() async throws {
+  // Neither sessions nor create is answered until the test pushes the replies.
+  let (workspace, backend) = await makeWorkspace(reopen: "s7") { method, _, id in
+    switch method {
+    case "sessions", "create": []
+    case "models": [reply(id, "[]")]
+    case "open": [reply(id, viewJSON(sessionJSON("s7")))]
+    default: [reply(id, "null")]
+    }
+  }
+  let beginning = Task { await workspace.begin() }
+  try await eventually { backend.messages.contains { $0["method"] == "sessions" } }
+  workspace.draft = "hi"
+  let sending = Task { await workspace.send() }
+  try await eventually { backend.messages.contains { $0["method"] == "create" } }
+  let sessionsId = try #require(firstId(backend, "sessions"))
+  backend.push(reply(sessionsId, #"{"sessions":[],"nextCursor":null}"#))
+  await beginning.value
+  let createId = try #require(firstId(backend, "create"))
+  backend.push(reply(createId, viewJSON(sessionJSON("s1"))))
+  #expect(await sending.value == .sent)
+  #expect(workspace.view?.session.sessionId == "s1")
+  #expect(!requests(backend).contains(["open", ["s7"]]))
 }
 
 @MainActor @Test func anInspectorRefreshUpdatesItsBadge() async throws {
