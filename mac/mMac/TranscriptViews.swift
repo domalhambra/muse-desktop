@@ -390,20 +390,31 @@ struct ToolGroupView: View {
   }
 }
 
-/// Tool input or output: monospaced, selectable, and whole. It grows with its text up to 320
-/// points, then scrolls. AppKit's text view draws a megabyte of stored output quickly.
+/// Tool input or output: monospaced, selectable, and whole. Lines wrap, as Electron's
+/// `white-space: pre-wrap`. It grows with its text up to 320 points, then scrolls. AppKit's text
+/// view draws a megabyte of stored output quickly.
 struct MonospacedBox: View {
   let text: String
   /// What VoiceOver calls the text, such as "Tool output".
   var label = ""
-  @State private var height: CGFloat = 40
+  /// The wrapped height the text view measured at its width. Until then, the box takes the line
+  /// count's height, so expanding a row draws it near its final size at once.
+  @State private var measured: CGFloat?
 
   static let maxHeight: CGFloat = 320
 
   var body: some View {
-    ReadOnlyTextView(text: text, label: label, measuredHeight: $height, maxHeight: Self.maxHeight)
-      .frame(height: min(max(height, 28), Self.maxHeight))
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+    let height =
+      measured
+      ?? ReadOnlyTextView.height(
+        of: text, font: ReadOnlyTextView.defaultFont, inset: ReadOnlyTextView.inset.height, scroller: 0,
+        maxHeight: Self.maxHeight)
+    ReadOnlyTextView(
+      text: text, label: label, wraps: true,
+      measuredHeight: Binding(get: { height }, set: { measured = $0 }), maxHeight: Self.maxHeight
+    )
+    .frame(height: min(max(height, 28), Self.maxHeight))
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
   }
 }
 

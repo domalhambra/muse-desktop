@@ -81,9 +81,11 @@ struct QuestionCard: View {
               }
               .toggleStyle(.checkbox)
               .accessibilityLabel(option.label)
+              .accessibilityHint(option.description ?? "")
             }
           } else {
-            // By index: two options with the same label must still be two choices.
+            // Rows go by index, so two options with the same label are still two rows. The answer
+            // goes by label, so the first of them shows as chosen.
             Picker(
               prompt.header,
               selection: Binding(
@@ -91,7 +93,12 @@ struct QuestionCard: View {
                 set: { index in if let index { form.choose(prompt.options[index].label, in: prompt.id) } })
             ) {
               ForEach(Array(prompt.options.enumerated()), id: \.offset) { index, option in
-                OptionLabel(option: option).tag(Optional(index)).accessibilityLabel(option.label)
+                // Without `.ignore`, the radio button joins its own text to these: "Blue, Blue".
+                OptionLabel(option: option)
+                  .tag(Optional(index))
+                  .accessibilityElement(children: .ignore)
+                  .accessibilityLabel(option.label)
+                  .accessibilityHint(option.description ?? "")
               }
             }
             .pickerStyle(.radioGroup)

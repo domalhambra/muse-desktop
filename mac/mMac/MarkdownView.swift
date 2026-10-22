@@ -58,8 +58,7 @@ struct BlockView: View {
   }
 }
 
-/// A paragraph whose links each end with a small external-link icon, as Electron draws them. The
-/// icon is an image, not a character of the text, so a copy should leave it out (to confirm live).
+/// A paragraph whose links each end with a small external-link icon, as Electron draws them.
 struct LinkedText: View {
   let text: AttributedString
 
@@ -68,12 +67,15 @@ struct LinkedText: View {
   }
 
   static func compose(_ text: AttributedString) -> Text {
-    var result = Text("")
+    var result = Text(verbatim: "")
     // `runs[\.link]` joins neighbouring runs with the same link, so a bold word inside a link
     // still gets one icon.
     for (link, range) in text.runs[\.link] {
       result = result + Text(AttributedString(text[range]))
       if link != nil {
+        // Accessibility gets the icon as an unlabelled attachment character (U+FFFC), not the
+        // symbol's name, and a plain-text copy leaves it out. An empty `.accessibilityLabel` on it
+        // changes neither.
         result = result + Text(Image(systemName: "arrow.up.right")).font(.caption2).foregroundStyle(.secondary)
       }
     }
