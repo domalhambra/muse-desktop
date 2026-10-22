@@ -310,7 +310,8 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   workspace.draft = "hi"
   #expect(await workspace.send() == .needsProject)
   #expect(await workspace.send(addingProject: URL(fileURLWithPath: "/tmp/p")) == .sent)
-  #expect(requests(backend) == [
+  // The new project's badge read runs beside these.
+  #expect(requests(backend).filter { $0.first != "git-status" } == [
     ["add-project", ["/tmp/p"]],
     ["create", ["/real/p"]],
     ["send", [["sessionId": "s1", "text": "hi", "attachments": [], "effort": "high", "mode": "queue"]]],

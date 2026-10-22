@@ -137,8 +137,10 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   // A worktree conversation's folder is the current project, which the sidebar badges.
   await workspace.open("w1")
   #expect(workspace.project == worktree)
-  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("w1", root: worktree, status: "idle")))))
+  // Opening it reads its badge once; the turn's end reads it again.
   try await eventually { statusReads(backend, .string(worktree)) == 1 }
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("w1", root: worktree, status: "idle")))))
+  try await eventually { statusReads(backend, .string(worktree)) == 2 }
   try await eventually { workspace.projectGit[worktree] != nil }
 }
 
@@ -173,8 +175,10 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   }
   await workspace.open("w1")
   #expect(workspace.project == root)
+  // Opening it reads its badge once.
+  try await eventually { workspace.projectGit[root] != nil }
   await workspace.refreshProjectGit()
-  #expect(statusReads(backend, .string(root)) == 1)
+  #expect(statusReads(backend, .string(root)) == 2)
   #expect(workspace.projectGit.keys.sorted() == ["/p", root])
   #expect(workspace.projectGit[root]?.changes.map(\.path) == ["w.txt"])
   // A later full read keeps it.
@@ -182,8 +186,9 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   #expect(workspace.projectGit.keys.sorted() == ["/p", root])
   // The current project is read once, not twice, when it is also a recent project.
   workspace.selectProject("/p")
+  try await eventually { statusReads(backend, "/p") == 3 }
   await workspace.refreshProjectGit()
-  #expect(statusReads(backend, "/p") == 3)
+  #expect(statusReads(backend, "/p") == 4)
 }
 
 @MainActor @Test func recentProjectsSavedDuringBeginAreReadOnceByBegin() async throws {
@@ -434,4 +439,56 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   await opening.value
   #expect(workspace.view?.session.sessionId == "s2")
   #expect(!requests(backend).contains(["open", ["s7"]]))
+}
+
+@MainActor @Test func aWorktreeConversationReadsItsOwnBadge() async throws {
+  // Opening a worktree conversation reads its folder's badge without an inspector refresh or a
+  // full read. The worktree's read waits until the test pushes its reply.
+  let worktree = "/p/.muse/worktrees/x"
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "open": return [reply(id, viewJSON(sessionJSON("w1", root: worktree)))]
+    case "git-status": return args.first == .string(worktree) ? [] : [reply(id, statusJSON([]))]
+    default: return []
+    }
+  }
+  await workspace.refreshProjectGit()
+  #expect(workspace.projectBadge?.branch == "main")
+  await workspace.open("w1")
+  try await eventually { statusReads(backend, .string(worktree)) == 1 }
+  // Until its own read lands the badge is empty, not the parent's "main · Clean".
+  #expect(workspace.projectBadge == nil)
+  let id = try #require(firstId(backend, "git-status", [.string(worktree)]))
+  backend.push(reply(id, statusJSON(["w.txt"], branch: "muse/x")))
+  try await eventually { workspace.projectBadge?.branch == "muse/x" }
+  // All projects has no badge, and reads none.
+  workspace.selectProject("")
+  #expect(workspace.projectBadge == nil)
+  try await settle(workspace, backend, marker: "/m1")
+  #expect(statusReads(backend, "") == 0)
+}
+
+@MainActor @Test func anOlderFullBadgeReadKeepsTheNewProjectsBadge() async throws {
+  // The full read's /p gets no answer until the test pushes one; a worktree conversation opens
+  // meanwhile and its own read lands first.
+  let worktree = "/p/.muse/worktrees/x"
+  let reads = Counter()
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "open": return [reply(id, viewJSON(sessionJSON("w1", root: worktree)))]
+    case "git-status":
+      if args.first == "/p", reads.next() == 1 { return [] }
+      return [reply(id, statusJSON([], branch: args.first == .string(worktree) ? "muse/x" : "main"))]
+    default: return []
+    }
+  }
+  let full = Task { await workspace.refreshProjectGit() }
+  try await eventually { firstId(backend, "git-status", ["/p"]) != nil }
+  await workspace.open("w1")
+  try await eventually { workspace.projectBadge?.branch == "muse/x" }
+  let id = try #require(firstId(backend, "git-status", ["/p"]))
+  backend.push(reply(id, statusJSON([])))
+  await full.value
+  #expect(workspace.projectGit["/p"] != nil)
+  #expect(workspace.projectBadge?.branch == "muse/x")
 }

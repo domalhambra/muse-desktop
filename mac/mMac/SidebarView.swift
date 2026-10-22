@@ -39,12 +39,8 @@ struct SidebarView: View {
         // The label is for VoiceOver only, as in Electron, so project names fit at 240 points.
         .labelsHidden()
         .id(pickerGeneration)
-        // A worktree's own status first (its branch), else its project's.
-        if !workspace.project.isEmpty,
-          let git = workspace.projectGit[workspace.project]
-            ?? workspace.projectGit[ProjectPath.root(of: workspace.project)],
-          git.isRepository
-        {
+        // The folder's own status: a worktree shows its branch once read, never its parent's.
+        if let git = workspace.projectBadge, git.isRepository {
           HStack(spacing: 6) {
             Label(git.branch, systemImage: "arrow.triangle.branch")
               .lineLimit(1)

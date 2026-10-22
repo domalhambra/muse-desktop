@@ -28,9 +28,14 @@ public final class Workspace {
   private var hasLoadedHistory = false
   public private(set) var historyError: String?
   /// The project filter, and the folder a new conversation starts in. Empty means all projects.
-  /// The inspector follows it.
+  /// The inspector follows it, and its badge is read at once, so a worktree conversation's folder
+  /// gets its own badge with the inspector hidden. A running `begin()` reads it in its final read.
   public internal(set) var project: String {
-    didSet { if project != oldValue { inspector.show(project: project) } }
+    didSet {
+      guard project != oldValue else { return }
+      inspector.show(project: project)
+      if !project.isEmpty, beginsRunning == 0 { Task { [project] in await refreshProjectGit([project]) } }
+    }
   }
   /// The inspector for `project`.
   public let inspector: Inspector
@@ -38,6 +43,9 @@ public final class Workspace {
   /// status could not be read has no entry; one outside a repository has a status with
   /// `isRepository` false.
   public internal(set) var projectGit: [String: GitStatus] = [:]
+  /// The current project's own status, for the sidebar's badge. A worktree conversation's folder
+  /// not yet read has none, rather than its parent's branch and changes.
+  public var projectBadge: GitStatus? { project.isEmpty ? nil : projectGit[project] }
   /// Start the next new conversation in its own Muse-created Git worktree.
   public var startInWorktree = false
   /// Bumped when Ask Muse adds to the draft, so the composer takes keyboard focus.
@@ -155,6 +163,9 @@ public final class Workspace {
     if let sequence {
       // A newer read of every project, for newer recent projects, already replaced this one.
       guard sequence == projectGitSequence else { return }
+      // The current project chosen during this read has its own read; keep what that one found.
+      var found = found
+      if !project.isEmpty, !paths.contains(project) { found[project] = projectGit[project] }
       projectGit = found
     } else {
       for path in paths { projectGit[path] = found[path] }
