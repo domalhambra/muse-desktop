@@ -34,6 +34,8 @@ struct RootView: View {
 struct MainView: View {
   let controller: AppController
   @Bindable var workspace: Workspace
+  /// Remembered between launches. Electron starts with its inspector closed each time.
+  @AppStorage("inspectorShown") private var inspectorShown = false
 
   var body: some View {
     NavigationSplitView {
@@ -41,6 +43,20 @@ struct MainView: View {
         .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 420)
     } detail: {
       ConversationView(controller: controller, workspace: workspace)
+        .inspector(isPresented: $inspectorShown) {
+          InspectorView(controller: controller, workspace: workspace, inspector: workspace.inspector)
+            .inspectorColumnWidth(min: 280, ideal: 340, max: 560)
+        }
+        .toolbar {
+          ToolbarItem(placement: .primaryAction) {
+            Button {
+              inspectorShown.toggle()
+            } label: {
+              Label("Toggle project inspector", systemImage: "sidebar.trailing")
+            }
+            .help(inspectorShown ? "Hide the project inspector (⌥⌘I)" : "Show the project inspector (⌥⌘I)")
+          }
+        }
     }
     .alert(
       "Muse",

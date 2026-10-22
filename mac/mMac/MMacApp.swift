@@ -18,6 +18,9 @@ struct MMacApp: App {
       CommandGroup(replacing: .newItem) {
         FileCommands(controller: delegate.controller)
       }
+      CommandGroup(after: .sidebar) {
+        InspectorCommand()
+      }
     }
   }
 }
@@ -40,6 +43,16 @@ private struct FileCommands: View {
     }
     .keyboardShortcut("o")
     .disabled(controller.workspace == nil)
+  }
+}
+
+/// View → Show Inspector. It shares the stored choice with the toolbar button.
+private struct InspectorCommand: View {
+  @AppStorage("inspectorShown") private var inspectorShown = false
+
+  var body: some View {
+    Button(inspectorShown ? "Hide Inspector" : "Show Inspector") { inspectorShown.toggle() }
+      .keyboardShortcut("i", modifiers: [.command, .option])
   }
 }
 
