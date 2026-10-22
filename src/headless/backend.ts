@@ -20,8 +20,8 @@ import {
 } from '../main/git'
 import type { MuseHost } from '../main/muse-host'
 import { readPreferences, writePreferences } from '../main/preferences'
-import { projectRoot, worktreeParent } from '../shared/worktree'
 import { mergeWorktree, removeWorktree } from '../main/worktrees'
+import { projectRoot, worktreeParent } from '../shared/worktree'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
 // mMac's backend methods and the state they share. src/headless/server.ts owns

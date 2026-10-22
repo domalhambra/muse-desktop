@@ -335,9 +335,10 @@ describe('headless backend, M1 methods', () => {
 /** A Git repository with one commit of `a.txt`. Git's global config is kept out. */
 async function repository(name = 'repo') {
   const path = await folder(name)
-  const git = (...args: string[]) =>
+  const git = (...args: string[]) => gitIn(path, ...args)
+  const gitIn = (cwd: string, ...args: string[]) =>
     execFileSync('git', args, {
-      cwd: path,
+      cwd,
       stdio: 'pipe',
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null' },
     }).toString()
@@ -348,10 +349,18 @@ async function repository(name = 'repo') {
   await writeFile(join(path, 'a.txt'), 'one\ntwo\nthree\n' + 'x\n'.repeat(20) + 'ten\neleven\n')
   git('add', '.')
   git('commit', '-q', '-m', 'first')
-  return { path, git }
+  return { path, git, gitIn }
 }
 
 describe('headless backend, M2 inspector methods', () => {
+  // The backend's own git calls inherit this environment, so keep global config out of them.
+  beforeEach(() => {
+    vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   it('reads Git status and a diff for a known project only', async () => {
     const { path } = await repository()
     await writeFile(join(path, 'b.txt'), 'new\n')
@@ -388,7 +397,9 @@ describe('headless backend, M2 inspector methods', () => {
     const { call, start } = harness()
     await start()
     await call('add-project', path)
+    const before = await readFile(join(path, 'a.txt'), 'utf8')
     await expect(call('git-revert-hunk', path, 'a.txt', -1)).rejects.toThrow()
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).toBe(before)
     await call('git-revert-hunk', path, 'a.txt', 0)
     const afterHunk = await readFile(join(path, 'a.txt'), 'utf8')
     expect(afterHunk).toContain('two\n')
@@ -415,7 +426,10 @@ describe('headless backend, M2 inspector methods', () => {
       { name: 'app.ts', path: 'src/app.ts', directory: false },
     ])
     expect(await call('read-file', path, 'src/app.ts')).toBe('export {}\n')
-    await expect(call('read-file', path, '../outside.txt')).rejects.toThrow()
+    await writeFile(join(dir, 'outside.txt'), 'secret\n')
+    await expect(call('read-file', path, '../outside.txt')).rejects.toThrow(
+      'This path is outside the selected project.',
+    )
     await expect(call('files', path, '..')).rejects.toThrow(
       'This path is outside the selected project.',
     )
@@ -433,15 +447,12 @@ describe('headless backend, M2 inspector methods', () => {
   })
 
   it('merges and removes only Muse worktrees, and keeps a busy one', async () => {
-    const { path, git } = await repository()
+    const { path, git, gitIn } = await repository()
     const worktree = join(path, '.muse', 'worktrees', 'w1')
     git('worktree', 'add', '-q', '-b', 'muse/w1', worktree)
     await writeFile(join(worktree, 'c.txt'), 'from the worktree\n')
-    execFileSync('git', ['add', '.'], { cwd: worktree })
-    execFileSync('git', ['commit', '-q', '-m', 'worktree work'], {
-      cwd: worktree,
-      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' },
-    })
+    gitIn(worktree, 'add', '.')
+    gitIn(worktree, 'commit', '-q', '-m', 'worktree work')
     let status = 'running'
     const muse = fakeMuse({
       listWorktrees: vi.fn(async () => [
@@ -456,6 +467,14 @@ describe('headless backend, M2 inspector methods', () => {
     await expect(call('worktree-merge', path, path)).rejects.toThrow(
       'Only worktrees Muse created in this project can be changed here.',
     )
+    // Uncommitted work in the worktree blocks the merge and changes nothing.
+    await writeFile(join(worktree, 'd.txt'), 'not committed\n')
+    expect(await call('worktree-merge', path, worktree)).toEqual({
+      ok: false,
+      output: 'The worktree has uncommitted changes. Commit them on muse/w1 first, or ask Muse to.',
+    })
+    expect(git('log', '--oneline')).not.toContain('worktree work')
+    await rm(join(worktree, 'd.txt'))
     expect(await call('worktree-merge', path, worktree)).toEqual({
       ok: true,
       output: expect.any(String),
