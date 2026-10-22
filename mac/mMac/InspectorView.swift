@@ -21,7 +21,7 @@ struct InspectorView: View {
       Group {
         switch inspector.tab {
         case .changes: ChangesView(workspace: workspace, inspector: inspector)
-        case .files: Text("Files").frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .files: FilesView(controller: controller, workspace: workspace, inspector: inspector)
         case .activity: ActivityView(entries: entries)
         }
       }
