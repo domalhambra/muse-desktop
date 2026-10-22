@@ -140,21 +140,28 @@ extension Workspace {
     }
   }
 
+  /// Saves preference fields. The backend's reply, and its `preferences` event, carry the whole set.
+  @discardableResult
+  public func save(_ patch: PreferencesPatch) async -> Bool {
+    do {
+      preferences = try await client.preferences(patch)
+      return true
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
+    }
+  }
+
   /// Saves the reasoning effort, which every later message uses.
   public func chooseEffort(_ effort: String) async {
-    await run { self.preferences = try await self.client.preferences(PreferencesPatch(reasoningEffort: effort)) }
+    await save(PreferencesPatch(reasoningEffort: effort))
   }
 
   /// Saves a custom Muse Code path (empty for automatic detection), then reconnects.
   public func setCLIPath(_ path: String) async {
     // Electron trims the field before saving it.
     let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-    do {
-      preferences = try await client.preferences(PreferencesPatch(cliPath: trimmed))
-    } catch {
-      errorMessage = error.localizedDescription
-      return
-    }
+    guard await save(PreferencesPatch(cliPath: trimmed)) else { return }
     await reconnect()
   }
 
