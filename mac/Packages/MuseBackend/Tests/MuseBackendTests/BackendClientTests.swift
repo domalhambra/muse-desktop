@@ -187,3 +187,28 @@ private func waitFor(_ condition: () -> Bool) async throws {
   backend.push(#"{"id":2,"ok":true,"value":{"sessions":[],"nextCursor":null}}"#)
   #expect(try await next.value.sessions.isEmpty)
 }
+
+@Test(.timeLimit(.minutes(1))) func forceStopStopsTheTransportAndFailsWaitingRequests() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let waiting = Task { try await client.request("sessions") }
+  try await waitFor { backend.messages.contains { $0["method"] == "sessions" } }
+  client.forceStop()
+  #expect(backend.forceStopped)
+  await #expect(throws: BackendError.stopped) { try await waiting.value }
+}
+
+@Test(.timeLimit(.minutes(1))) func aRequestCancelledBeforeItStartsSendsNothing() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let task = Task {
+    // Wait for the cancel below before the request starts.
+    while !Task.isCancelled { await Task.yield() }
+    return try await client.request("sessions")
+  }
+  task.cancel()
+  await #expect(throws: CancellationError.self) { try await task.value }
+  #expect(backend.messages.isEmpty)
+}

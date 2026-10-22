@@ -28,14 +28,20 @@ private func shell(_ script: String) -> Process {
   return process
 }
 
-@Test(.timeLimit(.minutes(1))) func outputGivesUpOnAShellThatIgnoresSIGTERM() {
+@Test(.timeLimit(.minutes(1))) func outputGivesUpOnAShellThatIgnoresSIGTERM() async {
   // An interactive login shell ignores SIGTERM, so the deadline must use SIGKILL.
   let start = ContinuousClock.now
-  #expect(Launcher.output(of: shell(#"trap "" TERM; while :; do sleep 1; done"#), timeout: 1) == nil)
+  #expect(await Launcher.output(of: shell(#"trap "" TERM; while :; do sleep 1; done"#), timeout: 1) == nil)
   #expect(ContinuousClock.now - start < .seconds(3))
 }
 
-@Test(.timeLimit(.minutes(1))) func outputReturnsWhatAShellPrintedWhenAChildHoldsItsStdout() {
+@Test(.timeLimit(.minutes(1))) func outputReturnsWhatAShellPrintedWhenAChildHoldsItsStdout() async {
   // A daemon started from a shell's start-up files can keep stdout open after the shell exits.
-  #expect(Launcher.output(of: shell("printf done; sleep 2 &"), timeout: 1) == Data("done".utf8))
+  #expect(await Launcher.output(of: shell("printf done; sleep 2 &"), timeout: 1) == Data("done".utf8))
+}
+
+@Test(.timeLimit(.minutes(1))) func outputReturnsAtEOFWithoutWaitingForTheDeadline() async {
+  let start = ContinuousClock.now
+  #expect(await Launcher.output(of: shell("printf quick"), timeout: 5) == Data("quick".utf8))
+  #expect(ContinuousClock.now - start < .seconds(2))
 }

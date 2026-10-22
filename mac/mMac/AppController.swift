@@ -45,9 +45,8 @@ final class AppController {
     do {
       let repository = try Self.repository()
       let arguments = Self.backendArguments()
-      let transport = try await Task.detached {
-        try Launcher.launch(repository: repository, arguments: arguments)
-      }.value
+      // A nonisolated async function, so it runs off the main actor.
+      let transport = try await Launcher.launch(repository: repository, arguments: arguments)
       launched = transport
       self.transport = transport
       // Asks are tied to this backend's generation: one that arrives after the queue was
@@ -139,12 +138,9 @@ final class AppController {
     workspace = nil
   }
 
-  /// The backend's last stderr output. stderr is read on its own queue, so the last lines of a
-  /// crash can land just after stdout ends; a short pause lets them in.
+  /// The backend's last stderr output, once stderr has ended.
   private static func errorOutput(of transport: ProcessTransport?) async -> String {
-    guard let transport else { return "" }
-    try? await Task.sleep(for: .milliseconds(250))
-    return transport.recentErrorOutput
+    await transport?.errorOutput() ?? ""
   }
 
   /// Shows an Ask from the backend of `generation`, opening the window first if it is closed,
