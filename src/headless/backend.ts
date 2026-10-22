@@ -35,6 +35,7 @@ import type { MuseHost } from '../main/muse-host'
 import { readPreferences, writePreferences } from '../main/preferences'
 import { mergeWorktree, removeWorktree } from '../main/worktrees'
 import { projectRoot, worktreeParent } from '../shared/worktree'
+import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
 import { Bridges, type BridgeFactories } from './bridges'
 import { openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
@@ -392,12 +393,12 @@ export function createBackend({
     const file = pathSchema.parse(path)
     const at = z.number().int().min(0).parse(index)
     const text = z.string().max(5_000_000).optional().parse(expected)
-    // mMac sends the hunk it showed. An outside edit may have moved the hunks since.
-    if (text !== undefined && splitHunks(await getRawDiff(root, file)).hunks[at] !== text)
-      throw new Error(
-        'The file changed since this diff was read. Refresh the diff, then try again.',
-      )
-    return revertHunk(root, file, at)
+    if (text === undefined) return revertHunk(root, file, at)
+    // mMac sends the hunk it showed. An outside edit may have moved the hunks since, so check
+    // first, then reverse that exact text: git refuses it if the file changes in between.
+    const { header, hunks } = splitHunks(await getRawDiff(root, file))
+    if (hunks[at] !== text) throw new Error(STALE_HUNK)
+    return revertExpectedHunk(root, header, text)
   })
 
   method('git-stage-file', async (project, path) =>

@@ -81,9 +81,10 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
 function harness(
   muse: Muse = fakeMuse(),
   answers: number[] = [],
-  options: { askStartsQuit?: boolean } = {},
+  options: { askStartsQuit?: boolean; dataFolder?: string } = {},
 ) {
   const asks: Ask[] = []
+  const dataFolder = join(dir, options.dataFolder ?? 'data')
   const events: AppEvent[] = []
   const terminal: string[] = []
   const bridgeLog: string[] = []
@@ -134,7 +135,7 @@ function harness(
   }
   const start = async () => {
     await call('hello', HEADLESS_PROTOCOL)
-    await call('start', { dataFolder: join(dir, 'data') })
+    await call('start', { dataFolder })
   }
   const lastPreferences = () =>
     events.filter((event) => event.type === 'preferences').at(-1) as
@@ -150,7 +151,7 @@ function harness(
     lastPreferences,
     backend,
     /** The file the backend saves preferences in. */
-    preferencesFile: join(dir, 'data', 'preferences.json'),
+    preferencesFile: join(dataFolder, 'preferences.json'),
     /** The policy the backend gave the agent factory in start. */
     agentPolicy: () => {
       const policy = policies.at(-1)
@@ -404,7 +405,7 @@ describe('headless backend, M1 methods', () => {
     expect(muse.connect).toHaveBeenCalledWith('/opt/muse')
 
     // A quit that starts while the Ask shows: the answer comes back, but connect must stop.
-    const quitting = harness(muse, [], { askStartsQuit: true })
+    const quitting = harness(muse, [], { askStartsQuit: true, dataFolder: 'data-quit' })
     await quitting.start()
     vi.mocked(muse.connect).mockClear()
     await expect(quitting.call('connect')).rejects.toThrow('The backend is quitting.')
@@ -461,6 +462,26 @@ async function repository(name = 'repo') {
   git('commit', '-q', '-m', 'first')
   return { path, git, gitIn }
 }
+
+/** `git diff` of a CRLF a.txt with two hunks, as git prints it. Byte-exact: the \r stay. Task 8's Swift test reads the same bytes from mac/Packages/MuseKit/Tests/MuseKitTests/Fixtures/crlf-two-hunks.diff. */
+const CRLF_TWO_HUNKS_DIFF =
+  'diff --git a/a.txt b/a.txt\n' +
+  'index f68ba2a..f952615 100644\n' +
+  '--- a/a.txt\n' +
+  '+++ b/a.txt\n' +
+  '@@ -1,5 +1,5 @@\n' +
+  ' one\r\n' +
+  '-two\r\n' +
+  '+TWO\r\n' +
+  ' three\r\n' +
+  ' x\r\n' +
+  ' x\r\n' +
+  '@@ -22,4 +22,5 @@ x\n' +
+  ' x\r\n' +
+  ' x\r\n' +
+  ' ten\r\n' +
+  '+ten and a half\r\n' +
+  ' eleven\r\n'
 
 describe('headless backend, M2 inspector methods', () => {
   // The backend's own git calls inherit this environment, so keep global config out of them.
@@ -549,6 +570,51 @@ describe('headless backend, M2 inspector methods', () => {
     expect(await readFile(join(path, 'a.txt'), 'utf8')).toContain('two\n')
     await call('git-revert-hunk', path, 'a.txt', 0)
     expect(await readFile(join(path, 'a.txt'), 'utf8')).not.toContain('ten and a half')
+  })
+
+  it('refuses an out-of-range index when it is sent with hunk text', async () => {
+    const { path } = await repositoryWithTwoHunks()
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    const before = await readFile(join(path, 'a.txt'), 'utf8')
+    await expect(call('git-revert-hunk', path, 'a.txt', 5, 'anything')).rejects.toThrow(
+      'The file changed since this diff was read. Refresh the diff, then try again.',
+    )
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).toBe(before)
+  })
+
+  it('reverts the first hunk of a CRLF file from the exact text splitHunks gives', async () => {
+    const { path, git } = await repository()
+    const crlf = (text: string) => text.replace(/\n/g, '\r\n')
+    await writeFile(
+      join(path, 'a.txt'),
+      crlf('one\ntwo\nthree\n' + 'x\n'.repeat(20) + 'ten\neleven\n'),
+    )
+    git('add', '.')
+    git('commit', '-q', '-m', 'crlf')
+    await writeFile(join(path, 'a.txt'), crlf(twoHunks))
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    const raw = (await call('git-raw-diff', path, 'a.txt')) as string
+    expect(raw).toBe(CRLF_TWO_HUNKS_DIFF)
+    // The Swift tests read this file, so it must be the same bytes.
+    expect(
+      await readFile(
+        new URL(
+          '../../mac/Packages/MuseKit/Tests/MuseKitTests/Fixtures/crlf-two-hunks.diff',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ).toBe(CRLF_TWO_HUNKS_DIFF)
+    const { hunks } = splitHunks(raw)
+    expect(hunks).toHaveLength(2)
+    await call('git-revert-hunk', path, 'a.txt', 0, hunks[0])
+    const after = await readFile(join(path, 'a.txt'), 'utf8')
+    expect(after).toContain('two\r\n')
+    expect(after).toContain('ten and a half\r\n')
   })
 
   it('lists files and reads one, inside the project only', async () => {

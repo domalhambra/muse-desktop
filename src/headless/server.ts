@@ -18,7 +18,15 @@ console.dir = (value: unknown) => console.error(value)
 
 // mMac passes the login shell's environment and names the real shell in MMAC_LOGIN_SHELL.
 // discoverCli would start the login shell again; the stub answers from this environment.
-if (process.env.MMAC_LOGIN_SHELL) process.env.SHELL = loginEnvShell()
+if (process.env.MMAC_LOGIN_SHELL) {
+  try {
+    process.env.SHELL = loginEnvShell()
+  } catch (error) {
+    // One clean line for mMac to show, not a stack trace.
+    console.error(messageOf(error))
+    process.exit(1)
+  }
+}
 
 const { version } = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
