@@ -53,3 +53,35 @@ private func shell(_ script: String) throws -> ProcessTransport {
   for await _ in transport.lines {}
   #expect(throws: (any Error).self) { try transport.send(Data("late".utf8)) }
 }
+
+@Test(.timeLimit(.minutes(1))) func theTransportKeepsTheChildsLastErrorOutput() async throws {
+  let transport = try shell(#"echo "first problem" >&2; echo "second problem" >&2; echo done"#)
+  var lines = transport.lines.makeAsyncIterator()
+  #expect(await lines.next() == Data("done".utf8))
+  #expect(await lines.next() == nil)
+  // stderr can lag stdout a little.
+  let deadline = ContinuousClock.now + .seconds(5)
+  while !transport.recentErrorOutput.contains("second problem"), ContinuousClock.now < deadline {
+    try await Task.sleep(for: .milliseconds(20))
+  }
+  #expect(transport.recentErrorOutput.contains("first problem"))
+  #expect(transport.recentErrorOutput.hasSuffix("second problem"))
+}
+
+@Test func theErrorTailStaysBoundedAndCopiesItsBuffer() {
+  let tail = ErrorTail()
+  let chunk = Data(repeating: UInt8(ascii: "x"), count: 1000)
+  for _ in 0..<100 { tail.append(chunk) }
+  #expect(tail.text.utf8.count <= 4000)
+  // A buffer that only moved its start would keep every byte ever written.
+  #expect(tail.bufferStartIndex == 0)
+}
+
+@Test func theErrorTailNeverStartsMidCharacter() {
+  let tail = ErrorTail()
+  // 6,001 bytes: keeping the last 4,000 cuts an "é" after its first byte.
+  tail.append(Data((String(repeating: "é", count: 3000) + "z").utf8))
+  #expect(!tail.text.contains("\u{FFFD}"))
+  #expect(tail.text.hasPrefix("é"))
+  #expect(tail.text.hasSuffix("z"))
+}

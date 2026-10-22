@@ -6,6 +6,8 @@ options:
 packages:
   MuseBackend:
     path: Packages/MuseBackend
+  MuseKit:
+    path: Packages/MuseKit
 targets:
   mMac:
     type: application
@@ -13,6 +15,7 @@ targets:
     sources: [mMac]
     dependencies:
       - package: MuseBackend
+      - package: MuseKit
     info:
       path: mMac/Info.plist
       properties:
@@ -21,7 +24,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.developer-tools
-        # The checkout mMac starts the backend from. M0 runs from the repo only.
+        # The checkout this build came from. A checkout chosen in the app (the MMacRepository user default) wins.
         MMacRepository: $(SRCROOT)/..
     settings:
       base:
@@ -33,8 +36,28 @@ targets:
         CODE_SIGN_IDENTITY: '-'
         CODE_SIGN_STYLE: Manual
         ENABLE_HARDENED_RUNTIME: NO
+  mMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [mMacUITests]
+    dependencies:
+      - target: mMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.domalhambra.mmac.uitests
+        SWIFT_VERSION: '6.0'
+        CODE_SIGN_IDENTITY: '-'
+        CODE_SIGN_STYLE: Manual
+        TEST_TARGET_NAME: mMac
+        # A test bundle has no Info.plist of its own; Xcode writes one.
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   mMac:
     build:
       targets:
         mMac: all
+        mMacUITests: [test]
+    test:
+      targets: [mMacUITests]
+      # UI tests drive the real desktop. Recordings would capture whatever else is on screen.
+      captureScreenshotsAutomatically: false

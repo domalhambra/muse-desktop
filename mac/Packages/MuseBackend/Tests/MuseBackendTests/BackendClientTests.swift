@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import MuseBackendTesting
 @testable import MuseBackend
 
 private let viewJSON = #"""
@@ -34,7 +35,7 @@ private let viewJSON = #"""
   backend.push(#"{"event":{"type":"connection","status":{"state":"ready","version":"1.4.11"}}}"#)
   backend.push(#"{"event":{"type":"session","view":\#(viewJSON)}}"#)
   backend.push(#"{"event":{"type":"sessions-changed"}}"#)
-  backend.push(#"{"event":{"type":"preferences","preferences":{}}}"#)
+  backend.push(#"{"event":{"type":"menu","action":"new"}}"#)
   backend.push(#"{"event":{"type":"error","message":"Could not read a Muse update."}}"#)
   var received: [AppEvent] = []
   for await event in client.events {
@@ -45,7 +46,7 @@ private let viewJSON = #"""
   guard case .session(let view) = received[1] else { Issue.record("Expected a session event"); return }
   #expect(view.items.first?.text == "Hello")
   #expect(received[2] == .sessionsChanged)
-  #expect(received[3] == .other("preferences"))
+  #expect(received[3] == .other("menu"))
   #expect(received[4] == .error("Could not read a Muse update."))
 }
 
@@ -164,4 +165,25 @@ private func waitFor(_ condition: () -> Bool) async throws {
   var splitter = LineSplitter()
   #expect(splitter.append(Data(#"{"a":1}"#.utf8) + Data([0x0A]) + Data(#"{"b""#.utf8)) == [Data(#"{"a":1}"#.utf8)])
   #expect(splitter.append(Data(#":2}"#.utf8) + Data([0x0A])) == [Data(#"{"b":2}"#.utf8)])
+}
+
+@Test(.timeLimit(.minutes(1))) func aCancelledRequestStopsWaitingAndIgnoresItsLateReply() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let waiting = Task { try await client.sessions() }
+  while backend.messages.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+  waiting.cancel()
+  // The Reply to the cancelled request arrives a second later and must be ignored. If
+  // cancelling stopped nothing, this Reply ends the wait, and the expectation fails, not hangs.
+  let late = Task.detached {
+    try await Task.sleep(for: .seconds(1))
+    backend.push(#"{"id":1,"ok":true,"value":{"sessions":[],"nextCursor":null}}"#)
+  }
+  await #expect(throws: CancellationError.self) { _ = try await waiting.value }
+  try await late.value
+  let next = Task { try await client.sessions() }
+  while backend.messages.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+  backend.push(#"{"id":2,"ok":true,"value":{"sessions":[],"nextCursor":null}}"#)
+  #expect(try await next.value.sessions.isEmpty)
 }

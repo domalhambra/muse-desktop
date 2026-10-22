@@ -12,7 +12,7 @@ function names(file: string, pattern: RegExp) {
 }
 
 const electron = names('src/main/index.ts', /\bhandle\('([^']+)'/g)
-const headless = names('src/headless/server.ts', /\bmethod\('([^']+)'/g)
+const headless = names('src/headless/backend.ts', /\bmethod\('([^']+)'/g)
 const preload = names('src/preload/index.ts', /\binvoke\('([^']+)'/g)
 
 const electronOnly: Record<string, string> = {
@@ -41,7 +41,6 @@ const headlessOnly: Record<string, string> = {
 const notYet = [
   'voice',
   'cancel-voice',
-  'preferences',
   'mcp-list',
   'mcp-add',
   'mcp-enabled',
@@ -53,12 +52,6 @@ const notYet = [
   'worktree-merge',
   'worktree-remove',
   'compact',
-  'rename',
-  'models',
-  'set-model',
-  'approve',
-  'answer',
-  'cancel-question',
   'attachments',
   'remove-attachment',
   'git-status',
@@ -72,7 +65,6 @@ const notYet = [
   'terminal',
   'cli-terminal',
   'export',
-  'output',
 ]
 
 function duplicates(list: string[]) {
@@ -82,7 +74,7 @@ function duplicates(list: string[]) {
 describe('headless method parity', () => {
   it('finds both front doors', () => {
     expect(electron).toHaveLength(53)
-    expect(headless).toHaveLength(10)
+    expect(headless).toHaveLength(18)
   })
 
   it('finds every Electron channel the preload calls', () => {
@@ -98,7 +90,7 @@ describe('headless method parity', () => {
     )
     expect(
       missing,
-      'Port it in src/headless/server.ts, or add it to electronOnly with a reason, or to notYet',
+      'Port it in src/headless/backend.ts, or add it to electronOnly with a reason, or to notYet',
     ).toEqual([])
   })
 

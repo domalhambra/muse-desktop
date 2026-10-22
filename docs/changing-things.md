@@ -66,22 +66,27 @@ Back up both files before you test either feature against your real Muse. The te
 
 ## Change mMac or its backend
 
-- Edit: `src/headless/server.ts` for a backend method, `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift side and `mac/mMac/` for the UI.
-- Test: `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts` and the Swift tests in `mac/Packages/MuseBackend/Tests/`, which `swift test` runs.
-- Prove: `npm run test:headless`, then the `xcodebuild` build in "Prove a change".
+- Edit: `src/headless/backend.ts` for a backend method (the process itself is `src/headless/server.ts`), `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift client, `mac/Packages/MuseKit/` for logic (Markdown, the transcript and sidebar rules, the `Workspace` store), and `mac/mMac/` for views.
+- Test: `tests/unit/headless-backend.test.ts`, `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts`, `swift test` for both packages (`mac/Packages/MuseBackend/Tests/` and `mac/Packages/MuseKit/Tests/`), and the UI tests in `mac/mMacUITests/`.
+- Prove: `npm run test:headless`, both `swift test` runs and the `xcodebuild test` run in "Prove a change".
 - Read first: `docs/superpowers/specs/2026-10-21-mac-app-design.md`.
+
+Electron's exact strings, call shapes and edge cases for each feature are in `docs/superpowers/plans/2026-10-21-mmac-m1-electron-survey.md`. Match them unless `docs/decisions.md` records a difference.
 
 To port a method from `src/main/index.ts`:
 
-1. Register it with `method('name', …)` in `src/headless/server.ts`.
-2. Delete it from `notYet` in `tests/unit/headless-parity.test.ts`.
-3. Add its typed call to `mac/Packages/MuseBackend/Sources/MuseBackend/Methods.swift`.
+1. Register it with `method('name', …)` in `src/headless/backend.ts`.
+2. Add a test in `tests/unit/headless-backend.test.ts` with the fake `MuseHost`.
+3. Delete it from `notYet` in `tests/unit/headless-parity.test.ts`.
+4. Add its typed call to `mac/Packages/MuseBackend/Sources/MuseBackend/Methods.swift`.
 
 When a message shape changes, raise `HEADLESS_PROTOCOL` in `src/headless/wire.ts` and `backendProtocol` in `mac/Packages/MuseBackend/Sources/MuseBackend/Messages.swift` together. The parity test fails when they differ.
 
+The UI tests' fake backend is `mac/Fixtures/fake-backend.mjs`. Keep its `protocol` equal to `HEADLESS_PROTOCOL`, and add to it when a UI test needs a backend behaviour the echo CLI cannot produce.
+
 To run mMac from the checkout, you need Xcode, XcodeGen (`brew install xcodegen`), Node 22.12 or newer on your login shell's PATH, and `muse`. Run `npm ci` once.
 
-1. Build mMac with the last command in "Prove a change".
+1. Build mMac with the `xcodebuild test` command in "Prove a change", or with `build` in place of `test`.
 2. Run `open .cache/mmac/Build/Products/Debug/mMac.app`.
 
 XcodeGen writes the Xcode project and its Info.plist from `mac/project.yml`. Do not edit or commit them.
@@ -89,6 +94,18 @@ XcodeGen writes the Xcode project and its Info.plist from `mac/project.yml`. Do 
 mMac starts the backend from the checkout it was built in, with `node --import tsx src/headless/server.ts`. `npm run headless` starts the same backend for a person or a smoke check. mMac does not use it, because npm prints a banner on stdout.
 
 mMac keeps its preferences in `~/Library/Application Support/mMac`. Set `MMAC_DATA_FOLDER` to use another folder.
+
+### Run the UI tests
+
+The UI tests drive the real desktop. Before you run them:
+
+- Turn on macOS Automation Mode once: run `automationmodetool enable-automationmode-without-authentication` in Terminal. Leave out `sudo`. With `sudo`, it asks for root's password.
+- Unlock the screen, and put no app full-screen in front.
+- Expect a prompt after a rebuild. The build is signed ad hoc, and the checkout is under `~/Documents`, so macOS can ask again whether mMac may use the Documents folder. The first run after a rebuild can need you at the keyboard.
+
+The scheme keeps screen capture off (`captureScreenshotsAutomatically: false` in `mac/project.yml`). Keep it off: a recording captures whatever else is on the screen.
+
+Every launch the UI tests make points `HOME`, `MUSE_HOME` and `XDG_*` at a temporary folder. Under that `HOME`, mMac finds Node through `/etc/paths`, which the login shell still reads, or through the fallback paths in `mac/Packages/MuseBackend/Sources/MuseBackend/Launcher.swift`. A Node that only nvm or fnm puts on your PATH is not found.
 
 ## Add an IPC method
 
@@ -122,11 +139,14 @@ MUSE_BIN="$(command -v muse)" npm run test:headless
 MUSE_BIN="$(command -v muse)" npm run test:e2e
 git checkout -- docs/screenshots
 swift test --package-path mac/Packages/MuseBackend --scratch-path .cache/swift
-(cd mac && xcodegen generate) && xcodebuild -project mac/mMac.xcodeproj -scheme mMac -configuration Debug -derivedDataPath .cache/mmac build
+swift test --package-path mac/Packages/MuseKit --scratch-path .cache/swift-kit
+(cd mac && xcodegen generate) && TEST_RUNNER_MUSE_BIN="$(command -v muse)" xcodebuild test -project mac/mMac.xcodeproj -scheme mMac -configuration Debug -derivedDataPath .cache/mmac -destination 'platform=macOS' -collect-test-diagnostics never
 ```
+
+`xcodebuild test` builds the app and runs the UI tests. It needs macOS Automation Mode, an unlocked screen and no full-screen app in front. See "Run the UI tests" above.
 
 The first e2e run on a new machine can time out while Playwright downloads Electron. Run it again.
 
 Until PR 4 merges, `tests/unit/bridge-files.test.ts` fails about one run in six. Run `npm test` again.
 
-Only the last command needs Xcode and XcodeGen. `swift test` needs only the Swift toolchain. Both write their build output to the gitignored .cache folder at the repo root.
+Only the last command needs Xcode and XcodeGen. `swift test` needs only the Swift toolchain. All three write their build output to the gitignored .cache folder at the repo root.

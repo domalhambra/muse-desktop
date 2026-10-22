@@ -16,8 +16,10 @@ Every document under `docs/`, with when to read it. The router is `CLAUDE.md` at
 | `release-readiness.md`                                        | You need what upstream verified for 0.2.0. Upstream's file.                                                                     |
 | `superpowers/plans/2026-10-20-discovery.md`                   | You need a Muse CLI fact behind the extensions, or a place where the build differs from the plan.                               |
 | `superpowers/specs/2026-10-20-documentation-layout-design.md` | You change how this repo is documented.                                                                                         |
-| `superpowers/specs/2026-10-21-mac-app-design.md`              | You work on mMac, the SwiftUI app in `mac/`, or its headless backend. Approved. M0 is built.                                    |
+| `superpowers/specs/2026-10-21-mac-app-design.md`              | You work on mMac, the SwiftUI app in `mac/`, or its headless backend. Approved. M0 and M1 are built.                            |
 | `superpowers/plans/2026-10-21-mmac-m0.md`                     | You check M0, mMac's spike: the headless backend, `MuseBackend` and a bare window. Built 2026-10-21. Ends with what M1 carries. |
+| `superpowers/plans/2026-10-21-mmac-m1.md`                     | You build or check M1, mMac's core loop. Built 2026-10-21. Ends with what M2 carries.                                           |
+| `superpowers/plans/2026-10-21-mmac-m1-electron-survey.md`     | You need Electron's exact strings, calls or edge cases for a mMac feature.                                                      |
 
 The extensions plan itself was attached to the cloud session's first message and was never committed. The discovery record holds every difference from it.
 

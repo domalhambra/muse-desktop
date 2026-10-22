@@ -2,9 +2,12 @@ import Foundation
 
 /// Finds Node and starts the backend from a checkout of the fork.
 public enum Launcher {
-  /// Starts `src/headless/server.ts` in `repository`. Blocks for up to 6 seconds while it reads
-  /// the login shell's PATH, so call it off the main actor.
-  public static func launch(repository: URL) throws -> ProcessTransport {
+  /// Starts the backend in `repository`: by default `src/headless/server.ts`, or other Node
+  /// `arguments` (the UI tests' fake backend). Blocks for up to 6 seconds while it reads the login
+  /// shell's PATH, so call it off the main actor.
+  public static func launch(
+    repository: URL, arguments: [String] = ProcessTransport.serverArguments
+  ) throws -> ProcessTransport {
     // Xcode's debug launches inject DYLD_ variables and NODE_OPTIONS, which Node must not inherit.
     var environment = ProcessInfo.processInfo.environment.filter {
       !$0.key.hasPrefix("DYLD_") && $0.key != "NODE_OPTIONS"
@@ -19,7 +22,8 @@ public enum Launcher {
         "mMac could not find Node on the PATH from your login shell. Install Node 22.12 or newer, "
           + "or check that your shell profile adds it to PATH, then restart mMac.")
     }
-    return try ProcessTransport(node: node, repository: repository, environment: environment)
+    return try ProcessTransport(
+      executable: node, arguments: arguments, directory: repository, environment: environment)
   }
 
   /// The login shell's PATH. An app opened from Finder gets a short PATH without Node or muse.
@@ -47,6 +51,7 @@ public enum Launcher {
     process.standardOutput = pipe
     do { try process.run() } catch {
       reader.end()
+      try? pipe.fileHandleForWriting.close()
       return nil
     }
     let reachedEOF = closed.wait(timeout: .now() + timeout) == .success

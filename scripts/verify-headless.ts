@@ -235,6 +235,34 @@ try {
   assert(listed.sessions.some((session) => session.sessionId === sessionId))
   console.log('PASS · The new conversation is in the session list')
 
+  // M1 methods against the real CLI. The echo provider has no models and no stored output.
+  // session/list can omit a live session's name just after a rename, so the rename shows in
+  // the pushed session event instead. The CLI trims the name and lowercases ASCII A-Z only.
+  const models = await backend.request('models', sessionId)
+  assert(Array.isArray(models), 'models should reply with a list')
+  await backend.request('rename', sessionId, '  mMac check  ')
+  await until(
+    () =>
+      backend.events.some(
+        (event) =>
+          event.type === 'session' && (event.view as SessionView).session.name === 'mmac check',
+      ),
+    'the new name in a session event',
+  )
+  const saved = (await backend.request('preferences', { reasoningEffort: 'low' })) as {
+    reasoningEffort: string
+  }
+  assert.equal(saved.reasoningEffort, 'low')
+  await assert.rejects(backend.request('preferences', { trustedProjects: [] }))
+  const replyItem = backend.events
+    .filter((event) => event.type === 'session')
+    .map((event) => event.view as SessionView)
+    .at(-1)
+    ?.items.find((item) => item.kind === 'agentMessage')?.itemId
+  assert(replyItem, 'the echo reply should have an item id')
+  await assert.rejects(backend.request('output', sessionId, replyItem), /no stored output/)
+  console.log('PASS · Rename, models, preferences and the stored-output error')
+
   // Only the trust Ask, before and after shutdown: an unexpected Ask must not be quietly confirmed.
   assert.equal(backend.asks.length, 1, 'Only the trust Ask was expected before shutdown.')
   backend.recordServes()

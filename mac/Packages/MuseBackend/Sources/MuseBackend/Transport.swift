@@ -19,11 +19,16 @@ public final class ProcessTransport: Transport, Sendable {
   private let process = Process()
   private let input = Pipe()
   private let stdout: PipeReader
+  private let errorReader: PipeReader
+  private let errorTail = ErrorTail()
+
+  /// The Node arguments that start mMac's backend.
+  public static let serverArguments = ["--import", "tsx", "src/headless/server.ts"]
 
   /// Starts `src/headless/server.ts` under `node`, in `repository`.
   public convenience init(node: URL, repository: URL, environment: [String: String]) throws {
     try self.init(
-      executable: node, arguments: ["--import", "tsx", "src/headless/server.ts"], directory: repository,
+      executable: node, arguments: Self.serverArguments, directory: repository,
       environment: environment)
   }
 
@@ -47,12 +52,26 @@ public final class ProcessTransport: Transport, Sendable {
     process.environment = environment
     process.standardInput = input
     process.standardOutput = output
-    process.standardError = FileHandle.standardError
+    let errors = Pipe()
+    let tail = errorTail
+    errorReader = PipeReader(
+      errors.fileHandleForReading,
+      received: { data in
+        // `write(_:)` raises an Objective-C exception on a closed pipe; this throws instead.
+        try? FileHandle.standardError.write(contentsOf: data)
+        tail.append(data)
+      },
+      ended: {})
+    process.standardError = errors
     do { try process.run() } catch {
       stdout.end()
+      errorReader.end()
       throw error
     }
   }
+
+  /// Up to the last 4,000 bytes the child wrote to stderr, trimmed.
+  public var recentErrorOutput: String { errorTail.text }
 
   public func send(_ line: Data) throws {
     try input.fileHandleForWriting.write(contentsOf: line + Data([0x0A]))
@@ -68,8 +87,10 @@ public final class ProcessTransport: Transport, Sendable {
   /// is gone, so the pipe may never reach EOF.
   public func forceStop() {
     let stdout = self.stdout
+    let errorReader = self.errorReader
     guard process.isRunning else {
       stdout.end()
+      errorReader.end()
       return
     }
     process.terminate()
@@ -77,13 +98,15 @@ public final class ProcessTransport: Transport, Sendable {
     DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
       if process.isRunning { kill(process.processIdentifier, SIGKILL) }
       stdout.end()
+      errorReader.end()
     }
   }
 }
 
 /// Reads a pipe on its background queue until EOF or `end()`, whichever comes first, then clears
 /// the handler, closes the read end and calls `ended` once. `received` and the close run under
-/// one lock, so a read never meets a closed handle.
+/// one lock, so a read never meets a closed handle. `received` and `ended` run while the lock is
+/// held, so they must not call `end()`.
 final class PipeReader: @unchecked Sendable {
   private let lock = NSLock()
   private let handle: FileHandle
@@ -115,5 +138,33 @@ final class PipeReader: @unchecked Sendable {
     handle.readabilityHandler = nil
     try? handle.close()
     ended()
+  }
+}
+
+/// The last bytes a child wrote to stderr, for the setup screen.
+final class ErrorTail: @unchecked Sendable {
+  private let lock = NSLock()
+  private var data = Data()
+  private let limit = 4000
+
+  func append(_ chunk: Data) {
+    lock.withLock {
+      data.append(chunk)
+      // A copy, not `removeFirst`: a slice keeps every byte it ever held.
+      if data.count > limit { data = Data(data.suffix(limit)) }
+    }
+  }
+
+  /// The buffer's first index, so a test can check that the buffer is a copy, not a slice.
+  var bufferStartIndex: Int { lock.withLock { data.startIndex } }
+
+  /// The kept bytes as text. A cut can fall inside a character, so the text starts after any
+  /// leading UTF-8 continuation bytes (0x80 to 0xBF), and never with U+FFFD.
+  var text: String {
+    lock.withLock {
+      let start = data.firstIndex { $0 & 0xC0 != 0x80 } ?? data.endIndex
+      return String(decoding: data[start...], as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
   }
 }
