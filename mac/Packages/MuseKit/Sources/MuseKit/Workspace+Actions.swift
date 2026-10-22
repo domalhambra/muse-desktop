@@ -5,15 +5,16 @@ import MuseBackend
 // src/renderer/src/App.tsx (submit, changeModel, rename) and Transcript.tsx (the cards).
 extension Workspace {
   /// Sends the draft. With no conversation open, it creates one in the current project first.
-  public func send() async -> SendOutcome {
-    let text = draft
+  public func send() async -> SendOutcome { await send(text: draft, from: draftKey) }
+
+  /// Sends `text`, written under the draft key `startKey`.
+  func send(text: String, from startKey: String) async -> SendOutcome {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !submitting else {
       return .notSent
     }
     if view == nil, project.isEmpty { return .needsProject }
     submitting = true
     defer { submitting = false }
-    let startKey = draftKey
     // Taken now, as Electron's submit takes them when called: startNew resets the mode.
     let (mode, effort) = (self.mode, self.effort)
     let worktree = startInWorktree && canStartInWorktree
@@ -58,7 +59,13 @@ extension Workspace {
       }
       // Clear the draft only where it still holds what was sent.
       for key in [startKey, sessionId] where drafts[key] == text { drafts[key] = nil }
-      try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode)
+      // Its own task: cancelling the caller must not stop the wait, or a rejection that comes
+      // later would leave the conversation shown as running.
+      let client = self.client
+      let request = Task {
+        try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode)
+      }
+      try await request.value
       return .sent
     } catch is CancellationError {
       // The caller stopped waiting, but the backend still finishes the request, so the message
@@ -80,16 +87,18 @@ extension Workspace {
   }
 
   /// Sends the draft in a new conversation in a folder chosen in the open panel, after `send()`
-  /// returned `.needsProject`. The draft moves to the new project, so it does not stay behind
-  /// under All projects. If the folder cannot be added, the draft stays where it was.
+  /// returned `.needsProject`. The draft moves to the new project, unless that project's new
+  /// composer already holds a draft, which is kept; the text is then sent from where it was
+  /// written. If the folder cannot be added, the draft stays where it was.
   public func send(addingProject folder: URL) async -> SendOutcome {
     let text = draft
     let startKey = draftKey
     guard await addProject(folder) else { return .notSent }
-    if draftKey != startKey {
-      drafts[draftKey] = text
-      drafts[startKey] = nil
+    guard draftKey != startKey, (drafts[draftKey] ?? "").isEmpty else {
+      return await send(text: text, from: startKey)
     }
+    drafts[draftKey] = text
+    drafts[startKey] = nil
     return await send()
   }
 

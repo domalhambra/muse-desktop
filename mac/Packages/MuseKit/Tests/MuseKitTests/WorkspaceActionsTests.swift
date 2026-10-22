@@ -408,7 +408,10 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   let sending = Task { await workspace.send() }
   try await eventually { backend.messages.contains { $0["method"] == "send" } }
   sending.cancel()
-  #expect(await sending.value == .notSent)
+  // The wait continues: the send request runs in its own task, so the backend's answer decides.
+  let id = try #require(lastId(backend, "send"))
+  backend.push(reply(id, "null"))
+  #expect(await sending.value == .sent)
   #expect(workspace.view?.items.last?.text == "hi")
   #expect(workspace.draft == "")
   #expect(workspace.errorMessage == nil)
@@ -478,4 +481,52 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   let (next, _) = await makeWorkspace(drafts: old.drafts, script: openScript())
   await next.open("s1")
   #expect(next.draft == "a long prompt")
+}
+
+// Task 9: the carried send fixes.
+
+@MainActor @Test func addingAProjectKeepsAnOlderDraftThere() async throws {
+  let (workspace, backend) = await makeWorkspace(
+    preferences: Preferences(recentProjects: []),
+    drafts: ["new:/chosen": "an older draft"]
+  ) { method, _, id in
+    switch method {
+    case "add-project": [reply(id, #""/chosen""#)]
+    case "create": [reply(id, viewJSON(sessionJSON("s1", root: "/chosen")))]
+    default: [reply(id, "null")]
+    }
+  }
+  #expect(workspace.project == "")
+  workspace.draft = "send this"
+  #expect(await workspace.send() == .needsProject)
+  #expect(await workspace.send(addingProject: URL(fileURLWithPath: "/chosen")) == .sent)
+  #expect(workspace.drafts["new:/chosen"] == "an older draft")
+  #expect(workspace.drafts["new:"] == nil)
+  #expect(requests(backend).last == [
+    "send", [["sessionId": "s1", "text": "send this", "attachments": [], "effort": "high", "mode": "queue"]],
+  ])
+}
+
+@MainActor @Test func aRejectedSendUndoesItselfAfterItsCallerWasCancelled() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1")))]
+    case "send": []
+    default: [reply(id, "null")]
+    }
+  }
+  await workspace.open("s1")
+  workspace.draft = "hello"
+  let sending = Task { await workspace.send() }
+  try await eventually { backend.messages.contains { $0["method"] == "send" } }
+  #expect(workspace.view?.session.status == "running")
+  sending.cancel()
+  let id = try #require(lastId(backend, "send"))
+  backend.push(failure(id, "Muse rejected the message."))
+  #expect(await sending.value == .notSent)
+  #expect(workspace.view?.session.status == "idle")
+  #expect(!(workspace.view?.items.contains { $0.itemId.hasPrefix("optimistic-") } ?? true))
+  #expect(workspace.draft == "hello")
+  #expect(workspace.errorMessage == "Muse rejected the message.")
+  #expect(!workspace.submitting)
 }
