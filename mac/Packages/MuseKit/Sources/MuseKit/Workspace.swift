@@ -43,8 +43,8 @@ public final class Workspace {
   public internal(set) var composerFocusRequest = 0
   /// The conversation open before a backend restart, opened again once history has loaded.
   private var reopenSessionId: String?
-  /// How many `begin()` calls are running. Each ends by reading every badge, so a `preferences`
-  /// event meanwhile (history loading saves the recent projects) does not read them too.
+  /// How many `begin()` calls have not yet reached their final read of every badge. A `preferences`
+  /// event meanwhile (history loading saves the recent projects) leaves the reading to that one.
   private var beginsRunning = 0
   public internal(set) var view: SessionView?
   /// The conversation being opened, for a spinner.
@@ -113,15 +113,18 @@ public final class Workspace {
   /// restart. Call it once `start` has replied; a later `ready` event calls it again.
   public func begin() async {
     guard status.isReady else { return }
-    beginsRunning += 1
-    defer { beginsRunning -= 1 }
-    await refreshSessions()
-    await loadModels()
-    if let reopen = reopenSessionId {
-      reopenSessionId = nil
-      // Not over a conversation the person opened, is opening, or is sending a first message to
-      // while history loaded.
-      if view == nil, openingSessionId == nil, !submitting { await open(reopen) }
+    do {
+      // Until the read below starts. A change during that read starts a newer one, which wins.
+      beginsRunning += 1
+      defer { beginsRunning -= 1 }
+      await refreshSessions()
+      await loadModels()
+      if let reopen = reopenSessionId {
+        reopenSessionId = nil
+        // Not over a conversation the person opened, is opening, or is sending a first message to
+        // while history loaded.
+        if view == nil, openingSessionId == nil, !submitting { await open(reopen) }
+      }
     }
     await refreshProjectGit()
   }

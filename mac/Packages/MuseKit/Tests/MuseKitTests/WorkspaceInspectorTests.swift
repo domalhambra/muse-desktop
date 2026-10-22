@@ -9,6 +9,14 @@ private func statusReads(_ backend: ScriptedBackend, _ path: JSONValue) -> Int {
   requests(backend).filter { $0 == ["git-status", [path]] }.count
 }
 
+/// Sends a badge read for `marker` from a task started now, and waits for it to arrive. A read an
+/// earlier event started is sent before it, so a count taken afterwards has had its chance.
+@MainActor
+private func settle(_ workspace: Workspace, _ backend: ScriptedBackend, marker: String) async throws {
+  Task { await workspace.refreshProjectGit([marker]) }
+  try await eventually { statusReads(backend, .string(marker)) == 1 }
+}
+
 /// The id of the first request for `method` with these arguments.
 private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONValue? = nil) -> Int? {
   let found = backend.messages.first { message in
@@ -114,13 +122,13 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   await workspace.open("s1")
   // running to running: a streamed update mid-turn.
   workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "running")))))
-  try await Task.sleep(for: .milliseconds(30))
+  try await settle(workspace, backend, marker: "/m1")
   #expect(statusReads(backend, "/p") == 0)
   workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
   try await eventually { statusReads(backend, "/p") == 1 }
   // idle to idle: a rename or a history update after the turn.
   workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
-  try await Task.sleep(for: .milliseconds(30))
+  try await settle(workspace, backend, marker: "/m2")
   #expect(statusReads(backend, "/p") == 1)
 }
 
@@ -135,7 +143,7 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   }
   await workspace.open("w1")
   workspace.apply(.session(try decodeView(viewJSON(sessionJSON("w1", root: root, status: "idle")))))
-  try await Task.sleep(for: .milliseconds(30))
+  try await settle(workspace, backend, marker: "/m1")
   #expect(statusReads(backend, .string(root)) == 0)
   #expect(workspace.projectGit[root] == nil)
 }
@@ -153,18 +161,45 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   let beginning = Task { await workspace.begin() }
   try await eventually { backend.messages.contains { $0["method"] == "sessions" } }
   workspace.apply(.preferences(Preferences(recentProjects: ["/p", "/new"])))
-  try await Task.sleep(for: .milliseconds(30))
-  #expect(!requests(backend).contains { $0.first == "git-status" })
+  try await settle(workspace, backend, marker: "/m1")
+  #expect(statusReads(backend, "/p") == 0)
+  #expect(statusReads(backend, "/new") == 0)
   let id = try #require(firstId(backend, "sessions"))
   backend.push(reply(id, #"{"sessions":[],"nextCursor":null}"#))
   await beginning.value
-  try await Task.sleep(for: .milliseconds(30))
+  #expect(workspace.projectGit.keys.sorted() == ["/new", "/p"])
+  try await settle(workspace, backend, marker: "/m2")
   #expect(statusReads(backend, "/p") == 1)
   #expect(statusReads(backend, "/new") == 1)
-  #expect(workspace.projectGit.keys.sorted() == ["/new", "/p"])
   // After begin, a change reads them again.
   workspace.apply(.preferences(Preferences(recentProjects: ["/p", "/new", "/later"])))
   try await eventually { statusReads(backend, "/later") == 1 }
+}
+
+@MainActor @Test func recentProjectsSavedDuringBeginsFinalReadAreReadAgain() async throws {
+  // begin's read of /p gets no answer until the test pushes one; the recent projects change meanwhile.
+  let reads = Counter()
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "sessions": return [reply(id, #"{"sessions":[],"nextCursor":null}"#)]
+    case "models": return [reply(id, "[]")]
+    case "git-status":
+      if args.first == "/p", reads.next() == 1 { return [] }
+      return [reply(id, statusJSON([]))]
+    default: return [reply(id, "[]")]
+    }
+  }
+  let beginning = Task { await workspace.begin() }
+  try await eventually { statusReads(backend, "/p") == 1 }
+  workspace.apply(.preferences(Preferences(recentProjects: ["/p", "/q"])))
+  try await eventually { statusReads(backend, "/q") == 1 }
+  try await eventually { workspace.projectGit.keys.sorted() == ["/p", "/q"] }
+  let id = try #require(firstId(backend, "git-status", ["/p"]))
+  backend.push(reply(id, statusJSON(["old"])))
+  await beginning.value
+  // The newer read wins by its sequence.
+  #expect(workspace.projectGit.keys.sorted() == ["/p", "/q"])
+  #expect(workspace.projectGit["/p"]?.changes.isEmpty == true)
 }
 
 @MainActor @Test func aSendDuringHistoryLoadIsNotHiddenByTheReopen() async throws {
