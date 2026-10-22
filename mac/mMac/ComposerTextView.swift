@@ -11,6 +11,8 @@ struct ComposerTextView: NSViewRepresentable {
   @Binding var height: CGFloat
   let placeholder: String
   var isEnabled = true
+  /// Bumped when the composer should take keyboard focus, with the cursor at the end.
+  var focusRequest = 0
   let onSubmit: () -> Void
 
   static let maxHeight: CGFloat = 200
@@ -59,6 +61,8 @@ struct ComposerTextView: NSViewRepresentable {
     scroll.autohidesScrollers = true
     scroll.documentView = textView
     context.coordinator.textView = textView
+    // A new composer does not grab focus for a request made before it existed.
+    context.coordinator.appliedFocusRequest = focusRequest
     apply(to: textView)
     context.coordinator.measureLater()
     return scroll
@@ -92,6 +96,15 @@ struct ComposerTextView: NSViewRepresentable {
       context.coordinator.measureLater()
     }
     apply(to: textView)
+    // Ask Muse adds to the draft and asks for focus, so the person can keep typing.
+    if context.coordinator.appliedFocusRequest != focusRequest {
+      context.coordinator.appliedFocusRequest = focusRequest
+      if let window = textView.window {
+        window.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        textView.scrollRangeToVisible(textView.selectedRange())
+      }
+    }
   }
 
   private func apply(to textView: ComposerNSTextView) {
@@ -115,6 +128,8 @@ struct ComposerTextView: NSViewRepresentable {
     /// The composer's own undo history, not the window's, so it can be cleared when the text
     /// is rewritten from code.
     let undo = UndoManager()
+    /// The last `focusRequest` acted on.
+    var appliedFocusRequest = 0
 
     init(_ parent: ComposerTextView) { self.parent = parent }
 
