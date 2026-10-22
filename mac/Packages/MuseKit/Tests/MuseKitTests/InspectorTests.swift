@@ -45,7 +45,33 @@ let worktreesJSON =
   #expect(inspector.mainBranch == "main")
   #expect(read == ["/p:1"])
   #expect(!inspector.loading)
-  #expect(requests(backend) == [["worktrees", ["/p"]], ["git-status", ["/p"]]])
+  // Sent side by side, so in either order.
+  #expect(requests(backend).count == 2)
+  #expect(requests(backend).contains(["worktrees", ["/p"]]))
+  #expect(requests(backend).contains(["git-status", ["/p"]]))
+}
+
+@MainActor @Test func refreshSendsBothReadsBeforeEitherReplies() async throws {
+  // Neither read is answered until the test pushes the replies, as Electron reads both at once.
+  let (inspector, backend) = await makeInspector()
+  let refreshing = Task { await inspector.refresh() }
+  try await eventually { backend.messages.count == 2 }
+  #expect(requests(backend).count == 2)
+  #expect(requests(backend).contains(["worktrees", ["/p"]]))
+  #expect(requests(backend).contains(["git-status", ["/p"]]))
+  func id(_ method: JSONValue) throws -> Int {
+    guard case .number(let id)? = backend.messages.first(where: { $0["method"] == method })?["id"] else {
+      throw WorkspaceError("no \(method) request")
+    }
+    return Int(id)
+  }
+  // The status first: it waits for the worktrees before it shows.
+  backend.push(reply(try id("git-status"), statusJSON(["a.txt"])))
+  backend.push(reply(try id("worktrees"), worktreesJSON))
+  await refreshing.value
+  #expect(inspector.git?.changes.count == 1)
+  #expect(inspector.museWorktrees.map(\.path) == ["/p/.muse/worktrees/w1"])
+  #expect(!inspector.loading)
 }
 
 @MainActor @Test func aFailedWorktreeListGivesNoneAndAFailedStatusShows() async throws {
@@ -248,6 +274,8 @@ let worktreesJSON =
     if method == "git-status" { return [reply(id, statusJSON([], branch: args.first == "/q" ? "dev" : "main"))] }
     return [reply(id, "[]")]
   }
+  var read: [String] = []
+  inspector.statusRead = { path, _ in read.append(path) }
   inspector.tab = .files
   let old = Task { await inspector.refresh() }
   try await eventually { backend.messages.contains { $0["method"] == "worktrees" } }
@@ -264,9 +292,11 @@ let worktreesJSON =
   #expect(inspector.worktrees.isEmpty)
   #expect(inspector.git == nil)
   #expect(!inspector.loading)
-  #expect(!requests(backend).contains(["git-status", ["/p"]]))
+  // The first project's status went out beside its worktrees; its reply is dropped.
+  #expect(read.isEmpty)
   await inspector.refresh()
   #expect(inspector.git?.branch == "dev")
+  #expect(read == ["/q"])
 }
 
 @MainActor @Test func anActionAcrossAProjectChangeIsDropped() async throws {

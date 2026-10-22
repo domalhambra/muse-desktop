@@ -115,13 +115,18 @@ public final class Inspector {
     loading = true
     error = nil
     defer { if current() { loading = false } }
+    // Both reads go out at once, as Electron's `Promise.all`. The status shows after the worktrees.
+    let client = self.client
+    async let listReply = client.worktrees(project: project)
+    async let statusReply = client.gitStatus(project: project)
     // As Electron: a folder Muse cannot list worktrees for simply has none.
-    let list = (try? await client.worktrees(project: project)) ?? []
-    // A cancelled caller's `try?` gives an empty list; keep the worktrees shown instead.
+    let list = (try? await listReply) ?? []
+    // A cancelled caller's `try?` gives an empty list; keep the worktrees shown instead. Leaving
+    // here cancels the status read.
     guard current(), !Task.isCancelled else { return }
     worktrees = list
     do {
-      let status = try await client.gitStatus(project: project)
+      let status = try await statusReply
       guard current() else { return }
       git = status
       statusRead(project, status)
