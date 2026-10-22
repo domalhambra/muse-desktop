@@ -107,7 +107,7 @@ public struct ThemePalette: Equatable, Sendable {
   public let base: String
   /// The color stops of tokens.css's `--app-background` linear gradient. Muse's is
   /// `linear-gradient(125deg, #082968, #061b52 63%, #072e83)`: 125 degrees, the middle stop at 63%.
-  /// Moonlight has one stop, a solid color. Task 10 (`Theme.swift`) draws the angle and the glow.
+  /// Moonlight has one stop, a solid color. The app's `Theme.swift` draws the angle and the glow.
   public let backgroundStops: [String]
   /// Muse's radial glow over the gradient: `radial-gradient(ellipse at 95% 0%, #0758cd 0%, transparent 62%)`.
   public let glow: String?
