@@ -22,7 +22,7 @@ struct ConversationView: View {
         } else {
           ContentUnavailableView(
             "Start a conversation", systemImage: "bubble.left.and.bubble.right",
-            description: Text("Ask a question or describe what you want to build."))
+            description: Text("Ask a question or describe what you want to build.").foregroundStyle(.themeSecondary))
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -110,6 +110,7 @@ struct RenameSheet: View {
         Button("Cancel", action: close).keyboardShortcut(.cancelAction)
         Button("Save", action: save)
           .keyboardShortcut(.defaultAction)
+          .buttonStyle(.primary)
           .disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }
     }

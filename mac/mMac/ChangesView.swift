@@ -129,7 +129,7 @@ struct EmptyChanges: View {
       : git?.isRepository == true
         ? ("No changes", "Your working tree has no changes.")
         : ("No Git repository", "This folder isn’t a Git repository. Muse can still work with its files.")
-    ContentUnavailableView(title, systemImage: "checkmark", description: Text(text))
+    ContentUnavailableView(title, systemImage: "checkmark", description: Text(text).foregroundStyle(.themeSecondary))
   }
 }
 

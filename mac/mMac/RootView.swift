@@ -93,7 +93,7 @@ struct ProblemView<Actions: View>: View {
       ContentUnavailableView {
         Label(title, systemImage: "exclamationmark.triangle")
       } description: {
-        Text(message)
+        Text(message).foregroundStyle(.themeSecondary)
       } actions: {
         actions
       }

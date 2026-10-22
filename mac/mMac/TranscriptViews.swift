@@ -31,7 +31,7 @@ struct TranscriptView: View {
           if entries.isEmpty, view.approvals.isEmpty, view.questions.isEmpty, view.error == nil {
             ContentUnavailableView(
               "Start a conversation", systemImage: "bubble.left.and.bubble.right",
-              description: Text("Ask a question or describe what you want to build."))
+              description: Text("Ask a question or describe what you want to build.").foregroundStyle(.themeSecondary))
           }
           ForEach(entries) { entry in EntryView(entry: entry, workspace: workspace) }
           ForEach(view.approvals) { approval in ApprovalCard(approval: approval, workspace: workspace) }

@@ -16,6 +16,7 @@ struct FilesView: View {
         Label("Files", systemImage: "folder")
       } description: {
         Text("Choose a project to explore its files and bring context into a conversation.")
+          .foregroundStyle(.themeSecondary)
       } actions: {
         Button("Open project") { Task { await controller.openProject() } }
       }
@@ -156,7 +157,7 @@ struct FilesView: View {
     } else {
       ContentUnavailableView(
         "File preview", systemImage: "doc.text",
-        description: Text("Select a file to inspect its contents or reference it in chat."))
+        description: Text("Select a file to inspect its contents or reference it in chat.").foregroundStyle(.themeSecondary))
     }
   }
 }

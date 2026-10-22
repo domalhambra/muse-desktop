@@ -1,3 +1,4 @@
+import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
@@ -19,6 +20,7 @@ struct ComposerView: View {
       if workspace.isRunning { runningBar }
       ComposerTextView(
         text: $workspace.draft, height: $inputHeight, placeholder: placeholder,
+        placeholderColor: NSColor(appearance.colors.muted),
         isEnabled: workspace.openingSessionId == nil, focusRequest: workspace.composerFocusRequest,
         onSubmit: submit
       )

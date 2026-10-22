@@ -11,6 +11,9 @@ struct AppearancePane: View {
   /// does not snap back to the old value meanwhile. A save that succeeds has already put the
   /// value in the Workspace's preferences; one that fails shows the saved value again.
   @State private var pending = PreferencesPatch()
+  /// Counts each field's saves, so only the latest save of a field clears its pending value. An
+  /// older reply arriving later would otherwise show the saved value for a moment.
+  @State private var saves: [AnyHashable: Int] = [:]
 
   private var preferences: Preferences { settings.workspace.preferences }
 
@@ -49,14 +52,24 @@ struct AppearancePane: View {
   /// Shows `value` at once and saves it.
   private func save<Value: Equatable>(_ key: WritableKeyPath<PreferencesPatch, Value?>, _ value: Value) {
     pending[keyPath: key] = value
+    let save = begin(key)
     Task {
       var patch = PreferencesPatch()
       patch[keyPath: key] = value
       await settings.save(patch)
       // A later choice may still be saving; it clears its own.
-      if pending[keyPath: key] == value { pending[keyPath: key] = nil }
+      if isLatest(key, save) { pending[keyPath: key] = nil }
     }
   }
+
+  /// Starts a save of `key` and returns its number.
+  private func begin(_ key: AnyKeyPath) -> Int {
+    let number = (saves[key] ?? 0) + 1
+    saves[key] = number
+    return number
+  }
+
+  private func isLatest(_ key: AnyKeyPath, _ number: Int) -> Bool { saves[key] == number }
 
   private func binding<Value: Equatable>(_ key: WritableKeyPath<PreferencesPatch, Value?>, saved: Value) -> Binding<Value> {
     Binding(get: { pending[keyPath: key] ?? saved }, set: { save(key, $0) })
@@ -73,14 +86,21 @@ struct AppearancePane: View {
     Binding(
       get: { pending.notifyOnCompletion ?? preferences.notifyOnCompletion },
       set: { on in
+        let key = \PreferencesPatch.notifyOnCompletion
         pending.notifyOnCompletion = on
+        let save = begin(key)
         Task {
-          if on, !(await notifications.requestPermission()) {
-            if pending.notifyOnCompletion == on { pending.notifyOnCompletion = nil }
-            return
+          if on {
+            let granted = await notifications.requestPermission()
+            // Turned off again while macOS asked: that later choice has saved, so this one must not.
+            guard isLatest(key, save) else { return }
+            if !granted {
+              pending.notifyOnCompletion = nil
+              return
+            }
           }
           await settings.save(PreferencesPatch(notifyOnCompletion: on))
-          if pending.notifyOnCompletion == on { pending.notifyOnCompletion = nil }
+          if isLatest(key, save) { pending.notifyOnCompletion = nil }
         }
       })
   }

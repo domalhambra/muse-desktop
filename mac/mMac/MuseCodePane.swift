@@ -53,6 +53,7 @@ struct MuseCodePane: View {
           }
           Button("Save & reconnect") { Task { await settings.setCLIPath(path) } }
             .keyboardShortcut(.defaultAction)
+            .buttonStyle(.primary)
         }
       } footer: {
         Text("Leave empty to find Muse through your login shell and standard installation locations.")

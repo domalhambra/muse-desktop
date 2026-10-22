@@ -132,7 +132,7 @@ struct ActivityView: View {
     if entries.isEmpty {
       ContentUnavailableView(
         "No activity yet", systemImage: "terminal",
-        description: Text("Tool calls, file edits, and agent activity appear here."))
+        description: Text("Tool calls, file edits, and agent activity appear here.").foregroundStyle(.themeSecondary))
     } else {
       List(entries) { entry in
         HStack(alignment: .firstTextBaseline, spacing: 8) {
