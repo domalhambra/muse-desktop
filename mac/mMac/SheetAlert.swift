@@ -18,12 +18,17 @@ final class AlertToken {
 @MainActor
 enum SheetAlert {
   /// The window a new sheet attaches to: the front-most sheet of the main window, short of an
-  /// alert. With no window showing, waits up to `limit` for one, since an Ask reopens the window
-  /// first. Stops waiting when `token` is closed.
-  static func host(waitingUpTo limit: Duration = .zero, token: AlertToken? = nil) async -> NSWindow? {
+  /// alert. With `preferringKey`, the key window's comes first, so an open panel started in the
+  /// Settings window attaches there. With no window showing, waits up to `limit` for one, since
+  /// an Ask reopens the window first. Stops waiting when `token` is closed.
+  static func host(
+    waitingUpTo limit: Duration = .zero, token: AlertToken? = nil, preferringKey: Bool = false
+  ) async -> NSWindow? {
     let deadline = ContinuousClock.now + limit
     while true {
-      if let window = NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
+      if let window = (preferringKey ? keyRoot() : nil) ?? NSApp.mainWindow
+        ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain })
+      {
         var front = window
         // A sheet is itself a window, and can carry a sheet of its own. An alert's window is never
         // a host: an open panel must not attach to an Ask, nor an Ask to another Ask.
@@ -33,6 +38,15 @@ enum SheetAlert {
       if ContinuousClock.now >= deadline || token?.isClosed == true { return nil }
       try? await Task.sleep(for: .milliseconds(50))
     }
+  }
+
+  /// The window that holds the key window: the key window itself, or the window a key sheet is
+  /// attached to. Nil for a window without a title bar, such as a popover's, and for an alert.
+  private static func keyRoot() -> NSWindow? {
+    guard var window = NSApp.keyWindow else { return nil }
+    while let parent = window.sheetParent { window = parent }
+    guard window.isVisible, window.styleMask.contains(.titled), !isAlert(window) else { return nil }
+    return window
   }
 
   /// Whether `window` is an alert's window: one `present` is showing, or any other NSAlert, such
@@ -89,10 +103,11 @@ enum SheetAlert {
     return buttons.count - 1 - offset
   }
 
-  /// Runs an open panel as a sheet on the window, or on its own when no window shows.
+  /// Runs an open panel as a sheet on the window the person is using, the key one, or on its own
+  /// when no window shows.
   static func run(_ panel: NSOpenPanel) async -> URL? {
     let response =
-      if let window = await host() {
+      if let window = await host(preferringKey: true) {
         await panel.beginSheetModal(for: window)
       } else {
         await panel.begin()

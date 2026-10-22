@@ -39,6 +39,12 @@ struct MMacApp: App {
         InspectorCommand()
       }
     }
+    // mMac › Settings… (Command-comma). Its panes show only while a backend runs.
+    Settings {
+      SettingsView(controller: delegate.controller)
+        .defaultAppStorage(Self.appStorage)
+        .preferredColorScheme(.dark)
+    }
   }
 }
 

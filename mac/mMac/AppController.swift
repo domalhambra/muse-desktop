@@ -18,6 +18,13 @@ final class AppController {
 
   private(set) var phase: Phase = .starting
   private(set) var workspace: Workspace?
+  /// The Settings window's store for this Workspace. Made and dropped with it.
+  private(set) var settings: SettingsModel?
+  /// Read once: in memory mode every read of `BridgeTokenStores.app` makes a new, empty store, so
+  /// every `start` and every `SettingsModel` must share this one.
+  let tokens: any BridgeTokenStore = BridgeTokenStores.app
+  /// Why the last launch could not read the bridge token. The backend then starts without one.
+  private(set) var tokenError: String?
   /// The last Workspace's unsent drafts, for the next backend's Workspace.
   private var drafts: [String: String] = [:]
   /// The conversation the last Workspace showed or was opening, for the next backend's Workspace.
@@ -67,10 +74,23 @@ final class AppController {
         await self.backendStopped(client)
       }
       _ = try await client.hello()
-      let started = try await client.start(dataFolder: Self.dataFolder())
+      // A Keychain error does not stop the launch: the backend starts without a token, and the
+      // Settings window shows the error.
+      let token: String
+      do {
+        token = try await Self.readToken(from: tokens)
+        tokenError = nil
+      } catch {
+        token = ""
+        tokenError = "mMac could not read the bridge token from the Keychain: \(error.localizedDescription)"
+      }
+      let started = try await client.start(dataFolder: Self.dataFolder(), bridgeToken: token)
       let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
       reopen = nil
       self.workspace = workspace
+      let settings = SettingsModel(workspace: workspace, tokens: tokens)
+      settings.errorMessage = tokenError
+      self.settings = settings
       phase = .running
       // A backend that stops while history loads shows the stopped screen. Its Restart must not
       // find this start still under way.
@@ -150,6 +170,13 @@ final class AppController {
       reopen = workspace.openingSessionId ?? workspace.view?.session.sessionId ?? workspace.pendingReopen
     }
     workspace = nil
+    settings = nil
+  }
+
+  /// Reads the token off the main actor. mMac is signed ad hoc, so a new build's first read can
+  /// wait while the Keychain asks for the login password, and the app must keep drawing meanwhile.
+  private static func readToken(from tokens: any BridgeTokenStore) async throws -> String {
+    try await Task.detached { try tokens.read() ?? "" }.value
   }
 
   /// The backend's last stderr output, once stderr has ended.
@@ -193,16 +220,23 @@ final class AppController {
     _ = await workspace.send(addingProject: folder)
   }
 
-  /// "Choose Muse Code…": saves the executable's path and reconnects.
-  func chooseCLI() async {
-    guard let workspace else { return }
+  /// "Choose Muse Code…" in the banner and Browse… in Settings: saves the executable's path and
+  /// reconnects. The panel attaches to the window it was started from. From Settings, the save
+  /// goes through `SettingsModel`, so an error shows on the Settings window; from the banner,
+  /// through the Workspace, so it shows on the main window.
+  func chooseCLI(fromSettings: Bool = false) async {
+    guard let workspace, let settings else { return }
     let panel = NSOpenPanel()
     panel.title = "Choose the Muse Code executable"
     panel.canChooseFiles = true
     panel.canChooseDirectories = false
     panel.showsHiddenFiles = true
     guard let url = await SheetAlert.run(panel) else { return }
-    await workspace.setCLIPath(url.path)
+    if fromSettings {
+      await settings.setCLIPath(url.path)
+    } else {
+      await workspace.setCLIPath(url.path)
+    }
   }
 
   /// "Choose checkout…": runs the backend from another Muse Desktop checkout.

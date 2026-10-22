@@ -177,17 +177,24 @@ struct SidebarView: View {
     }
   }
 
-  /// On a bar background, so rows do not show through it as the list scrolls.
+  /// On a bar background, so rows do not show through it as the list scrolls. A click opens
+  /// Settings on the Muse Code pane, as Electron's status pill does.
   private var connectionFooter: some View {
     VStack(spacing: 0) {
       Divider()
-      HStack(spacing: 6) {
-        Circle().fill(dotColor).frame(width: 7, height: 7)
-        Text(statusText).font(.caption).foregroundStyle(.secondary)
-        Spacer()
+      MuseCodeSettingsButton {
+        HStack(spacing: 6) {
+          Circle().fill(dotColor).frame(width: 7, height: 7)
+          Text(statusText).font(.caption).foregroundStyle(.secondary)
+          Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .contentShape(.rect)
       }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 8)
+      .buttonStyle(.plain)
+      .accessibilityLabel("Muse Code settings")
+      .accessibilityValue(statusText)
       .help(workspace.status.version.map { "Muse Code \($0)" } ?? workspace.status.message ?? "")
     }
     .background(.bar)
