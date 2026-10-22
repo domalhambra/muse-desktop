@@ -15,6 +15,8 @@ struct MuseCodePane: View {
   var body: some View {
     Form {
       Section("Muse Code connection") {
+        Text("mMac runs your installed CLI and uses its existing sign-in, models, and saved conversations.")
+          .foregroundStyle(.themeSecondary)
         HStack {
           VStack(alignment: .leading) {
             Text(stateText).font(.headline)
@@ -45,10 +47,12 @@ struct MuseCodePane: View {
             placeholder: "Automatic detection (recommended)", identifier: "cli-path")
         }
         HStack {
+          // As Electron's `choose-cli`: saves the chosen path as it is and fills the field, without
+          // reconnecting. Save & reconnect reconnects.
           Button("Browse…") {
             Task {
-              guard let path = await AppController.chooseCLIPath() else { return }
-              await settings.setCLIPath(path)
+              guard let chosen = await AppController.chooseCLIPath() else { return }
+              if await settings.save(PreferencesPatch(cliPath: chosen)) { path = chosen }
             }
           }
           Spacer()

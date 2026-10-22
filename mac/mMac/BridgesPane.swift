@@ -43,21 +43,27 @@ struct BridgesPane: View {
             .font(.caption.monospaced())
             .foregroundStyle(.themeSecondary)
             .textSelection(.enabled)
-          VStack(alignment: .leading, spacing: 6) {
-            Button {
-              openFolder(folder)
-            } label: {
-              Label("Open bridge folder", systemImage: "folder")
-            }
-            Text("Give the README.md in that folder to the other agent as its instructions.")
-              .font(.caption)
-              .foregroundStyle(.themeSecondary)
+        }
+        // As Electron: the button and its hint always show. mMac opens the folder itself, so the
+        // button waits until the bridge status has named it.
+        VStack(alignment: .leading, spacing: 6) {
+          Button {
+            if let folder = status?.folder { openFolder(folder) }
+          } label: {
+            Label("Open bridge folder", systemImage: "folder")
           }
+          .disabled(status?.folder == nil)
+          Text("Give the README.md in that folder to the other agent as its instructions.")
+            .font(.caption)
+            .foregroundStyle(.themeSecondary)
         }
       }
       Section {
         if let error = settings.tokenError {
           Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+        }
+        if let warning = settings.unsavedTokenWarning {
+          Label(warning, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
         }
         Toggle(isOn: binding(preferences.bridgeMcpEnabled) { PreferencesPatch(bridgeMcpEnabled: $0) }) {
           Text("MCP bridge")
@@ -108,7 +114,7 @@ struct BridgesPane: View {
           // As Electron: Copy token shows once there is a token.
           if hasToken || settings.newToken != nil {
             Button {
-              copy()
+              Task { await copy() }
             } label: {
               Label("Copy token", systemImage: "doc.on.doc")
             }
@@ -176,9 +182,11 @@ struct BridgesPane: View {
     await settings.makeToken()
   }
 
-  private func copy() {
+  /// Copies the token. A copy that a newer one overtook while the Keychain was read copies
+  /// nothing, so the clipboard ends with the newest result.
+  private func copy() async {
     do {
-      let token = try settings.copyToken()
+      guard let token = try await settings.copyToken() else { return }
       NSPasteboard.general.clearContents()
       NSPasteboard.general.setString(token, forType: .string)
     } catch {

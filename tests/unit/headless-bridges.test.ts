@@ -132,6 +132,15 @@ describe('headless bridges', () => {
         accept: 'application/json, text/event-stream',
       }
       expect((await fetch(url, { method: 'POST', headers, body })).status).toBe(401)
+      // The right length but the wrong value: the length check alone must not let it through.
+      const wrong = 'secret-tokex'
+      expect(wrong).toHaveLength('secret-token'.length)
+      const refused = await fetch(url, {
+        method: 'POST',
+        headers: { ...headers, authorization: `Bearer ${wrong}` },
+        body,
+      })
+      expect(refused.status).toBe(401)
       const ok = await fetch(url, {
         method: 'POST',
         headers: { ...headers, authorization: 'Bearer secret-token' },

@@ -25,6 +25,10 @@ public final class SettingsModel {
   public private(set) var tokenError: String?
   /// A token made in this window, shown once.
   public private(set) var newToken: String?
+  /// The backend's token when the Keychain refused it, with the Keychain's refusal. Unlike
+  /// `newToken` it outlasts the Bridges pane, so Copy token never falls back to the older token
+  /// in the Keychain, which the backend no longer accepts. Cleared when a new token is saved.
+  private var unsaved: (token: String, error: String)?
   /// True while a new token is being made. The view disables Make token meanwhile.
   public private(set) var makingToken = false
   public var errorMessage: String?
@@ -33,6 +37,10 @@ public final class SettingsModel {
   private var bridgeSequence = 0
   /// Counts the MCP changes made, so a reconnect knows whether one came in while it ran.
   private var changes = 0
+  /// Numbers each Copy token, so a store read that ends after a newer copy started is dropped.
+  private var copySequence = 0
+  /// Counts the tokens made, so a store read that a new token overtook reads again.
+  private var tokensMade = 0
 
   public init(workspace: Workspace, tokens: any BridgeTokenStore, tokenError: String? = nil) {
     self.workspace = workspace
@@ -180,28 +188,66 @@ public final class SettingsModel {
       return
     }
     newToken = token
+    tokensMade += 1
     var keychainError: String?
     do {
-      try tokens.write(token)
+      try await Self.write(token, to: tokens)
+      unsaved = nil
       // The Keychain holds the backend's token now, so a failed read at launch no longer matters.
       tokenError = nil
     } catch {
-      keychainError = "mMac could not save the token in the Keychain: \(error.localizedDescription)"
-      errorMessage = keychainError
+      let message = "mMac could not save the token in the Keychain: \(error.localizedDescription)"
+      keychainError = message
+      unsaved = (token, message)
+      errorMessage = message
     }
     await refreshBridge()
     // A failed status read must not hide that the token was not saved.
     if let keychainError { errorMessage = keychainError }
   }
 
-  /// Forgets the token shown once. The Bridges pane calls it when it closes.
+  /// Why the token in use is not in the Keychain, shown as a lasting warning while it is not.
+  public var unsavedTokenWarning: String? {
+    guard let error = unsaved?.error else { return nil }
+    let sentence = error.hasSuffix(".") ? error : error + "."
+    return "\(sentence) Copy token copies the token in use until mMac quits. Make a new token to save one."
+  }
+
+  /// Forgets the token shown once. The Bridges pane calls it when it closes. A token the Keychain
+  /// refused stays for Copy token.
   public func clearNewToken() { newToken = nil }
 
-  /// The token for Copy token: the one on screen, which is the only valid one when the Keychain
-  /// refused it, or else the saved one.
-  public func copyToken() throws -> String {
-    if let newToken { return newToken }
-    guard let token = try tokens.read(), !token.isEmpty else { throw WorkspaceError("Make a token first.") }
-    return token
+  /// The token for Copy token: the one the Keychain refused, which is the only valid one then, or
+  /// the one on screen, or else the saved one, read off the main actor. Returns nil when a newer
+  /// Copy token started while the store was read, so the clipboard ends with the newest result.
+  public func copyToken() async throws -> String? {
+    copySequence += 1
+    let sequence = copySequence
+    while true {
+      if let token = unsaved?.token ?? newToken { return token }
+      let made = tokensMade
+      let read: String?
+      do {
+        read = try await Self.read(from: tokens)
+      } catch {
+        guard sequence == copySequence else { return nil }
+        throw error
+      }
+      guard sequence == copySequence else { return nil }
+      // A token made during the read replaced the one read: look again.
+      guard made == tokensMade else { continue }
+      guard let read, !read.isEmpty else { throw WorkspaceError("Make a token first.") }
+      return read
+    }
+  }
+
+  /// The store's calls run off the main actor. mMac is signed ad hoc, so the Keychain can ask
+  /// for the login password, and Settings must keep drawing meanwhile.
+  private nonisolated static func read(from tokens: any BridgeTokenStore) async throws -> String? {
+    try await Task.detached { try tokens.read() }.value
+  }
+
+  private nonisolated static func write(_ token: String, to tokens: any BridgeTokenStore) async throws {
+    try await Task.detached { try tokens.write(token) }.value
   }
 }

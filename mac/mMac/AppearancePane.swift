@@ -21,6 +21,8 @@ struct AppearancePane: View {
     let theme = ThemeName(preference: pending.theme ?? preferences.theme)
     Form {
       Section("Theme") {
+        Text("Choose a theme and adjust your workspace.")
+          .foregroundStyle(.themeSecondary)
         HStack(spacing: 12) {
           ForEach(ThemeName.allCases) { option in
             ThemeCard(theme: option, selected: option == theme) {
@@ -30,14 +32,22 @@ struct AppearancePane: View {
         }
       }
       Section {
-        Picker("Text size", selection: textSizeBinding) {
+        Picker(selection: textSizeBinding) {
           ForEach(TextSize.allCases) { Text($0.label).tag($0) }
+        } label: {
+          Text("Text size")
+          Text("Adjust the size of conversation text.")
+            .foregroundStyle(.themeSecondary)
         }
         .pickerStyle(.segmented)
         // The stock selected segment: the theme's light accent under a white label is unreadable.
         .tint(nil)
-        Toggle("Reduce motion", isOn: binding(\.reduceMotion, saved: preferences.reduceMotion))
-          .toggleStyle(.switch)
+        Toggle(isOn: binding(\.reduceMotion, saved: preferences.reduceMotion)) {
+          Text("Reduce motion")
+          Text("Reduce transitions and animations.")
+            .foregroundStyle(.themeSecondary)
+        }
+        .toggleStyle(.switch)
         Toggle(isOn: notificationBinding) {
           Text("Completion notifications")
           Text("Show a notification when a turn finishes in the background.")
