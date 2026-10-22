@@ -554,4 +554,7 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(requests(backend).filter { $0.first == "create" }.count == 1)
   #expect(workspace.errorMessage == nil)
   #expect(!workspace.submitting)
+  #expect(workspace.draft.isEmpty)
+  #expect(workspace.drafts["new:/p"] == nil)
+  #expect(workspace.view?.items.map(\.text) == ["hi"])
 }

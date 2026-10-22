@@ -36,6 +36,9 @@ struct InspectorView: View {
     .task(id: RefreshKey(project: workspace.project, status: workspace.view?.session.status)) {
       await inspector.refresh()
     }
+    // While this refresh runs on a status change, a turn's end needs no badge read of its own.
+    .onAppear { inspector.isShown = true }
+    .onDisappear { inspector.isShown = false }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Project inspector")
   }

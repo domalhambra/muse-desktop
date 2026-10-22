@@ -111,6 +111,65 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   try await eventually { workspace.projectGit["/p"] != nil }
 }
 
+@MainActor @Test func aTurnThatEndsInTheShownInspectorsProjectReadsStatusOnce() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1", status: "running")))]
+    case "worktrees": [reply(id, "[]")]
+    case "git-status": [reply(id, statusJSON(["a.txt"]))]
+    default: []
+    }
+  }
+  workspace.inspector.isShown = true
+  await workspace.open("s1")
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
+  // InspectorView reads again when the open conversation's status changes.
+  await workspace.inspector.refresh()
+  try await settle(workspace, backend, marker: "/m1")
+  #expect(statusReads(backend, "/p") == 1)
+  #expect(workspace.projectGit["/p"]?.changes.count == 1)
+}
+
+@MainActor @Test func aShownInspectorOnAnotherFolderLeavesTheBadgeReadToTheWorkspace() async throws {
+  // The conversation opened in its worktree, which the inspector shows; its turn ends in /p.
+  let worktree = "/p/.muse/worktrees/w1"
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("w1", root: worktree, status: "running")))]
+    case "git-status": [reply(id, statusJSON([]))]
+    default: []
+    }
+  }
+  workspace.inspector.isShown = true
+  await workspace.open("w1")
+  #expect(workspace.inspector.project == worktree)
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("w1", root: "/p", status: "idle")))))
+  try await eventually { statusReads(backend, "/p") == 1 }
+}
+
+@MainActor @Test func aBadgeReadInFlightDoesNotKeepTheWorkspace() async throws {
+  // No git-status request is ever answered.
+  weak var released: Workspace?
+  do {
+    let (workspace, backend) = await makeWorkspace { method, _, id in
+      switch method {
+      case "open": [reply(id, viewJSON(sessionJSON("s1", status: "running")))]
+      case "git-status": []
+      default: [reply(id, "null")]
+      }
+    }
+    released = workspace
+    await workspace.open("s1")
+    workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
+    workspace.apply(.preferences(Preferences(recentProjects: ["/p", "/q"])))
+    workspace.selectProject("/r")
+    try await eventually {
+      statusReads(backend, "/p") == 2 && statusReads(backend, "/q") == 1 && statusReads(backend, "/r") == 1
+    }
+  }
+  #expect(released == nil)
+}
+
 @MainActor @Test func onlyATurnThatEndsReadsTheBadge() async throws {
   let worktree = "/p/.muse/worktrees/w1"
   let (workspace, backend) = await makeWorkspace { method, args, id in
@@ -304,6 +363,7 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
     default: [reply(id, "null")]
     }
   }
+  workspace.projectGit["/p"] = GitStatus(branch: "main", changes: [], isRepository: true)
   #expect(workspace.canStartInWorktree)
   workspace.startInWorktree = true
   workspace.draft = "Try it on a branch"
@@ -326,6 +386,7 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
     default: [reply(id, "null")]
     }
   }
+  workspace.projectGit["/p"] = GitStatus(branch: "main", changes: [], isRepository: true)
   workspace.startInWorktree = true
   workspace.draft = "Try it on a branch"
   let sending = Task { await workspace.send() }

@@ -34,7 +34,7 @@ public final class Workspace {
     didSet {
       guard project != oldValue else { return }
       inspector.show(project: project)
-      if !project.isEmpty, beginsRunning == 0 { Task { [project] in await refreshProjectGit([project]) } }
+      if !project.isEmpty, beginsRunning == 0 { startBadgeRead([project]) }
     }
   }
   /// The inspector for `project`.
@@ -48,6 +48,11 @@ public final class Workspace {
   public var projectBadge: GitStatus? { project.isEmpty ? nil : projectGit[project] }
   /// Start the next new conversation in its own Muse-created Git worktree.
   public var startInWorktree = false
+  /// Called for every `session` event, with the status that conversation had in the event before
+  /// it (nil for the first one this Workspace sees). The app posts the completion notice from it.
+  public var turnFinished: (@MainActor (Session, _ previous: String?) -> Void)?
+  /// The last status each `session` event gave, for every conversation the events name.
+  private var lastStatus: [String: String] = [:]
   /// Bumped when Ask Muse adds to the draft, so the composer takes keyboard focus.
   public internal(set) var composerFocusRequest = 0
   /// The conversation open before a backend restart, opened again once history has loaded.
@@ -109,8 +114,11 @@ public final class Workspace {
   }
   public var isConnected: Bool { status.isReady }
   public var isRunning: Bool { view?.session.status == "running" }
-  /// A new conversation can start in a worktree on a CLI that offers Muse's experimental methods.
-  public var canStartInWorktree: Bool { view == nil && status.experimental == true }
+  /// A new conversation can start in a worktree on a CLI that offers Muse's experimental methods,
+  /// in a project known to be a Git repository.
+  public var canStartInWorktree: Bool {
+    view == nil && status.experimental == true && projectBadge?.isRepository == true
+  }
   public var effort: String { preferences.reasoningEffort }
 
   /// The composer text for the open conversation, or for a new one in the current project.
@@ -144,31 +152,57 @@ public final class Workspace {
   /// Reads the Git status of `only` these projects, or of every recent project and the current one
   /// (a worktree conversation's folder is not a recent project), for the badges.
   public func refreshProjectGit(_ only: [String]? = nil) async {
+    let read = badgeRead(only)
+    let found = await Self.statuses(read.paths, client: client)
+    // A cancelled caller's `try?` reads give no status; keep the badges shown instead.
+    guard !Task.isCancelled else { return }
+    store(found, from: read)
+  }
+
+  /// `refreshProjectGit(_:)` in its own task, which holds the Workspace weakly: a Workspace the app
+  /// drops is released while its reads wait, and a read that ends after that is dropped.
+  func startBadgeRead(_ only: [String]? = nil) {
+    let read = badgeRead(only)
+    Task { [weak self, client] in
+      let found = await Self.statuses(read.paths, client: client)
+      self?.store(found, from: read)
+    }
+  }
+
+  /// The folders one badge read covers, and its sequence when it reads every project.
+  private struct BadgeRead: Sendable {
+    let paths: [String]
+    let sequence: Int?
+  }
+
+  private func badgeRead(_ only: [String]?) -> BadgeRead {
     var paths = only ?? preferences.recentProjects
     if only == nil, !project.isEmpty, !paths.contains(project) { paths.append(project) }
-    var sequence: Int?
-    if only == nil {
-      projectGitSequence += 1
-      sequence = projectGitSequence
-    }
-    let client = self.client
-    let found = await withTaskGroup(of: (String, GitStatus?).self) { group in
+    guard only == nil else { return BadgeRead(paths: paths, sequence: nil) }
+    projectGitSequence += 1
+    return BadgeRead(paths: paths, sequence: projectGitSequence)
+  }
+
+  /// Reads every folder at once. A folder whose status could not be read has no entry.
+  private static func statuses(_ paths: [String], client: BackendClient) async -> [String: GitStatus] {
+    await withTaskGroup(of: (String, GitStatus?).self) { group in
       for path in paths { group.addTask { (path, try? await client.gitStatus(project: path)) } }
       var found: [String: GitStatus] = [:]
       for await (path, status) in group { if let status { found[path] = status } }
       return found
     }
-    // A cancelled caller's `try?` reads give no status; keep the badges shown instead.
-    guard !Task.isCancelled else { return }
-    if let sequence {
+  }
+
+  private func store(_ found: [String: GitStatus], from read: BadgeRead) {
+    if let sequence = read.sequence {
       // A newer read of every project, for newer recent projects, already replaced this one.
       guard sequence == projectGitSequence else { return }
       // The current project chosen during this read has its own read; keep what that one found.
       var found = found
-      if !project.isEmpty, !paths.contains(project) { found[project] = projectGit[project] }
+      if !project.isEmpty, !read.paths.contains(project) { found[project] = projectGit[project] }
       projectGit = found
     } else {
-      for path in paths { projectGit[path] = found[path] }
+      for path in read.paths { projectGit[path] = found[path] }
     }
   }
 
@@ -177,20 +211,28 @@ public final class Workspace {
     case .connection(let next):
       let becameReady = !status.isReady && next.isReady
       status = next
-      if becameReady { Task { await begin() } }
+      // `begin()` holds the Workspace while it runs; a backend stop fails its requests.
+      if becameReady { Task { [weak self] in await self?.begin() } }
     case .preferences(let next):
       let projectsChanged = next.recentProjects != preferences.recentProjects
       preferences = next
       // A running `begin()` reads them all once it ends.
-      if projectsChanged, beginsRunning == 0 { Task { await refreshProjectGit() } }
+      if projectsChanged, beginsRunning == 0 { startBadgeRead() }
     case .session(let next):
+      let previous = lastStatus[next.session.sessionId]
+      lastStatus[next.session.sessionId] = next.session.status
+      turnFinished?(next.session, previous)
       if next.session.sessionId == view?.session.sessionId {
         // A turn that ends may have changed files: read the folder's badge again. A recent project
         // and the current project have badges, so a worktree conversation's own folder does too.
+        // A shown inspector on that folder reads its status when the open conversation's status
+        // changes (`InspectorView`), and that read writes the badge through `statusRead`, so the
+        // turn's end needs no second read.
         if view?.session.status == "running", next.session.status != "running",
-          let root = next.session.workspaceRoot, preferences.recentProjects.contains(root) || root == project
+          let root = next.session.workspaceRoot, preferences.recentProjects.contains(root) || root == project,
+          !(inspector.isShown && inspector.project == root)
         {
-          Task { await refreshProjectGit([root]) }
+          startBadgeRead([root])
         }
         view = next
       }

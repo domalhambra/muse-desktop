@@ -67,9 +67,12 @@ extension Workspace {
       // Clear the draft only where it still holds what was sent.
       for key in [startKey, sessionId] where drafts[key] == text { drafts[key] = nil }
       // Its own detached task: cancelling the caller must not stop the wait, or a rejection that
-      // comes later would leave the conversation shown as running. Detached, so the task
-      // inherits neither the caller's cancellation nor the main actor: the error path below is
-      // one main-actor hop away, which `AppController.dropWorkspace()` relies on.
+      // comes later would leave the conversation shown as running. Detached, so the task inherits
+      // neither the caller's cancellation nor the main actor: a caller cancelled before this call,
+      // or during it, still sends the message and gets the conversation. The error path below is
+      // then one main-actor hop away. `AppController.dropWorkspace()` assumes that order: a send
+      // the stop cut off has put its text back before the event stream ends the backend. Nothing
+      // enforces it.
       let client = self.client
       let request = Task.detached {
         try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode)

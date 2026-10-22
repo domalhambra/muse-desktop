@@ -50,6 +50,9 @@ public final class Inspector {
   @ObservationIgnored var reportError: @MainActor (String) -> Void = { _ in }
   /// Receives each status read, so the sidebar's badge for this project stays current.
   @ObservationIgnored var statusRead: @MainActor (String, GitStatus) -> Void = { _, _ in }
+  /// True while `InspectorView` is on screen. A shown inspector refreshes when the open
+  /// conversation's status changes, so the Workspace leaves a turn end's badge read to it.
+  @ObservationIgnored public var isShown = false
 
   /// Bumped by `show(project:)`. A reply for an earlier project compares it and is dropped, as is
   /// a confirmation the view showed before the inspector moved to another project.

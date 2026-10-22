@@ -363,3 +363,24 @@ import Testing
   workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "running")))))
   #expect(changes.value == 1)
 }
+
+@MainActor @Test func everyTurnThatEndsIsReportedWithItsLastStatus() async throws {
+  let (workspace, _) = await makeWorkspace()
+  var seen: [(String, String?, String)] = []
+  workspace.turnFinished = { session, previous in seen.append((session.sessionId, previous, session.status)) }
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("a", status: "running")))))
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("b", status: "running")))))
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("a", status: "idle")))))
+  #expect(seen.map(\.0) == ["a", "b", "a"])
+  #expect(seen[2].1 == "running" && seen[2].2 == "idle")
+  #expect(seen[0].1 == nil)
+}
+
+@MainActor @Test func theWorktreeToggleNeedsARepository() async {
+  let (workspace, _) = await makeWorkspace(status: ConnectionStatus(state: "ready", experimental: true))
+  #expect(!workspace.canStartInWorktree)
+  workspace.projectGit["/p"] = GitStatus(branch: "", changes: [], isRepository: false)
+  #expect(!workspace.canStartInWorktree)
+  workspace.projectGit["/p"] = GitStatus(branch: "main", changes: [], isRepository: true)
+  #expect(workspace.canStartInWorktree)
+}
