@@ -348,7 +348,10 @@ struct DiffRow: View {
         .foregroundStyle(foreground)
         .textSelection(.enabled)
         .fixedSize()
-        // "Added, line 12, let b = 3": the tint and the gutter say it only to the eye.
+        // "Added, line 12, let b = 3": the tint and the gutter say it only to the eye. Its own
+        // element: a label set on selectable text itself resolves through the text's platform
+        // element, which asks SwiftUI for the label again, until the stack overflows.
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.spoken)
       if let index = row.hunkIndex {
         Button("Revert hunk") { revert(index) }
