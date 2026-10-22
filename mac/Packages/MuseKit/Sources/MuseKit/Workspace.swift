@@ -174,10 +174,10 @@ public final class Workspace {
       if projectsChanged, beginsRunning == 0 { Task { await refreshProjectGit() } }
     case .session(let next):
       if next.session.sessionId == view?.session.sessionId {
-        // A turn that ends may have changed files: read the project's badge again. Only a recent
-        // project has a badge; a worktree conversation's folder does not.
+        // A turn that ends may have changed files: read the folder's badge again. A recent project
+        // and the current project have badges, so a worktree conversation's own folder does too.
         if view?.session.status == "running", next.session.status != "running",
-          let root = next.session.workspaceRoot, preferences.recentProjects.contains(root)
+          let root = next.session.workspaceRoot, preferences.recentProjects.contains(root) || root == project
         {
           Task { await refreshProjectGit([root]) }
         }

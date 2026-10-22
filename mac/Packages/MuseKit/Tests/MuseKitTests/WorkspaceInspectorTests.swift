@@ -112,9 +112,13 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
 }
 
 @MainActor @Test func onlyATurnThatEndsReadsTheBadge() async throws {
-  let (workspace, backend) = await makeWorkspace { method, _, id in
+  let worktree = "/p/.muse/worktrees/w1"
+  let (workspace, backend) = await makeWorkspace { method, args, id in
     switch method {
-    case "open": [reply(id, viewJSON(sessionJSON("s1", status: "running")))]
+    case "open":
+      args.first == "w1"
+        ? [reply(id, viewJSON(sessionJSON("w1", root: worktree, status: "running")))]
+        : [reply(id, viewJSON(sessionJSON("s1", status: "running")))]
     case "git-status": [reply(id, statusJSON([]))]
     default: []
     }
@@ -130,13 +134,22 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
   try await settle(workspace, backend, marker: "/m2")
   #expect(statusReads(backend, "/p") == 1)
+  // A worktree conversation's folder is the current project, which the sidebar badges.
+  await workspace.open("w1")
+  #expect(workspace.project == worktree)
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("w1", root: worktree, status: "idle")))))
+  try await eventually { statusReads(backend, .string(worktree)) == 1 }
+  try await eventually { workspace.projectGit[worktree] != nil }
 }
 
-@MainActor @Test func aTurnThatEndsOutsideTheRecentProjectsReadsNoBadge() async throws {
-  let root = "/p/.muse/worktrees/w1"
+@MainActor @Test func aTurnThatEndsOutsideTheBadgedProjectsReadsNoBadge() async throws {
+  // The conversation opened in /p/.muse/worktrees/w1 (the current project); its turn ends with a
+  // folder that is neither a recent project nor the current one.
+  let opened = "/p/.muse/worktrees/w1"
+  let root = "/elsewhere"
   let (workspace, backend) = await makeWorkspace { method, _, id in
     switch method {
-    case "open": [reply(id, viewJSON(sessionJSON("w1", root: root, status: "running")))]
+    case "open": [reply(id, viewJSON(sessionJSON("w1", root: opened, status: "running")))]
     case "git-status": [reply(id, statusJSON([]))]
     default: []
     }

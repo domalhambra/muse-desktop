@@ -129,7 +129,7 @@ struct SidebarView: View {
   /// handled, so an older key press must not turn a later change into a highlight.
   private static func isKeyEvent(_ event: NSEvent?) -> Bool {
     guard let event, event.type == .keyDown else { return false }
-    return ProcessInfo.processInfo.systemUptime - event.timestamp < 0.3
+    return ProcessInfo.processInfo.systemUptime - event.timestamp < 1.0
   }
 
   @ViewBuilder private var history: some View {
