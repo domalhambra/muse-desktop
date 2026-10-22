@@ -1,4 +1,5 @@
 import { mkdir, realpath, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { z } from 'zod'
 import {
@@ -7,6 +8,7 @@ import {
   preferencesPatchSchema,
   preferencesSchema,
   type AppEvent,
+  type McpServerView,
   type Preferences,
 } from '../shared/protocol'
 import { listProjectFiles, readProjectFile } from '../main/files'
@@ -18,10 +20,19 @@ import {
   revertHunk,
   stageFile,
 } from '../main/git'
+import {
+  addServer,
+  listServers,
+  mcpServerSchema,
+  removeServer,
+  setServerEnabled,
+  settingsFile,
+} from '../main/mcp-config'
 import type { MuseHost } from '../main/muse-host'
 import { readPreferences, writePreferences } from '../main/preferences'
 import { mergeWorktree, removeWorktree } from '../main/worktrees'
 import { projectRoot, worktreeParent } from '../shared/worktree'
+import { openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
 // mMac's backend methods and the state they share. src/headless/server.ts owns
@@ -50,6 +61,7 @@ export type Muse = Pick<
   | 'cancelQuestion'
   | 'readOutput'
   | 'listWorktrees'
+  | 'configDir'
 >
 
 export type BackendDeps = {
@@ -62,9 +74,19 @@ export type BackendDeps = {
   quitting: () => boolean
   /** Starts the quit path. The server runs it after the current Reply is written. */
   quit: (code: number) => void
+  /** Opens Terminal and runs one command line. Tests record it instead. */
+  openTerminal?: (command: string) => Promise<void>
 }
 
-export function createBackend({ muse, ask, emit, version, quitting, quit }: BackendDeps) {
+export function createBackend({
+  muse,
+  ask,
+  emit,
+  version,
+  quitting,
+  quit,
+  openTerminal = openInTerminal,
+}: BackendDeps) {
   const id = z.string().min(1).max(200)
   const pathSchema = z.string().min(1).max(4096)
   const methods = new Map<string, Method>()
@@ -369,6 +391,54 @@ export function createBackend({ muse, ask, emit, version, quitting, quit }: Back
     })
     if (busy) throw new Error('A conversation is still working in this worktree.')
     await removeWorktree(root, target)
+  })
+
+  // MCP servers, as src/main/index.ts registers them: direct edits of Muse's settings.json.
+  const mcpFile = () => settingsFile(muse.configDir())
+  const mcpName = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
+
+  method('mcp-list', async (): Promise<{ file: string; servers: McpServerView[] }> => ({
+    file: mcpFile(),
+    servers: (await listServers(mcpFile())).map((server) =>
+      server.transport === 'stdio'
+        ? {
+            name: server.name,
+            transport: server.transport,
+            enabled: server.enabled,
+            command: server.command,
+            args: server.args,
+            envNames: Object.keys(server.env),
+          }
+        : {
+            name: server.name,
+            transport: server.transport,
+            enabled: server.enabled,
+            url: server.url,
+            headerNames: Object.keys(server.headers),
+          },
+    ),
+  }))
+
+  method('mcp-add', (server) => addServer(mcpFile(), mcpServerSchema.parse(server)))
+
+  method('mcp-enabled', (name, enabled) =>
+    setServerEnabled(mcpFile(), mcpName.parse(name), z.boolean().parse(enabled)),
+  )
+
+  method('mcp-remove', (name) => removeServer(mcpFile(), mcpName.parse(name)))
+
+  method('mcp-login', async (name, logout) => {
+    const server = (await listServers(mcpFile())).find(
+      (entry) => entry.name === mcpName.parse(name),
+    )
+    if (server?.transport !== 'http') throw new Error('Only remote MCP servers use sign-in.')
+    await openTerminal(
+      terminalCommand(homedir(), muse.status.path || 'muse', [
+        'mcp',
+        logout === true ? 'logout' : 'login',
+        server.name,
+      ]),
+    )
   })
 
   method('shutdown', async () => {

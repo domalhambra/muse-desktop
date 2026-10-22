@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -69,6 +69,7 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     cancelQuestion: vi.fn(async () => {}),
     readOutput: vi.fn(async () => 'stored output'),
     listWorktrees: vi.fn(async () => []),
+    configDir: () => join(dir, 'muse-config'),
     ...overrides,
   } satisfies Muse
 }
@@ -77,12 +78,16 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
 function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
   const asks: Ask[] = []
   const events: AppEvent[] = []
+  const terminal: string[] = []
   const quit = vi.fn()
   let quitting = false
   const backend = createBackend({
     muse,
     emit: (event) => events.push(event),
     version: '0.2.0',
+    openTerminal: async (command) => {
+      terminal.push(command)
+    },
     ask: async (value) => {
       asks.push(value)
       return answers.shift() ?? -1
@@ -102,7 +107,16 @@ function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
   const lastPreferences = () =>
     events.filter((event) => event.type === 'preferences').at(-1) as
       Extract<AppEvent, { type: 'preferences' }> | undefined
-  return { asks, events, quit, call, start, lastPreferences, setQuitting: () => (quitting = true) }
+  return {
+    asks,
+    events,
+    terminal,
+    quit,
+    call,
+    start,
+    lastPreferences,
+    setQuitting: () => (quitting = true),
+  }
 }
 
 async function folder(name: string) {
@@ -575,5 +589,107 @@ describe('headless backend, M2 inspector methods', () => {
     await call('add-project', project)
     await call('create', project, null, { worktree: true })
     expect(muse.create).toHaveBeenCalledWith(project, undefined, { worktree: true })
+  })
+})
+
+describe('headless backend, M3 MCP methods', () => {
+  async function configured() {
+    const configDir = join(dir, 'muse-config')
+    await mkdir(configDir, { recursive: true })
+    await writeFile(
+      join(configDir, 'settings.json'),
+      JSON.stringify({
+        model: 'keep-me',
+        mcpServers: {
+          files: { command: 'npx', args: ['-y', 'fs'], env: { TOKEN: 'secret' } },
+          remote: { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } },
+        },
+      }),
+    )
+    const h = harness(
+      fakeMuse({ configDir: () => configDir, status: { ...ready, path: '/opt/muse' } }),
+    )
+    await h.start()
+    return { ...h, file: join(configDir, 'settings.json') }
+  }
+
+  it('lists servers with secret names only', async () => {
+    const { call, file } = await configured()
+    const list = (await call('mcp-list')) as { file: string; servers: unknown[] }
+    expect(list.file).toBe(file)
+    expect(list.servers).toEqual([
+      {
+        name: 'files',
+        transport: 'stdio',
+        enabled: true,
+        command: 'npx',
+        args: ['-y', 'fs'],
+        envNames: ['TOKEN'],
+      },
+      {
+        name: 'remote',
+        transport: 'http',
+        enabled: true,
+        url: 'https://example.com/mcp',
+        headerNames: ['Authorization'],
+      },
+    ])
+    expect(JSON.stringify(list)).not.toContain('secret')
+    expect(JSON.stringify(list)).not.toContain('Bearer')
+  })
+
+  it('adds, turns off and removes one entry, keeping every other key', async () => {
+    const { call, file } = await configured()
+    await call('mcp-add', {
+      name: 'new_one',
+      transport: 'stdio',
+      command: 'node',
+      args: [],
+      env: {},
+    })
+    await call('mcp-enabled', 'files', false)
+    await call('mcp-remove', 'remote')
+    const saved = JSON.parse(await readFile(file, 'utf8'))
+    expect(saved.model).toBe('keep-me')
+    expect(saved.schema_version).toBe(1)
+    expect(saved.mcpServers.files.enabled).toBe(false)
+    expect(saved.mcpServers.files).not.toHaveProperty('disabled')
+    expect(saved.mcpServers.files.env).toEqual({ TOKEN: 'secret' })
+    expect(saved.mcpServers).not.toHaveProperty('remote')
+    expect(saved.mcpServers.new_one).toEqual({ command: 'node', args: [], env: {} })
+  })
+
+  it('turns a server back on by removing the enabled key', async () => {
+    const { call, file } = await configured()
+    await call('mcp-enabled', 'files', false)
+    await call('mcp-enabled', 'files', true)
+    const saved = JSON.parse(await readFile(file, 'utf8'))
+    expect(saved.mcpServers.files).not.toHaveProperty('enabled')
+  })
+
+  it('refuses a bad name and writes nothing', async () => {
+    const { call, file } = await configured()
+    const before = await readFile(file, 'utf8')
+    await expect(
+      call('mcp-add', { name: 'bad name', transport: 'stdio', command: 'x' }),
+    ).rejects.toThrow('Use letters, numbers, - and _ for the server name.')
+    await expect(call('mcp-remove', '../x')).rejects.toThrow()
+    await expect(call('mcp-enabled', '../x', false)).rejects.toThrow()
+    expect(await readFile(file, 'utf8')).toBe(before)
+  })
+
+  it('signs in to remote servers only, through Terminal', async () => {
+    const { call, terminal } = await configured()
+    await expect(call('mcp-login', 'files')).rejects.toThrow('Only remote MCP servers use sign-in.')
+    await expect(call('mcp-login', 'missing')).rejects.toThrow(
+      'Only remote MCP servers use sign-in.',
+    )
+    expect(terminal).toEqual([])
+    await call('mcp-login', 'remote')
+    await call('mcp-login', 'remote', true)
+    expect(terminal).toEqual([
+      `cd '${homedir()}' && '/opt/muse' 'mcp' 'login' 'remote'`,
+      `cd '${homedir()}' && '/opt/muse' 'mcp' 'logout' 'remote'`,
+    ])
   })
 })
