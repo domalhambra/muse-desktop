@@ -23,6 +23,10 @@ enum PlainText {
     textView.isAutomaticLinkDetectionEnabled = false
     textView.smartInsertDeleteEnabled = false
     textView.enabledTextCheckingTypes = 0
+    // macOS 14 and 15 add inline predictions, math results after "=" and Writing Tools.
+    textView.inlinePredictionType = .no
+    textView.mathExpressionCompletionType = .no
+    textView.writingToolsBehavior = .none
   }
 }
 
@@ -155,8 +159,9 @@ struct PlainTextField: NSViewRepresentable {
   var placeholder = ""
   /// The accessibility identifier, for UI tests.
   var identifier = ""
-  /// Told when editing ends: on Return, and when the field loses focus.
-  var onEndEditing: (@MainActor () -> Void)?
+  /// Told when editing ends: on Return, and when the field loses focus. `shown` is false when
+  /// editing ended because the field left its window or the window closed.
+  var onEndEditing: (@MainActor (_ shown: Bool) -> Void)?
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -199,8 +204,10 @@ struct PlainTextField: NSViewRepresentable {
 
     func controlTextDidEndEditing(_ notification: Notification) {
       guard let onEndEditing = parent.onEndEditing else { return }
-      // Told after AppKit's responder change, never inside a SwiftUI update.
-      Task { @MainActor in onEndEditing() }
+      let field = notification.object as? NSTextField
+      // Told after AppKit's responder change, never inside a SwiftUI update. By then a field
+      // whose pane went away is out of its window, and a closed window is no longer visible.
+      Task { @MainActor [weak field] in onEndEditing(field?.window?.isVisible == true) }
     }
   }
 }

@@ -16,8 +16,8 @@ public final class SettingsModel {
   /// After any MCP change: "Reconnect Muse Code to apply your changes."
   public private(set) var needsReconnect = false
   public private(set) var bridge: BridgeStatus?
-  /// Why the last quiet bridge read failed, shown as a lasting row while the Bridges pane polls.
-  /// Cleared by the next read that succeeds.
+  /// Why the last bridge read failed, quiet or not, shown as a lasting row while the Bridges pane
+  /// polls. Cleared by the next read that succeeds.
   public private(set) var bridgeError: String?
   /// Why mMac could not read the bridge token from the Keychain at launch. The backend then
   /// started without one. The Bridges pane shows it as a lasting warning until a new token is
@@ -153,10 +153,12 @@ public final class SettingsModel {
   }
 
   /// Saves the typed port. Returns the text the field should show: the saved port when the typed
-  /// one is refused.
-  public func savePort(_ text: String) async -> String {
+  /// one is refused. With `quietly`, for an edit that ended because the Bridges pane or the
+  /// Settings window went away, a refusal only resets the field: an alert then would show later,
+  /// over whatever pane is open, about a field no longer there.
+  public func savePort(_ text: String, quietly: Bool = false) async -> String {
     guard let port = SettingsRules.port(text) else {
-      errorMessage = SettingsRules.portError
+      if !quietly { errorMessage = SettingsRules.portError }
       return String(workspace.preferences.bridgeMcpPort)
     }
     await save(PreferencesPatch(bridgeMcpPort: port))

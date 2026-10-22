@@ -37,11 +37,14 @@ private func listJSON(_ names: String...) -> String {
     }
   }
   let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
+  // A refusal shows under the form and leaves another action's error as it was.
+  settings.errorMessage = "earlier"
   var form = McpForm()
   form.name = "bad name"
   form.command = "npx"
   #expect(await settings.addServer(form) == "Use letters, numbers, - and _ for the server name.")
-  #expect(settings.errorMessage == nil)
+  #expect(settings.errorMessage == "earlier")
+  settings.errorMessage = nil
   #expect(!settings.needsReconnect)
   #expect(!requests(backend).contains { $0.first == .string("mcp-list") })
   form.name = "good"
@@ -202,6 +205,24 @@ private func listJSON(_ names: String...) -> String {
   #expect(workspace.preferences.bridgeMcpPort == 7736)
   #expect(requests(backend) == [["preferences", [["bridgeMcpPort": 7736]]], ["bridge-status", []]])
   #expect(settings.bridge?.folder == "/d/bridge")
+  #expect(settings.errorMessage == nil)
+}
+
+@MainActor @Test func aPortRefusedQuietlyOnlyResetsTheField() async {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "preferences": [reply(id, #"{"recentProjects":["/p"],"bridgeMcpPort":7736}"#)]
+    case "bridge-status": [reply(id, bridgeJSON)]
+    default: []
+    }
+  }
+  let settings = SettingsModel(workspace: workspace, tokens: MemoryTokenStore())
+  #expect(await settings.savePort("80", quietly: true) == "7735")
+  #expect(settings.errorMessage == nil)
+  #expect(requests(backend).isEmpty)
+  // A port it takes is still saved.
+  #expect(await settings.savePort("7736", quietly: true) == "7736")
+  #expect(workspace.preferences.bridgeMcpPort == 7736)
   #expect(settings.errorMessage == nil)
 }
 

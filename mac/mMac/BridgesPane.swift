@@ -8,6 +8,9 @@ import SwiftUI
 struct BridgesPane: View {
   let settings: SettingsModel
   @State private var port = ""
+  /// The text last sent to `savePort`. Return ends editing, and so does the focus loss after it;
+  /// the second end sends nothing while the field still shows the same text.
+  @State private var committedPort: String?
 
   private var preferences: Preferences { settings.workspace.preferences }
   private var status: BridgeStatus? { settings.bridge }
@@ -122,9 +125,12 @@ struct BridgesPane: View {
     .onAppear { port = String(preferences.bridgeMcpPort) }
     // A save from Return or from focus loss shows the saved port.
     .onChange(of: preferences.bridgeMcpPort) { _, saved in port = String(saved) }
+    // Typing, or a reset to the saved port, makes the next end of editing count again.
+    .onChange(of: port) { _, text in if text != committedPort { committedPort = nil } }
     // Read now and every 2 seconds while the pane shows, so job counts and errors stay current.
     // Quietly: a failing read shows as a lasting row, never an alert every 2 seconds.
-    .task {
+    // Restarts for another `SettingsModel`, as after a backend restart.
+    .task(id: ObjectIdentifier(settings)) {
       while !Task.isCancelled {
         await settings.refreshBridge(quietly: true)
         try? await Task.sleep(for: .seconds(2))
@@ -146,12 +152,14 @@ struct BridgesPane: View {
   }
 
   /// Saves the typed port on Return and on focus loss. Return and the focus loss after it both
-  /// end editing, so an unchanged port is not saved again. A refused port resets the field and
-  /// shows "Use a port between 1024 and 65535." on the Settings window.
-  private func commitPort() {
+  /// end editing, so the same text is sent once, and an unchanged port not at all. A refused port
+  /// resets the field and shows "Use a port between 1024 and 65535." on the Settings window, or,
+  /// when editing ended because the pane or window went away, only resets the field.
+  private func commitPort(shown: Bool) {
     let typed = port
-    guard typed != String(preferences.bridgeMcpPort) else { return }
-    Task { port = await settings.savePort(typed) }
+    guard typed != String(preferences.bridgeMcpPort), typed != committedPort else { return }
+    committedPort = typed
+    Task { port = await settings.savePort(typed, quietly: !shown) }
   }
 
   /// Electron's `window.confirm`, as a sheet on the Settings window. Cancel is the default.

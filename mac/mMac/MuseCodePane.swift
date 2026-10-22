@@ -39,7 +39,11 @@ struct MuseCodePane: View {
         }
       }
       Section {
-        TextField("Custom executable path", text: $path, prompt: Text("Automatic detection (recommended)"))
+        LabeledContent("Custom executable path") {
+          PlainTextField(
+            accessibilityLabel: "Custom executable path", text: $path,
+            placeholder: "Automatic detection (recommended)", identifier: "cli-path")
+        }
         HStack {
           Button("Browse…") {
             Task {
