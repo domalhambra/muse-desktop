@@ -13,8 +13,6 @@ struct ComposerView: View {
   @State private var pendingModel: String?
   @State private var pendingEffort: String?
 
-  static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       if workspace.isRunning { runningBar }
@@ -38,7 +36,11 @@ struct ComposerView: View {
         .disabled(workspace.submitting || workspace.models.isEmpty)
         .accessibilityIdentifier("model-picker")
         Picker("Reasoning effort", selection: effortSelection) {
-          ForEach(Self.efforts, id: \.self) { effort in Text(Self.label(effort)).tag(effort) }
+          ForEach(ReasoningEffort.allCases) { effort in Text(effort.label).tag(effort.rawValue) }
+          // A newer CLI's effort that this list does not know still shows.
+          if ReasoningEffort(rawValue: workspace.effort) == nil {
+            Text(workspace.effort).tag(workspace.effort)
+          }
         }
         .fixedSize()
         Spacer()
@@ -85,10 +87,6 @@ struct ComposerView: View {
         .help("Stop Muse")
     }
     .font(.callout)
-  }
-
-  static func label(_ effort: String) -> String {
-    effort == "xhigh" ? "Extra high" : effort.prefix(1).uppercased() + effort.dropFirst()
   }
 
   private var placeholder: String {

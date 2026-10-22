@@ -61,6 +61,16 @@ let fullViewJSON = #"""
       return [#"{"id":\#(id),"ok":true,"value":\#(fullViewJSON)}"#]
     case "sessions":
       return [#"{"id":\#(id),"ok":true,"value":{"sessions":[],"nextCursor":null}}"#]
+    case "git-status":
+      return [#"{"id":\#(id),"ok":true,"value":{"branch":"main","isRepository":true,"changes":[{"path":"a.txt","status":"M","staged":false}]}}"#]
+    case "git-diff", "git-raw-diff", "read-file":
+      return [#"{"id":\#(id),"ok":true,"value":"text"}"#]
+    case "files":
+      return [#"{"id":\#(id),"ok":true,"value":[{"name":"src","path":"src","directory":true}]}"#]
+    case "worktrees":
+      return [#"{"id":\#(id),"ok":true,"value":[{"path":"/p","branch":"main","isMain":true,"sessionIds":[]},{"path":"/p/.muse/worktrees/w","isMain":false,"sessionIds":["s1"]}]}"#]
+    case "worktree-merge":
+      return [#"{"id":\#(id),"ok":true,"value":{"ok":false,"output":"Merging muse/w has conflicts"}}"#]
     default:
       return [#"{"id":\#(id),"ok":true,"value":null}"#]
     }
@@ -82,6 +92,21 @@ let fullViewJSON = #"""
   try await client.send(sessionId: "s1", text: "hi", effort: "max", mode: .steer)
   _ = try await client.create(project: "/p", modelId: "m1")
   _ = try await client.create(project: "/p")
+  _ = try await client.create(project: "/p", worktree: true)
+  _ = try await client.create(project: "/p", modelId: "m1", worktree: true)
+  #expect(try await client.gitStatus(project: "/p").changes == [GitChange(path: "a.txt", status: "M", staged: false)])
+  #expect(try await client.gitDiff(project: "/p", path: "a.txt") == "text")
+  #expect(try await client.gitRawDiff(project: "/p", path: "a.txt") == "text")
+  try await client.revertFile(project: "/p", path: "a.txt")
+  try await client.revertHunk(project: "/p", path: "a.txt", index: 2)
+  try await client.stageFile(project: "/p", path: "a.txt")
+  #expect(try await client.files(project: "/p").first?.directory == true)
+  _ = try await client.files(project: "/p", directory: "src")
+  #expect(try await client.readFile(project: "/p", path: "a.txt") == "text")
+  let worktrees = try await client.worktrees(project: "/p")
+  #expect(worktrees.map(\.branch) == ["main", nil])
+  #expect(try await client.mergeWorktree(project: "/p", path: "/p/.muse/worktrees/w").ok == false)
+  try await client.removeWorktree(project: "/p", path: "/p/.muse/worktrees/w")
   let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
   #expect(sent == [
     ["sessions", ["c1"]],
@@ -97,7 +122,56 @@ let fullViewJSON = #"""
     ["send", [["sessionId": "s1", "text": "hi", "attachments": [], "effort": "max", "mode": "steer"]]],
     ["create", ["/p", "m1"]],
     ["create", ["/p"]],
+    ["create", ["/p", nil, ["worktree": true]]],
+    ["create", ["/p", "m1", ["worktree": true]]],
+    ["git-status", ["/p"]],
+    ["git-diff", ["/p", "a.txt"]],
+    ["git-raw-diff", ["/p", "a.txt"]],
+    ["git-revert-file", ["/p", "a.txt"]],
+    ["git-revert-hunk", ["/p", "a.txt", 2]],
+    ["git-stage-file", ["/p", "a.txt"]],
+    ["files", ["/p", ""]],
+    ["files", ["/p", "src"]],
+    ["read-file", ["/p", "a.txt"]],
+    ["worktrees", ["/p"]],
+    ["worktree-merge", ["/p", "/p/.muse/worktrees/w"]],
+    ["worktree-remove", ["/p", "/p/.muse/worktrees/w"]],
   ])
+}
+
+@Test func usageDecodesWhenPresentAndIsNilWhenAbsent() throws {
+  let session = #"{"sessionId":"s1","workspaceRoot":null,"updatedAt":"2026-10-21T00:00:00Z","status":"idle","activeTurnId":null,"modelId":null}"#
+  let with = try JSONDecoder().decode(
+    SessionView.self,
+    from: Data(#"{"session":\#(session),"items":[],"approvals":[],"questions":[],"usage":{"input":10,"output":5,"total":15}}"#.utf8))
+  #expect(with.usage == Usage(input: 10, output: 5, total: 15))
+  let without = try JSONDecoder().decode(
+    SessionView.self, from: Data(#"{"session":\#(session),"items":[],"approvals":[],"questions":[]}"#.utf8))
+  #expect(without.usage == nil)
+}
+
+@Test func theEffortListMatchesElectron() {
+  #expect(ReasoningEffort.allCases.map(\.rawValue) == ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
+  #expect(ReasoningEffort.xhigh.label == "Extra high")
+  #expect(ReasoningEffort.medium.label == "Medium")
+}
+
+@Test func cardModelsHavePublicInitializers() {
+  let choice = Approval.Choice(choiceId: "c", label: "Allow once", decision: "approved", scope: "once")
+  let approval = Approval(
+    approvalId: "a", sessionId: "s", toolName: "shell", rawArgs: "ls",
+    subject: Approval.Subject(kind: "command", command: "ls"), availableChoices: [choice])
+  #expect(approval.availableChoices.first?.label == "Allow once")
+  let question = UserQuestion(
+    userInputId: "u", sessionId: "s",
+    questions: [
+      UserQuestion.Prompt(
+        id: "q", header: "H", question: "Which?", options: [UserQuestion.Option(label: "A")],
+        selection: UserQuestion.Selection(mode: "single"))
+    ])
+  #expect(question.questions.first?.options.first?.label == "A")
+  let model = MuseModel(modelId: "m", displayLabel: "M", providerId: "p", isDefault: true, isActive: true)
+  #expect(model.contextLimit == nil)
 }
 
 @Test func aReasoningSummaryWithGapsKeepsItsStrings() throws {
