@@ -20,6 +20,8 @@ final class AppController {
   private(set) var workspace: Workspace?
   /// The last Workspace's unsent drafts, for the next backend's Workspace.
   private var drafts: [String: String] = [:]
+  /// The conversation the last Workspace showed or was opening, for the next backend's Workspace.
+  private var reopen: String?
   let asks = AskQueue()
   private var client: BackendClient?
   private var transport: ProcessTransport?
@@ -36,8 +38,9 @@ final class AppController {
   /// Starts a backend. Does nothing while one is starting or running.
   func start() async {
     guard client == nil, !launching else { return }
+    // Cleared before `begin()` and on failure, never by a `defer`: a Restart while `begin()`
+    // runs starts a newer launch, whose flag this start's late return must not clear.
     launching = true
-    defer { launching = false }
     phase = .starting
     dropWorkspace()
     stoppedWhileQuitting = nil
@@ -65,13 +68,18 @@ final class AppController {
       }
       _ = try await client.hello()
       let started = try await client.start(dataFolder: Self.dataFolder())
-      let workspace = Workspace(client: client, started: started, drafts: drafts)
+      let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
+      reopen = nil
       self.workspace = workspace
       phase = .running
+      // A backend that stops while history loads shows the stopped screen. Its Restart must not
+      // find this start still under way.
+      launching = false
       await workspace.begin()
     } catch {
       // A backend that failed to start is dropped, and its input closed so it quits. Closing it
       // first lets stderr end at once, though its tail may then include the shutdown output.
+      launching = false
       client = nil
       transport = nil
       asks.cancelAll()
@@ -132,10 +140,14 @@ final class AppController {
       details: details)
   }
 
-  /// Drops the Workspace and keeps its drafts. A send the stop cut off has put its text back by
-  /// now: `BackendError.stopped` reaches it before the event stream ends this backend.
+  /// Drops the Workspace and keeps its drafts and the conversation it showed, for the next
+  /// backend's Workspace. A send the stop cut off has put its text back by now:
+  /// `BackendError.stopped` reaches it before the event stream ends this backend.
   private func dropWorkspace() {
-    if let workspace { drafts = workspace.drafts }
+    if let workspace {
+      drafts = workspace.drafts
+      reopen = workspace.openingSessionId ?? workspace.view?.session.sessionId
+    }
     workspace = nil
   }
 
@@ -166,7 +178,7 @@ final class AppController {
 
   /// "Open project…": adds the chosen folder and selects it.
   func openProject() async {
-    guard let workspace, let folder = Self.chooseProjectFolder() else { return }
+    guard let workspace, let folder = await Self.chooseProjectFolder() else { return }
     await workspace.addProject(folder)
   }
 
@@ -176,7 +188,7 @@ final class AppController {
   /// draft stays.
   func send() async {
     guard let workspace else { return }
-    guard await workspace.send() == .needsProject, let folder = Self.chooseProjectFolder() else { return }
+    guard await workspace.send() == .needsProject, let folder = await Self.chooseProjectFolder() else { return }
     _ = await workspace.send(addingProject: folder)
   }
 
@@ -188,7 +200,7 @@ final class AppController {
     panel.canChooseFiles = true
     panel.canChooseDirectories = false
     panel.showsHiddenFiles = true
-    guard panel.runModal() == .OK, let url = panel.url else { return }
+    guard let url = await SheetAlert.run(panel) else { return }
     await workspace.setCLIPath(url.path)
   }
 
@@ -199,7 +211,7 @@ final class AppController {
     panel.prompt = "Use this checkout"
     panel.canChooseFiles = false
     panel.canChooseDirectories = true
-    guard panel.runModal() == .OK, let url = panel.url else { return }
+    guard let url = await SheetAlert.run(panel) else { return }
     // A folder that is not a checkout is refused, and the saved choice stays as it was.
     do {
       _ = try Self.checkout(at: url.path)
@@ -261,7 +273,7 @@ final class AppController {
 
   /// The folder for "Open project". The open panel runs in another process that UI tests cannot
   /// drive, so Debug builds take `MMAC_TEST_PROJECT` instead when it is set.
-  static func chooseProjectFolder() -> URL? {
+  static func chooseProjectFolder() async -> URL? {
     #if DEBUG
       if let folder = ProcessInfo.processInfo.environment["MMAC_TEST_PROJECT"], !folder.isEmpty {
         return URL(fileURLWithPath: folder)
@@ -273,6 +285,6 @@ final class AppController {
     panel.canChooseFiles = false
     panel.canChooseDirectories = true
     panel.canCreateDirectories = true
-    return panel.runModal() == .OK ? panel.url : nil
+    return await SheetAlert.run(panel)
   }
 }
