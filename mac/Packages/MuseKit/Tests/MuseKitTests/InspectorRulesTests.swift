@@ -169,3 +169,26 @@ import Testing
   #expect(ChangeLabel.name("a/newdir/") == "newdir")
   #expect(ChangeLabel.folder("a/newdir/") == "a")
 }
+
+@Test func anUntrackedFilesContentLinesThatLookLikeHeadersKeepTheirNumbers() {
+  // `++++ not a header` is the content line `+++ not a header`, as in Hugo front matter.
+  let rows = DiffLine.parse("--- /dev/null\n+++ b/notes.md\n+one\n++++ not a header\n+three")
+  #expect(rows.map(\.kind) == [.meta, .meta, .added, .added, .added])
+  #expect(rows.compactMap(\.newNumber) == [1, 2, 3])
+}
+
+@Test func aNewDiffLineDropsTheCountersOfThePreviousHunk() {
+  let diff = "Staged changes\n@@ -5,2 +5,2 @@\n-a\n+b\nWorking changes\ndiff --git a/f b/f\nold mode 100644\nBinary files a/f and b/f differ"
+  let rows = DiffLine.parse(diff)
+  #expect(rows[6].text == "old mode 100644" && rows[6].kind == .context && rows[6].gutter == "")
+  #expect(rows[7].gutter == "")
+}
+
+@Test func anEmptyLineHasNoNumberAndDoesNotAdvanceTheCounters() {
+  // git writes a blank context line as " ". `""` is only the separator between two sections.
+  let rows = DiffLine.parse("@@ -1,3 +1,3 @@\n a\n\n b")
+  #expect(rows[2].kind == .context && rows[2].gutter == "")
+  #expect(rows[3].oldNumber == 2 && rows[3].newNumber == 2)
+  let blank = DiffLine.parse("@@ -1,2 +1,2 @@\n a\n  \n b")
+  #expect(blank[2].gutter == "2" && blank[3].gutter == "3")
+}

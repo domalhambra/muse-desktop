@@ -18,13 +18,15 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
   /// The one gutter Electron draws: the new line number, else the old one.
   public var gutter: String { (newNumber ?? oldNumber).map(String.init) ?? "" }
 
-  /// Differs from Electron in four ways:
+  /// Differs from Electron in these ways:
   /// - A final newline adds no empty row. For an untracked file, `getGitDiff` splits its content on
   ///   "\n", so a file that ends in a newline gives a last row of a bare `+`. That row is dropped too.
   /// - A `\ No newline at end of file` line is meta, not context.
   /// - An untracked file's lines (which `getGitDiff` writes with no hunk header) are numbered from 1.
   /// - Inside a hunk, a line that starts `---` or `+++` (a removed `-- note`, an added `++ x`) is
-  ///   content and keeps its number. Electron reads it as a file header. A `diff ` line ends the hunk.
+  ///   content and keeps its number. Electron reads it as a file header. A `diff ` line ends the hunk
+  ///   and clears the line counters. In an untracked file, the `+++` line opens the content.
+  /// - An empty line (`""`, not git's `" "`) has no number and does not advance the counters.
   public static func parse(_ diff: String) -> [DiffLine] {
     var lines = diff.components(separatedBy: "\n")
     // utf8, because Swift reads "\r\n" as one Character that is not "\n".
@@ -61,10 +63,20 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
         if line.hasPrefix("diff ") {
           inHunk = false
           newFile = false
+          oldLine = 0
+          newLine = 0
         }
         if line == "--- /dev/null" { newFile = true }
-        if line.hasPrefix("+++"), newFile, newLine == 0 { newLine = 1 }
+        if line.hasPrefix("+++"), newFile {
+          // An untracked file has no hunk header, so its `+++` line opens the content.
+          inHunk = true
+          if newLine == 0 { newLine = 1 }
+        }
         add(.meta, line)
+      } else if line.isEmpty {
+        // git writes a blank context line as " ". An empty line is only the separator that
+        // `getGitDiff` puts between the staged and working sections.
+        add(.context, line)
       } else if line.hasPrefix("+") {
         add(.added, line, new: take(&newLine))
       } else if line.hasPrefix("-") {
