@@ -108,6 +108,7 @@ struct EntryView: View {
     case .agent(let item): AgentMessageView(item: item)
     case .reasoning(let item): ReasoningView(item: item)
     case .tool(let item): ToolView(item: item, workspace: workspace)
+    case .shell(let item): ShellView(item: item, workspace: workspace)
     case .toolGroup(let items): ToolGroupView(items: items, workspace: workspace)
     }
   }
@@ -382,6 +383,37 @@ struct ToolView: View {
         Text(ToolPresentation.footer(item)).font(.caption).foregroundStyle(.themeSecondary)
       }
     }
+  }
+}
+
+/// A `!` command and its result, as the Muse TUI shows its escape hatch. Open by default: the
+/// person asked for this output.
+struct ShellView: View {
+  let item: TranscriptItem
+  let workspace: Workspace
+  @State private var expanded = true
+
+  var body: some View {
+    ExpandableRow(expanded: $expanded) {
+      HStack(spacing: 6) {
+        StatusIcon(status: item.status)
+        Image(systemName: "terminal").foregroundStyle(.themeSecondary).accessibilityHidden(true)
+        Text("$ \(item.commandText ?? "")").font(.callout.monospaced()).bold().lineLimit(1)
+      }
+    } content: {
+      VStack(alignment: .leading, spacing: 8) {
+        if let output = ToolPresentation.output(item, stored: workspace.storedOutput[item.itemId]) {
+          MonospacedBox(text: output, label: "Command output")
+        }
+        if item.outputRef != nil, workspace.storedOutput[item.itemId] == nil {
+          let loading = workspace.loadingOutput.contains(item.itemId)
+          Button(loading ? "Loading…" : "Read stored output") { Task { await workspace.readOutput(item) } }
+            .disabled(loading)
+        }
+        Text(ToolPresentation.shellFooter(item)).font(.caption).foregroundStyle(.themeSecondary)
+      }
+    }
+    .accessibilityIdentifier("shell-\(item.itemId)")
   }
 }
 

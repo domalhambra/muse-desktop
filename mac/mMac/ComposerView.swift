@@ -292,6 +292,7 @@ struct ComposerView: View {
   private var canSend: Bool {
     guard !workspace.submitting, workspace.openingSessionId == nil, controller.voice?.isBusy != true
     else { return false }
+    if ShellRule.command(in: workspace.draft) != nil { return workspace.isConnected }
     if ComposerCommand.parse(workspace.draft) != nil { return true }
     // As `Workspace.send`: a message can be attachment chips alone.
     return workspace.isConnected
@@ -302,6 +303,10 @@ struct ComposerView: View {
   /// model as a message.
   private func submit() {
     guard canSend else { return }
+    if let command = ShellRule.command(in: workspace.draft) {
+      Task { await workspace.runShell(command) }
+      return
+    }
     if let command = ComposerCommand.parse(workspace.draft) {
       Task { if let effect = await workspace.run(command) { apply(effect) } }
     } else {
