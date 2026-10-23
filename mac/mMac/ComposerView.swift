@@ -335,6 +335,8 @@ struct ComposerView: View {
       PickerOpener.open("model-picker")
     case .effortPicker:
       PickerOpener.open("effort-picker")
+    case .sideChat:
+      controller.sheets.sideChat = true
     }
   }
 

@@ -16,7 +16,7 @@ struct ConversationView: View {
       }
       Group {
         if let view = workspace.view {
-          TranscriptView(workspace: workspace, view: view).id(view.session.sessionId)
+          TranscriptView(controller: controller, workspace: workspace, view: view).id(view.session.sessionId)
         } else if workspace.openingSessionId != nil {
           ProgressView("Loading conversation…")
         } else {
@@ -60,6 +60,12 @@ struct ConversationView: View {
     // The toolbar, the sidebar's context menu and /rename all raise it.
     .sheet(isPresented: $sheets.renaming) {
       RenameSheet(name: $sheets.newName, workspace: workspace) { controller.sheets.renaming = false }
+    }
+    .sheet(isPresented: $sheets.sideChat) {
+      SideChatSheet(controller: controller, workspace: workspace) { controller.sheets.sideChat = false }
+    }
+    .sheet(isPresented: $sheets.child) {
+      ChildSessionSheet(controller: controller, workspace: workspace) { controller.sheets.child = false }
     }
   }
 

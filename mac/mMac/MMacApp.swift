@@ -73,6 +73,7 @@ struct MMacApp: App {
       CommandGroup(after: .sidebar) {
         CommandMenuCommand(controller: delegate.controller)
         InspectorCommand()
+        SideChatCommand(controller: delegate.controller)
       }
       // Edit › Voice Input, then Edit › Find, for the find bars of the file preview and of stored output.
       CommandGroup(after: .textEditing) {
@@ -232,5 +233,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       sender.reply(toApplicationShouldTerminate: quit)
     }
     return .terminateLater
+  }
+}
+
+/// View › Side Chat (⌘;): a question beside the open conversation, as Desktop's side chat.
+private struct SideChatCommand: View {
+  let controller: AppController
+
+  var body: some View {
+    Button("Side Chat") {
+      controller.showMainWindow()
+      controller.sheets.sideChat = true
+    }
+    .keyboardShortcut(";")
+    .disabled(controller.workspace?.view == nil || controller.sheets.anyShown)
   }
 }
