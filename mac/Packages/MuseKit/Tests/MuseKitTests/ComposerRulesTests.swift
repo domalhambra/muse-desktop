@@ -213,3 +213,11 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
   #expect(ApprovalMode.label(for: "onRequest") == "On request")
   #expect(ApprovalMode.label(for: "futureMode") == "futureMode")
 }
+
+@Test func aBangDraftIsAShellCommandAndABangInsideTextIsNot() {
+  #expect(ShellRule.command(in: "!echo hi") == "echo hi")
+  #expect(ShellRule.command(in: "  ! ls -la  ") == "ls -la")
+  #expect(ShellRule.command(in: "!") == nil)
+  #expect(ShellRule.command(in: "Say hi!") == nil)
+  #expect(ShellRule.command(in: "") == nil)
+}

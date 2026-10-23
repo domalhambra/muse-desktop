@@ -133,3 +133,19 @@ private func message(_ id: String, _ kind: String = "agentMessage") -> Transcrip
   #expect(ToolPresentation.spaced("mcpToolCall") == "mcp tool call")
   #expect(ActivityEntry.titled("mcpToolCall") == "Mcp Tool Call")
 }
+
+@Test func aUserShellItemIsItsOwnRowAndNeverGroups() {
+  let shell = TranscriptItem(
+    itemId: "sh", kind: "userShell", status: "completed", visibleOutput: "hi\n", commandText: "echo hi",
+    durationMs: 12, exitCode: 0)
+  let entries = TranscriptEntry.build([tool("1"), tool("2"), shell, tool("3"), tool("4"), tool("5")])
+  #expect(entries.map(\.id) == ["1", "2", "sh", "group-3"])
+  guard case .shell(let item) = entries[2] else {
+    Issue.record("Expected a shell row")
+    return
+  }
+  #expect(item.commandText == "echo hi")
+  #expect(ToolPresentation.shellFooter(shell) == "completed · exit 0 · 0.0s")
+  #expect(ToolPresentation.shellFooter(TranscriptItem(itemId: "r", kind: "userShell", status: "inProgress")) == "Running")
+  #expect(ToolPresentation.shellFooter(TranscriptItem(itemId: "f", kind: "userShell", status: "failed", exitCode: 2)) == "failed · exit 2")
+}

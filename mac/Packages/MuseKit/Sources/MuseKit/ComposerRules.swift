@@ -219,6 +219,18 @@ public enum ApprovalMode: String, CaseIterable, Sendable, Identifiable {
   }
 }
 
+/// The composer's `!` escape, as the Muse TUI's: a draft whose first non-whitespace character is
+/// `!` runs the rest as a shell command in the conversation's folder, through `session/userShell`.
+public enum ShellRule {
+  /// The command, trimmed, or nil when the draft is not a shell command or the command is empty.
+  public static func command(in draft: String) -> String? {
+    let text = JSWhitespace.trim(draft)
+    guard text.first == "!" else { return nil }
+    let command = JSWhitespace.trim(String(text.dropFirst()))
+    return command.isEmpty ? nil : command
+  }
+}
+
 /// An `@` mention at the end of the draft.
 public struct Mention: Equatable, Sendable {
   /// The draft before the `@`.

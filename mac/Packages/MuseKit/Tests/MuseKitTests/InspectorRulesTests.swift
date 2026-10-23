@@ -311,3 +311,11 @@ let reviewDiff = [
   #expect(ChangeLabel.counted("Changes", 0) == "Changes")
   #expect(ChangeLabel.counted("Changes", 3) == "Changes 3")
 }
+
+@Test func activityNamesAShellByItsCommand() {
+  let rows = ActivityEntry.build([
+    TranscriptItem(itemId: "sh", kind: "userShell", status: "completed", commandText: "npm test")
+  ])
+  #expect(rows.map(\.title) == ["Shell"])
+  #expect(rows.map(\.detail) == ["npm test"])
+}

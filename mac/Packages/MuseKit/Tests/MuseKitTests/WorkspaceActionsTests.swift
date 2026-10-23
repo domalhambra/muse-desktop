@@ -599,3 +599,28 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(workspace.view?.session.sessionId == "s2")
   #expect(workspace.approvalMode == "")
 }
+
+@MainActor @Test func aShellCommandTravelsAndClearsTheDraftAndAFailureKeepsIt() async throws {
+  let calls = Counter()
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1")))]
+    case "shell": calls.next() == 1 ? [reply(id, "null")] : [failure(id, "Muse is not connected. Reconnect in Settings.")]
+    default: []
+    }
+  }
+  workspace.draft = "!echo hi"
+  await workspace.runShell("echo hi")
+  #expect(workspace.errorMessage == Workspace.needsConversation)
+  #expect(workspace.draft == "!echo hi")
+  workspace.errorMessage = nil
+  await workspace.open("s1")
+  workspace.draft = "!echo hi"
+  await workspace.runShell("echo hi")
+  #expect(requests(backend).contains([.string("shell"), .array([.string("s1"), .string("echo hi")])]))
+  #expect(workspace.draft == "")
+  workspace.draft = "!false"
+  await workspace.runShell("false")
+  #expect(workspace.errorMessage == "Muse is not connected. Reconnect in Settings.")
+  #expect(workspace.draft == "!false")
+}

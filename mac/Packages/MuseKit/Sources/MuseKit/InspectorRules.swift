@@ -331,6 +331,7 @@ public struct ActivityEntry: Equatable, Sendable, Identifiable {
     if item.kind == "reminderChild" {
       return ToolPresentation.first(item.reminderAgentId).map { "Reminder · \($0)" } ?? "Background reminder"
     }
+    if item.kind == "userShell" { return "Shell" }
     if item.kind == "hookRun" { return ToolPresentation.first(item.label) ?? "CLI hook" }
     return ToolPresentation.first(item.tool, item.label) ?? titled(item.kind)
   }
@@ -340,6 +341,7 @@ public struct ActivityEntry: Equatable, Sendable, Identifiable {
       return (item.blocking == true ? "Keeps the turn open · " : "")
         + (item.status == "inProgress" ? "Running" : item.status)
     }
+    if item.kind == "userShell" { return ToolPresentation.first(item.commandText) ?? item.status }
     return ToolPresentation.first(item.statusLine, item.objective, item.fallbackText) ?? item.status
   }
 

@@ -130,6 +130,23 @@ extension Workspace {
     await run { try await self.client.cancel(sessionId) }
   }
 
+  /// Runs the draft's `!` command in the open conversation's folder. Muse answers with a
+  /// `userShell` item. Success clears the draft the command was typed in; a failure keeps it.
+  public func runShell(_ command: String) async {
+    guard !submitting else { return }
+    guard let sessionId = view?.session.sessionId else {
+      errorMessage = Self.needsConversation
+      return
+    }
+    submitting = true
+    defer { submitting = false }
+    let key = draftKey
+    await run {
+      try await self.client.shell(sessionId: sessionId, command: command)
+      self.drafts[key] = nil
+    }
+  }
+
   /// The inspector footer's Terminal: Terminal opens in the current project's folder.
   public func openProjectInTerminal() async {
     guard !project.isEmpty else { return }
