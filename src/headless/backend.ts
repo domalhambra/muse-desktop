@@ -387,10 +387,12 @@ export function createBackend({
     const view = muse.getView(id.parse(session))
     const file = pathSchema.parse(path)
     if (!isAbsolute(file)) throw new Error('Choose a full path for the exported file.')
-    // A long sidebar title is shortened, not a reason to refuse the export.
+    // A long sidebar title is shortened, by code points so an emoji stays whole, not a reason
+    // to refuse the export.
+    const long = z.string().nullish().parse(fallback)
     const title = exportTitle(
       view.session,
-      z.string().nullish().parse(fallback)?.slice(0, 200) ?? undefined,
+      long ? Array.from(long).slice(0, 200).join('') : undefined,
     )
     // The open call sets 0600 on a new file; a file the person replaced would keep its old mode,
     // as in Electron, so mMac sets it on the open handle before any content lands.

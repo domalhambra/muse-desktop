@@ -886,6 +886,14 @@ describe('headless backend, M4a conversation actions', () => {
     expect(await readFile(path, 'utf8')).toBe(`# ${'x'.repeat(200)}\n\nProject: None\n`)
   })
 
+  it('cuts a long sidebar title by characters, keeping an emoji whole', async () => {
+    const { call, start } = harness()
+    await start()
+    const path = join(dir, 'emoji.md')
+    await call('export', 's1', path, `${'x'.repeat(199)}🎉🎉`)
+    expect(await readFile(path, 'utf8')).toBe(`# ${'x'.repeat(199)}🎉\n\nProject: None\n`)
+  })
+
   it('opens Terminal in a known project, then with the CLI', async () => {
     const project = await folder("O'Brien project")
     const { call, start, terminal } = harness(fakeMuse({ status: { ...ready, path: '/opt/muse' } }))
