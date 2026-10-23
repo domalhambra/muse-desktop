@@ -43,6 +43,8 @@ public enum CommandMenu {
 
   /// The entries for `query`: a case-insensitive substring match on the title, one space, and the
   /// subtitle. The query is not trimmed. Not `localizedStandardContains`, which ignores diacritics.
+  /// Swift compares whole characters, so a decomposed accent (e + U+0301) matches differently from
+  /// Electron's JS `includes`; Mac text is almost always precomposed.
   public static func entries(sessions: [Session], archived: [String], query: String) -> [CommandMenuEntry] {
     let needle = query.lowercased()
     func matches(_ entry: CommandMenuEntry) -> Bool {

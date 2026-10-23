@@ -58,6 +58,12 @@ private func session(
   #expect(entries.filter { $0.group == .conversations }.map(\.title) == ["active", "new", "old"])
 }
 
+@Test func equalActivityTiesBreakOnSessionId() {
+  let sessions = [session("b", minutesAgo: 5), session("a", minutesAgo: 5)]
+  let entries = CommandMenu.entries(sessions: sessions, archived: [], query: "")
+  #expect(entries.filter { $0.group == .conversations }.map(\.title) == ["a", "b"])
+}
+
 @Test func conversationsStopAt25AndThemesStillShow() {
   let sessions = (1...30).map { session("chat \($0)", minutesAgo: $0) }
   let entries = CommandMenu.entries(sessions: sessions, archived: [], query: "")
