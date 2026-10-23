@@ -1,6 +1,6 @@
 # Bridges
 
-A bridge lets another agent ask Muse Code to do work through Muse Desktop. The other agent can be Meta's Muse app, a script, or any MCP client. Muse Desktop runs each request as a normal Muse Code conversation. The conversation appears in the sidebar, and its approvals and questions appear in the window.
+A bridge lets another agent ask Muse Code to do work through mMac. The other agent can be Meta's Muse app, a script, or any MCP client. mMac runs each request as a normal Muse Code conversation. The conversation appears in the sidebar, and its approvals and questions appear in the window.
 
 There are two bridges. Both use the same core (`src/main/agent-api.ts`), so they accept the same requests and report the same job states.
 
@@ -13,7 +13,7 @@ Both bridges are off by default. Turn them on in **Settings → Bridges**.
 
 ## What a bridge can do
 
-A bridge can only work in a trusted project from the Muse Desktop project list (the 30 most recent projects). It can also continue an existing conversation in such a project. Everything else is a Muse Code feature that the bridge passes through:
+A bridge can only work in a trusted project from the mMac project list (the 30 most recent projects). It can also continue an existing conversation in such a project. Everything else is a Muse Code feature that the bridge passes through:
 
 - Start a conversation, or send the next turn to an existing one.
 - Choose the reasoning effort, the model, and queue or steer for a busy conversation.
@@ -34,7 +34,7 @@ A job is one prompt sent as one turn. A conversation has one active job at a tim
 
 ## Folder bridge
 
-Muse Desktop keeps the folder in its application data folder, next to its preferences. On macOS that is `~/Library/Application Support/muse-desktop/bridge`. **Settings → Bridges → Open bridge folder** opens it. The folder contains a `README.md` with a short version of this section, for the other agent to read.
+mMac keeps the folder in its data folder, next to its preferences: `~/Library/Application Support/mMac/bridge`. `MMAC_DATA_FOLDER` moves the data folder, and the bridge folder with it. **Settings → Bridges → Open bridge folder** opens it. The folder contains a `README.md` with a short version of this section, for the other agent to read.
 
 ### Ask for work
 
@@ -52,18 +52,18 @@ Add a README section that describes the install steps.
 
 | Field      | Required                       | Values                                                                        |
 | ---------- | ------------------------------ | ----------------------------------------------------------------------------- |
-| `project`  | Yes, unless `session` is given | A trusted project from the Muse Desktop project list                          |
+| `project`  | Yes, unless `session` is given | A trusted project from the mMac project list                                  |
 | `session`  | No                             | An existing session id, to continue that conversation                         |
 | `effort`   | No                             | `none`, `minimal`, `low`, `medium` (default), `high`, `xhigh`, `max`, `ultra` |
 | `mode`     | No                             | `queue` (default) or `steer`, for a conversation that is working              |
 | `model`    | No                             | A Muse Code model id                                                          |
 | `worktree` | No                             | `true` to run in a new Git worktree that Muse creates                         |
 
-Muse Desktop moves the request to `<bridge folder>/inbox/processed/` as soon as it reads it. If Muse Desktop cannot start the job, it moves the request to `<bridge folder>/inbox/rejected/` and writes `<bridge folder>/inbox/rejected/<name>.error.txt`, which gives the reason. Examples are a missing field or an untrusted project. A turn that fails after it starts stays in `<bridge folder>/inbox/processed/`, and its outbox file shows `status: error`.
+mMac moves the request to `<bridge folder>/inbox/processed/` as soon as it reads it. If mMac cannot start the job, it moves the request to `<bridge folder>/inbox/rejected/` and writes `<bridge folder>/inbox/rejected/<name>.error.txt`, which gives the reason. Examples are a missing field or an untrusted project. A turn that fails after it starts stays in `<bridge folder>/inbox/processed/`, and its outbox file shows `status: error`.
 
 ### Read the result
 
-Muse Desktop writes `outbox/<same file name>.md` and rewrites it while the job runs. The frontmatter gives the job id, the session id, and the status. The **Reply** section holds Muse's answer. The **Transcript** section holds every step of the turn. Read the file until the status is `done`, `error` or `cancelled`.
+mMac writes `outbox/<same file name>.md` and rewrites it while the job runs. The frontmatter gives the job id, the session id, and the status. The **Reply** section holds Muse's answer. The **Transcript** section holds every step of the turn. Read the file until the status is `done`, `error` or `cancelled`.
 
 ### Decide
 
@@ -90,16 +90,16 @@ cancel: true
 ---
 ```
 
-For a question with options, an answer that matches an option label selects that option. Separate labels with commas for a multiple-choice question. Any other answer goes to Muse as free text. Muse Desktop moves each decision file to `<bridge folder>/decisions/processed/`. A decision that fails leaves `<bridge folder>/decisions/<job id>.error.txt`.
+For a question with options, an answer that matches an option label selects that option. Separate labels with commas for a multiple-choice question. Any other answer goes to Muse as free text. mMac moves each decision file to `<bridge folder>/decisions/processed/`. A decision that fails leaves `<bridge folder>/decisions/<job id>.error.txt`.
 
 ## MCP bridge
 
 1. Open **Settings → Bridges**.
-2. Click **Make token**. Copy the token. Muse Desktop shows it only once.
+2. Click **Make token**. Copy the token. mMac shows it only once.
 3. Turn on **MCP bridge**.
 4. Give the client the URL `http://127.0.0.1:7735/mcp` and the header `Authorization: Bearer <token>`.
 
-Change the port in the same tab. **Copy token** copies the current token later. **Make new token** replaces the token at once, so clients that use the old token lose access.
+Change the port in the same pane. **Copy token** copies the current token later. **Make new token** replaces the token at once, so clients that use the old token lose access.
 
 | Tool            | Does                                                                                                                      |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------- |
@@ -108,7 +108,7 @@ Change the port in the same tab. **Copy token** copies the current token later. 
 | `list_models`   | Lists the models the installed Muse Code offers.                                                                          |
 | `ask_muse`      | Starts a job. Takes `project` or `session`, `prompt`, `effort`, `mode`, `model`, `worktree` and `wait_seconds`.           |
 | `get_job`       | Returns the job status, the reply, and pending approvals and questions. Add `include_transcript` for the full transcript. |
-| `list_jobs`     | Lists recent jobs since Muse Desktop started, up to 200.                                                                  |
+| `list_jobs`     | Lists recent jobs since mMac started, up to 200.                                                                          |
 | `approve`       | Decides an approval with a `choiceId` from `get_job`.                                                                     |
 | `answer`        | Answers a question. The answer follows the rules in the folder bridge's Decide section.                                   |
 | `cancel`        | Stops the job's turn.                                                                                                     |
@@ -121,12 +121,12 @@ Paste this block into the Muse app as an instruction or a skill. Replace the fol
 
 ```text
 You can ask Muse Code, a coding agent on this Mac, to work in a code project.
-Use the bridge folder at /Users/<you>/Library/Application Support/muse-desktop/bridge.
+Use the bridge folder at /Users/<you>/Library/Application Support/mMac/bridge.
 
 To ask for work, write a new Markdown file in inbox/. Use a short, unique file name.
 Start the file with this frontmatter, then write the task below it:
 ---
-project: <absolute path of a trusted project in Muse Desktop>
+project: <absolute path of a trusted project in mMac>
 effort: medium
 ---
 
@@ -159,13 +159,11 @@ Then give the client:
 
 To stop serving, run `tailscale serve --https=443 off`. Tailscale Funnel is the public variant of the same command. Do not use it with this bridge unless you accept the exposure above.
 
-## mMac
+## The token
 
-mMac, the native app in `mac/`, runs the same two bridges through `src/headless/bridges.ts`. Requests, tools and job states are the same as above. Three things differ.
+mMac keeps the MCP bridge token in the login Keychain, as a generic password with the service `com.domalhambra.mmac.bridge-token` and the account `mcp-bridge`. mMac reads it before each backend start and sends it in `start`. The backend keeps it in memory only. **Make new token** writes the new token back to the Keychain. Debug builds can use another service, named in `MMAC_KEYCHAIN_SERVICE` (see `docs/changing-things.md`).
 
-- **The folder.** mMac keeps its bridge folder in its own data folder: `~/Library/Application Support/mMac/bridge`. `MMAC_DATA_FOLDER` moves the data folder, and the bridge folder with it. Give the Muse app this path, not Muse Desktop's. **Settings → Bridges → Open bridge folder** opens it.
-- **The token.** mMac keeps the MCP bridge token in the login Keychain, as a generic password with the service `com.domalhambra.mmac.bridge-token` and the account `mcp-bridge`. mMac reads it before each backend start and sends it in `start`. The backend keeps it in memory only. **Make new token** writes the new token back to the Keychain. Debug builds can use another service, named in `MMAC_KEYCHAIN_SERVICE` (see `docs/changing-things.md`).
-- **The port.** mMac and Muse Desktop both use port 7735 by default. Run the MCP bridge in one app at a time. If the port is in use, the Bridges pane shows "Port 7735 is in use. Choose another port." Choose another port in one of the apps if you need both.
+The installed Electron Muse Desktop, if you still run it, also uses port 7735 for its MCP bridge by default. Run the MCP bridge in one app at a time. If the port is in use, the Bridges pane shows "Port 7735 is in use. Choose another port."
 
 To read the token without mMac, run this in Terminal:
 
@@ -181,8 +179,8 @@ If the Keychain refuses a new token, the MCP bridge still uses it. **Copy token*
 
 ## Security
 
-- A bridge accepts work only for trusted projects in the Muse Desktop project list, and for conversations in those projects. Worktrees count as part of their project. A project that drops off the list of 30 recent projects loses bridge access until you open it again.
-- The MCP bridge listens on `127.0.0.1` only. Every request must carry the bearer token. Muse Desktop compares the token in constant time.
-- The token is not stored in the preferences. Muse Desktop keeps it in the `bridge-token` file, encrypted with Electron `safeStorage`. On macOS that uses the Keychain. On Linux, `safeStorage` can fall back to a weak built-in key. When `safeStorage` is not available, the file holds the token as plain text with permissions for your user only. mMac keeps its token in the login Keychain instead (see mMac above).
-- Muse Desktop creates the bridge folder with permissions for your user only, and writes its own files the same way. Files that another agent writes keep the permissions that agent gives them. Any program that runs as your user can write requests into the folder. Turn the folder bridge off when you do not use it.
+- A bridge accepts work only for trusted projects in the mMac project list, and for conversations in those projects. Worktrees count as part of their project. A project that drops off the list of 30 recent projects loses bridge access until you open it again.
+- The MCP bridge listens on `127.0.0.1` only. Every request must carry the bearer token. mMac compares the token in constant time.
+- The token is not stored in the preferences. mMac keeps it in the login Keychain (see "The token"). `src/main/bridge-token.ts`, the Electron app's encrypted token file, stays in the core, and mMac does not use it.
+- mMac creates the bridge folder with permissions for your user only, and writes its own files the same way. Files that another agent writes keep the permissions that agent gives them. Any program that runs as your user can write requests into the folder. Turn the folder bridge off when you do not use it.
 - Muse Code applies its usual sandbox and approval rules to bridge jobs. A bridge decides an approval with one of the choices Muse offers, and Muse checks the choice.
