@@ -1,4 +1,5 @@
 import AppKit
+import MuseKit
 import SwiftUI
 
 @main
@@ -67,8 +68,9 @@ struct MMacApp: App {
         CommandMenuCommand(controller: delegate.controller)
         InspectorCommand()
       }
-      // Edit › Find, for the find bars of the file preview and of stored output.
+      // Edit › Voice Input, then Edit › Find, for the find bars of the file preview and of stored output.
       CommandGroup(after: .textEditing) {
+        VoiceCommand(controller: delegate.controller)
         Menu("Find") {
           Button("Find…") { TextFinder.send(.showFindInterface) }.keyboardShortcut("f")
           Button("Find Next") { TextFinder.send(.nextMatch) }.keyboardShortcut("g")
@@ -139,6 +141,36 @@ private struct CommandMenuCommand: View {
     }
     .keyboardShortcut("k")
     .disabled(controller.workspace == nil || controller.sheets.renaming || controller.sheets.help)
+  }
+}
+
+/// Edit → Voice Input (⌥V): starts or stops voice input from anywhere in the conversation window,
+/// as Electron's window-wide Option-V. A menu key equivalent, so the composer never types "√".
+private struct VoiceCommand: View {
+  let controller: AppController
+
+  var body: some View {
+    Button("Voice Input") {
+      // Only in the conversation window, and not over one of its sheets: Electron ignores
+      // Option-V while a dialog is open. A sheet is the key window while it shows; the checks on
+      // `attachedSheet` and `anyShown` are the ones ⌘K and the composer's popups use.
+      guard let window = NSApp.keyWindow, MMacApp.isMainWindow(window), window.attachedSheet == nil,
+        !controller.sheets.anyShown
+      else { return }
+      Task { await controller.voice?.toggle() }
+    }
+    .keyboardShortcut("v", modifiers: .option)
+    .disabled(!enabled)
+  }
+
+  /// As the mic button: idle needs the connection and no send in flight; a recording can always stop.
+  private var enabled: Bool {
+    guard let voice = controller.voice, let workspace = controller.workspace else { return false }
+    switch voice.phase {
+    case .idle: return workspace.isConnected && !workspace.submitting
+    case .recording: return true
+    case .permission, .transcribing: return false
+    }
   }
 }
 

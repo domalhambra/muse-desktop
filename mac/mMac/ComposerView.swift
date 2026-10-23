@@ -66,6 +66,9 @@ struct ComposerView: View {
       HStack(spacing: 10) {
         AttachButton(workspace: workspace)
         Divider().frame(height: 16)
+        if let voice = controller.voice {
+          VoiceButton(voice: voice, workspace: workspace)
+        }
         Picker("Model", selection: modelSelection) {
           if !workspace.models.contains(where: { $0.modelId == workspace.modelId }) {
             Text(workspace.modelId.isEmpty ? "CLI default" : workspace.modelId).tag(workspace.modelId)
@@ -267,9 +270,11 @@ struct ComposerView: View {
     return nil
   }
 
-  /// A command runs while disconnected, as in Electron; a message needs the connection.
+  /// A command runs while disconnected, as in Electron; a message needs the connection. Nothing
+  /// sends while voice input records or transcribes: a recording never sends itself.
   private var canSend: Bool {
-    guard !workspace.submitting, workspace.openingSessionId == nil else { return false }
+    guard !workspace.submitting, workspace.openingSessionId == nil, controller.voice?.isBusy != true
+    else { return false }
     if ComposerCommand.parse(workspace.draft) != nil { return true }
     // As `Workspace.send`: a message can be attachment chips alone.
     return workspace.isConnected
@@ -297,9 +302,10 @@ struct ComposerView: View {
       openSettings()
     case .help:
       controller.sheets.help = true
-    case .toggleVoice, .cancelVoice:
-      // The voice controls do not exist yet. Task 13 connects these two.
-      break
+    case .toggleVoice:
+      Task { await controller.voice?.toggle() }
+    case .cancelVoice:
+      controller.voice?.cancel()
     case .modelPicker:
       PickerOpener.open("model-picker")
     case .effortPicker:

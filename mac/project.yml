@@ -24,6 +24,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.developer-tools
+        # macOS ends an app that touches the microphone without this key.
+        NSMicrophoneUsageDescription: mMac records your voice only when you start voice input, then uses your Muse Code CLI to transcribe it into a draft.
         # The checkout this build came from. A checkout chosen in the app (the MMacRepository user default) wins.
         MMacRepository: $(SRCROOT)/..
     settings:

@@ -20,6 +20,8 @@ final class AppController {
   private(set) var workspace: Workspace?
   /// The Settings window's store for this Workspace. Made and dropped with it.
   private(set) var settings: SettingsModel?
+  /// Voice input for this Workspace. Made and dropped with it.
+  private(set) var voice: VoiceSession?
   /// Read once: in memory mode every read of `BridgeTokenStores.app` makes a new, empty store, so
   /// every `start` and every `SettingsModel` must share this one.
   let tokens: any BridgeTokenStore = BridgeTokenStores.app
@@ -124,6 +126,7 @@ final class AppController {
       }
       self.workspace = workspace
       self.settings = SettingsModel(workspace: workspace, tokens: tokens, tokenError: tokenError)
+      self.voice = VoiceSession(workspace: workspace, capture: VoiceRecorder())
       phase = .running
       // A backend that stops while history loads shows the stopped screen. Its Restart must not
       // find this start still under way.
@@ -204,6 +207,9 @@ final class AppController {
       // A reopen the Workspace had not done yet, if it stopped while history loaded, carries on.
       reopen = workspace.openingSessionId ?? workspace.view?.session.sessionId ?? workspace.pendingReopen
     }
+    // A recording or a transcription belongs to this backend.
+    voice?.cancel()
+    voice = nil
     workspace = nil
     settings = nil
   }

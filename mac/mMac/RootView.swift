@@ -81,6 +81,7 @@ struct MainView: View {
     .sheet(isPresented: $sheets.help) {
       HelpSheet { controller.sheets.help = false }
     }
+    .modifier(VoiceCancellation(voice: controller.voice))
     .alert(
       "Muse",
       isPresented: Binding(
