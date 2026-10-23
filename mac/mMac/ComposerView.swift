@@ -103,7 +103,9 @@ struct ComposerView: View {
             Text(shown.isEmpty ? "Mode" : ApprovalMode.label(for: shown)).tag(shown)
           }
         }
-        .fixedSize()
+        // Compressible: a fifth fixed-size picker would widen the detail column's minimum and
+        // push the inspector off the window.
+        .fixedSize(horizontal: false, vertical: true)
         .tint(nil)
         .disabled(workspace.view == nil || workspace.submitting)
         .help("How much Muse may do without asking. A change applies to Muse\u{2019}s next action.")

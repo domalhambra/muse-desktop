@@ -51,7 +51,6 @@ struct SideChatSheet: View {
     }
     .frame(width: 640, height: 520)
     .task { if workspace.sideView == nil { await workspace.openSideChat() } }
-    .accessibilityIdentifier("side-chat-sheet")
   }
 
   private func send() {
@@ -96,6 +95,5 @@ struct ChildSessionSheet: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .frame(width: 640, height: 520)
-    .accessibilityIdentifier("child-sheet")
   }
 }

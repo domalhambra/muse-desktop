@@ -99,6 +99,9 @@ struct InspectorView: View {
       .pickerStyle(.segmented)
       .labelsHidden()
       .tint(nil)
+      // Six segments share the column's width; at their intrinsic width they would push the
+      // later segments out of the window.
+      .frame(maxWidth: .infinity)
       Button {
         Task { await inspector.refresh() }
       } label: {

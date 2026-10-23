@@ -60,10 +60,18 @@ final class WebPage {
   private(set) var url: URL?
   private(set) var canGoBack = false
   private let watcher = Watcher()
+  private var observations: [NSKeyValueObservation] = []
 
   init() {
     watcher.onChange = { [weak self] in self?.read() }
     view.navigationDelegate = watcher
+    // The toolbar follows the page by key-value observation too, which fires for every
+    // navigation on the main thread, whatever the delegate does.
+    observations = [
+      view.observe(\.title, options: [.new]) { [weak self] _, _ in self?.read() },
+      view.observe(\.url, options: [.new]) { [weak self] _, _ in self?.read() },
+      view.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in self?.read() },
+    ]
   }
 
   func load(_ url: URL, failed: @escaping (String) -> Void) {
