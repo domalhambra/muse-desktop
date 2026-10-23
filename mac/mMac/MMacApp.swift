@@ -1,6 +1,7 @@
 import AppKit
 import MuseKit
 import SwiftUI
+import os
 
 @main
 struct MMacApp: App {
@@ -153,11 +154,18 @@ private struct CommandMenuCommand: View {
 /// Edit → Voice Input (⌥V): starts or stops voice input from anywhere in the conversation window,
 /// as Electron's window-wide Option-V. A menu key equivalent, so the composer never types "√".
 private struct VoiceCommand: View {
+  private static let log = Logger(subsystem: "com.domalhambra.mmac", category: "voice")
   let controller: AppController
 
   var body: some View {
     Button("Voice Input") {
-      guard canRun, let voice = controller.voice else { return }
+      let connected = controller.workspace?.isConnected == true ? "connected" : "disconnected"
+      let phase = controller.voice.map { "\($0.phase), \(connected)" } ?? "no voice session"
+      guard canRun, let voice = controller.voice else {
+        Self.log.debug("Voice Input: \(phase, privacy: .public), not run")
+        return
+      }
+      Self.log.debug("Voice Input: \(phase, privacy: .public), toggled")
       Task { await voice.toggle() }
     }
     .keyboardShortcut("v", modifiers: .option)

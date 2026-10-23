@@ -1,6 +1,7 @@
 import AppKit
 import MuseKit
 import SwiftUI
+import os
 
 /// The composer's text area: an NSTextView, so the keys behave as in Electron's textarea.
 /// Return sends, Cmd-Return sends, Shift-Return and Option-Return add a line at the cursor, and
@@ -199,6 +200,7 @@ struct ComposerTextView: NSViewRepresentable {
 
 /// The NSTextView behind the composer: its keys, its placeholder, its first focus.
 final class ComposerNSTextView: NSTextView {
+  private static let log = Logger(subsystem: "com.domalhambra.mmac", category: "composer")
   var placeholder = ""
   var placeholderColor = NSColor.placeholderTextColor
   var onSubmit: (() -> Void)?
@@ -337,7 +339,8 @@ final class ComposerNSTextView: NSTextView {
     // type "√" and the menu item would never run. Hand the key to the menu: it toggles voice when
     // voice can run and does nothing otherwise. The draft never takes the character.
     if Self.isVoiceShortcut(event), !hasMarkedText() {
-      _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
+      let ran = NSApp.mainMenu?.performKeyEquivalent(with: event) ?? false
+      Self.log.debug("⌥V in the composer: \(ran ? "handed to Voice Input" : "Voice Input is off; ignored", privacy: .public)")
       return
     }
     // A popup takes its keys first, while the composer is editable. Composition owns every key

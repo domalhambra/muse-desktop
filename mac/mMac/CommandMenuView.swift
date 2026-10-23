@@ -2,10 +2,12 @@ import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
+import os
 
 /// The ⌘K sheet, as Electron's `CommandMenu.tsx`: the three actions, recent conversations and the
 /// themes, filtered as the person types. `CommandMenu` in MuseKit builds and filters the entries.
 struct CommandMenuView: View {
+  private static let log = Logger(subsystem: "com.domalhambra.mmac", category: "command-menu")
   let controller: AppController
   let workspace: Workspace
   @Environment(\.appearance) private var appearance
@@ -31,7 +33,13 @@ struct CommandMenuView: View {
     }
     .frame(width: 580)
     .background(appearance.colors.dialog)
-    .onChange(of: query) { selected = 0 }
+    .onChange(of: query) { _, query in
+      selected = 0
+      let count = CommandMenu.entries(
+        sessions: workspace.sessions, archived: workspace.preferences.archivedSessionIds, query: query
+      ).count
+      Self.log.debug("⌘K query \"\(query, privacy: .public)\": \(count) entries")
+    }
     // A backend event can shrink the list while the sheet shows; keep the highlight on a row, so
     // Return opens the row that looks highlighted.
     .onChange(of: entries.count) { _, count in selected = min(selected, max(count - 1, 0)) }

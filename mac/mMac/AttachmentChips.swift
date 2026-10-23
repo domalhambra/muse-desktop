@@ -2,6 +2,7 @@ import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
+import os
 
 /// The paperclip, as Electron's: a multi-select open panel for images and text files.
 struct AttachButton: View {
@@ -46,6 +47,7 @@ struct AttachButton: View {
 /// The composer's attachments, as Electron's chips. They belong to the composer, not to a
 /// conversation.
 struct AttachmentChips: View {
+  private static let log = Logger(subsystem: "com.domalhambra.mmac", category: "attachments")
   let workspace: Workspace
 
   var body: some View {
@@ -53,6 +55,10 @@ struct AttachmentChips: View {
       ForEach(workspace.attachments) { attachment in
         // A chip in the send in flight cannot go: the backend is reading it.
         AttachmentChip(attachment: attachment, canRemove: !workspace.isSending(attachment.id)) {
+          // Workspace refuses a chip in the send in flight.
+          let refused = workspace.isSending(attachment.id)
+          Self.log.debug(
+            "Remove chip \(attachment.id, privacy: .public): \(refused ? "refused" : "accepted", privacy: .public)")
           Task { await workspace.removeAttachment(attachment.id) }
         }
       }
