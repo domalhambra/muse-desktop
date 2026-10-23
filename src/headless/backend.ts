@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, open, realpath, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { mkdir, open, realpath, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
@@ -33,7 +34,9 @@ import {
 import type { AgentApi, AgentPolicy } from '../main/agent-api'
 import type { MuseHost } from '../main/muse-host'
 import { readPreferences, writePreferences } from '../main/preferences'
+import { validateVoiceAudio, VoiceTranscriber } from '../main/voice'
 import { mergeWorktree, removeWorktree } from '../main/worktrees'
+import { MAX_VOICE_BYTES } from '../shared/voice'
 import { projectRoot, worktreeParent } from '../shared/worktree'
 import { Attachments } from './attachments'
 import { Bridges, type BridgeFactories } from './bridges'
@@ -89,6 +92,8 @@ export type BackendDeps = {
   agent?: (policy: AgentPolicy) => AgentApi
   /** The bridges to run. Tests pass fakes; the default is the real FileBridge and McpBridge. */
   bridgeFactories?: BridgeFactories
+  /** Runs `muse voice transcribe`. Tests pass a fake; the default is src/main/voice.ts's. */
+  voice?: { transcribe(data: Buffer, cliPath: string): Promise<string>; cancel(): Promise<void> }
 }
 
 export function createBackend({
@@ -101,6 +106,7 @@ export function createBackend({
   openTerminal = openInTerminal,
   agent,
   bridgeFactories,
+  voice = new VoiceTranscriber(),
 }: BackendDeps) {
   const id = z.string().min(1).max(200)
   const pathSchema = z.string().min(1).max(4096)
@@ -556,6 +562,72 @@ export function createBackend({
     return token
   })
 
+  // Voice, as src/main/index.ts registers it, with the audio as a file instead of bytes: the
+  // longest clip is about 3.8 MB, too much for one JSON line. mMac writes the WAV to its own
+  // temp folder; the backend checks it, reads it and deletes it before transcribing.
+  const NOT_A_CLIP = 'The recording is not a supported PCM audio clip. Please record it again.'
+  const TOO_LONG = 'Record between a moment and two minutes of speech.'
+
+  /**
+   * Opens the recording once and checks and reads through that handle. O_NOFOLLOW refuses a
+   * symlink, O_NONBLOCK keeps a FIFO from blocking the open. Nothing is deleted unless the path
+   * opened as a regular file; after that the file is deleted whatever the checks say. A raw fs
+   * error (it would name the temp path) never reaches the person.
+   */
+  async function takeRecording(value: unknown) {
+    const path = pathSchema.parse(value)
+    if (!isAbsolute(path)) throw new Error('Choose a full path for the recording.')
+    if (!/\.wav$/i.test(path)) throw new Error(NOT_A_CLIP)
+    const coded = (error: unknown) => typeof (error as { code?: unknown } | null)?.code === 'string'
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
+    ).catch((error) => {
+      throw coded(error) ? new Error(NOT_A_CLIP) : error
+    })
+    try {
+      const info = await handle.stat().catch((error) => {
+        throw coded(error) ? new Error(NOT_A_CLIP) : error
+      })
+      if (!info.isFile()) throw new Error(NOT_A_CLIP)
+      try {
+        if (info.size > MAX_VOICE_BYTES) throw new Error(TOO_LONG)
+        // At most one byte past the limit, so a file that grew after the stat cannot fill memory.
+        const buffer = Buffer.alloc(MAX_VOICE_BYTES + 1)
+        let length = 0
+        while (length < buffer.length) {
+          const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+          if (!bytesRead) break
+          length += bytesRead
+        }
+        if (length > MAX_VOICE_BYTES) throw new Error(TOO_LONG)
+        return validateVoiceAudio(buffer.subarray(0, length))
+      } catch (error) {
+        throw coded(error) ? new Error(NOT_A_CLIP) : error
+      } finally {
+        await rm(path, { force: true }).catch(() => {})
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+
+  method('voice', async (value) => {
+    const data = await takeRecording(value)
+    try {
+      return await voice.transcribe(data, current().cliPath)
+    } catch (error) {
+      // A CLI that fails with no stderr gives execFile's own text, which names the temp file.
+      if (error instanceof Error && error.message.startsWith('Command failed'))
+        throw new Error(
+          'Muse Code could not transcribe this recording. Check your connection and CLI voice setup, then try again.',
+        )
+      throw error
+    }
+  })
+
+  method('cancel-voice', () => voice.cancel())
+
   method('shutdown', async () => {
     if (muse.hasActiveTurns()) {
       const choice = await ask({
@@ -576,5 +648,7 @@ export function createBackend({
     preferenceWrites: () => preferenceWrites,
     /** Stops both bridges for good: the quit path. */
     stopBridges: () => bridges?.stop() ?? Promise.resolve(),
+    /** Cancels a transcription in progress: the quit path. */
+    stopVoice: () => voice.cancel(),
   }
 }

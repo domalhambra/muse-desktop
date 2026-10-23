@@ -1,5 +1,15 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -12,7 +22,9 @@ import type {
 } from '../../src/shared/protocol'
 import type { AgentApi, AgentPolicy } from '../../src/main/agent-api'
 import { splitHunks } from '../../src/main/git'
-import { createBackend, type Muse } from '../../src/headless/backend'
+import { VoiceTranscriber } from '../../src/main/voice'
+import { encodeVoiceWav, MAX_VOICE_BYTES } from '../../src/shared/voice'
+import { createBackend, type BackendDeps, type Muse } from '../../src/headless/backend'
 import type { BridgeFactories } from '../../src/headless/bridges'
 import { HEADLESS_PROTOCOL, type Ask } from '../../src/headless/wire'
 
@@ -80,13 +92,26 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
   } satisfies Muse
 }
 
+/** A VoiceTranscriber stand-in that records its calls. */
+function fakeVoice() {
+  return {
+    transcribe: vi.fn(async (_data: Buffer, _cliPath: string) => 'A voice draft to review.'),
+    cancel: vi.fn(async () => {}),
+  }
+}
+
 /** A backend wired to fakes. `answers` are the choices the fake app gives, in order. */
 function harness(
   muse: Muse = fakeMuse(),
   answers: number[] = [],
-  options: { askStartsQuit?: boolean; dataFolder?: string } = {},
+  options: {
+    askStartsQuit?: boolean
+    dataFolder?: string
+    voice?: NonNullable<BackendDeps['voice']>
+  } = {},
 ) {
   const asks: Ask[] = []
+  const voice = options.voice ?? fakeVoice()
   const dataFolder = join(dir, options.dataFolder ?? 'data')
   const events: AppEvent[] = []
   const terminal: string[] = []
@@ -119,6 +144,7 @@ function harness(
       return { activeCount: 0 } as unknown as AgentApi
     },
     bridgeFactories,
+    voice,
     ask: async (value) => {
       asks.push(value)
       // A quit that starts while the Ask shows: the answer still comes back.
@@ -153,6 +179,8 @@ function harness(
     start,
     lastPreferences,
     backend,
+    /** The transcriber the backend was given. */
+    voice,
     /** The file the backend saves preferences in. */
     preferencesFile: join(dataFolder, 'preferences.json'),
     /** The policy the backend gave the agent factory in start. */
@@ -1148,6 +1176,139 @@ describe('headless backend, M4a attachments', () => {
       'An attachment expired. Select it again.',
     )
     await expect(call('remove-attachment', '')).rejects.toThrow()
+  })
+})
+
+describe('headless backend, M4a voice', () => {
+  const PCM = 'The recording is not a supported PCM audio clip. Please record it again.'
+  const GENERAL =
+    'Muse Code could not transcribe this recording. Check your connection and CLI voice setup, then try again.'
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  /** One second of silence as mMac records it: 16 kHz mono 16-bit PCM WAV. */
+  async function recording(name = 'clip.wav') {
+    const path = join(dir, name)
+    await writeFile(path, encodeVoiceWav([new Float32Array(16000)], 16000))
+    return path
+  }
+
+  /** The error a call rejects with, so a test can compare the whole message. */
+  async function failure(result: unknown) {
+    return Promise.resolve(result).then(
+      () => new Error('It did not fail.'),
+      (error: unknown) => error as Error,
+    )
+  }
+
+  it('reads the recording, deletes it, and returns the transcribed text', async () => {
+    const h = harness()
+    await h.start()
+    await h.call('preferences', { cliPath: '/opt/muse' })
+    const path = await recording()
+    const bytes = await readFile(path)
+    expect(await h.call('voice', path)).toBe('A voice draft to review.')
+    expect(h.voice.transcribe).toHaveBeenCalledWith(bytes, '/opt/muse')
+    await expect(stat(path)).rejects.toThrow('ENOENT')
+  })
+
+  it('refuses anything but a regular .wav file, and deletes nothing it refuses', async () => {
+    const h = harness()
+    await h.start()
+    const text = join(dir, 'notes.txt')
+    await writeFile(text, 'x')
+    await expect(h.call('voice', text)).rejects.toThrow(PCM)
+    expect((await stat(text)).isFile()).toBe(true)
+    const wavFolder = await folder('folder.wav')
+    await expect(h.call('voice', wavFolder)).rejects.toThrow(PCM)
+    expect((await stat(wavFolder)).isDirectory()).toBe(true)
+    const target = await recording('target.wav')
+    const link = join(dir, 'link.wav')
+    await symlink(target, link)
+    await expect(h.call('voice', link)).rejects.toThrow(PCM)
+    expect((await stat(target)).isFile()).toBe(true)
+    const fifo = join(dir, 'pipe.wav')
+    execFileSync('mkfifo', [fifo])
+    await expect(h.call('voice', fifo)).rejects.toThrow(PCM)
+    expect((await stat(fifo)).isFIFO()).toBe(true)
+    await expect(h.call('voice', join(dir, 'missing.wav'))).rejects.toThrow(PCM)
+    await expect(h.call('voice', 'clip.wav')).rejects.toThrow('full path')
+    expect(h.voice.transcribe).not.toHaveBeenCalled()
+  })
+
+  it('never shows a raw fs error or the temp path for a recording it cannot open', async () => {
+    const h = harness()
+    await h.start()
+    const locked = await recording('locked.wav')
+    await chmod(locked, 0o000)
+    const error = await failure(h.call('voice', locked))
+    expect(error.message).toBe(PCM)
+    expect(error.message).not.toContain(dir)
+    await chmod(locked, 0o600)
+    expect((await stat(locked)).isFile()).toBe(true)
+  })
+
+  it('deletes a recording that fails the size or header check, and never transcribes it', async () => {
+    const h = harness()
+    await h.start()
+    const big = join(dir, 'big.wav')
+    await writeFile(big, Buffer.alloc(MAX_VOICE_BYTES + 1))
+    await expect(h.call('voice', big)).rejects.toThrow(
+      'Record between a moment and two minutes of speech.',
+    )
+    await expect(stat(big)).rejects.toThrow('ENOENT')
+    const bad = await recording('bad.wav')
+    const bytes = await readFile(bad)
+    bytes[20] = 3 // Floats cannot be passed off as PCM16.
+    await writeFile(bad, bytes)
+    await expect(h.call('voice', bad)).rejects.toThrow(PCM)
+    await expect(stat(bad)).rejects.toThrow('ENOENT')
+    expect(h.voice.transcribe).not.toHaveBeenCalled()
+  })
+
+  it('maps Command failed to the general string and passes other errors through', async () => {
+    const voice = fakeVoice()
+    const h = harness(fakeMuse(), [], { voice })
+    await h.start()
+    voice.transcribe.mockRejectedValueOnce(
+      new Error(`Command failed: /opt/muse voice transcribe ${dir}/v/recording.wav\n`),
+    )
+    expect((await failure(h.call('voice', await recording()))).message).toBe(GENERAL)
+    voice.transcribe.mockRejectedValueOnce(
+      new Error('Muse voice needs authentication. Run muse login in Terminal, then try again.'),
+    )
+    expect((await failure(h.call('voice', await recording()))).message).toBe(
+      'Muse voice needs authentication. Run muse login in Terminal, then try again.',
+    )
+  })
+
+  it('maps the real transcriber’s failure when the CLI exits with no stderr', async () => {
+    // discoverCli runs $SHELL -ilc and reads HOME. Keep both away from Dom's own setup.
+    vi.stubEnv('SHELL', '/bin/sh')
+    vi.stubEnv('HOME', dir)
+    const cli = join(dir, 'muse')
+    await writeFile(
+      cli,
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "Muse Code 9.9.9"; exit 0; fi\nexit 3\n',
+    )
+    await chmod(cli, 0o755)
+    const h = harness(fakeMuse(), [], { voice: new VoiceTranscriber() })
+    await h.start()
+    await h.call('preferences', { cliPath: cli })
+    const path = await recording()
+    const error = await failure(h.call('voice', path))
+    expect(error.message).toBe(GENERAL)
+    await expect(stat(path)).rejects.toThrow('ENOENT')
+  }, 20_000)
+
+  it('cancels a transcription on cancel-voice and on the quit path', async () => {
+    const h = harness()
+    await h.start()
+    await h.call('cancel-voice')
+    await h.backend.stopVoice()
+    expect(h.voice.cancel).toHaveBeenCalledTimes(2)
   })
 })
 
