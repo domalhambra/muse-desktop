@@ -18,11 +18,20 @@ final class AppController {
 
   private(set) var phase: Phase = .starting
   private(set) var workspace: Workspace?
+  /// The Settings window's store for this Workspace. Made and dropped with it.
+  private(set) var settings: SettingsModel?
+  /// Read once: in memory mode every read of `BridgeTokenStores.app` makes a new, empty store, so
+  /// every `start` and every `SettingsModel` must share this one.
+  let tokens: any BridgeTokenStore = BridgeTokenStores.app
   /// The last Workspace's unsent drafts, for the next backend's Workspace.
   private var drafts: [String: String] = [:]
-  /// The conversation the last Workspace showed or was opening, for the next backend's Workspace.
+  /// The conversation the last Workspace showed or was opening, or one whose notification was
+  /// clicked while no Workspace existed, for the next backend's Workspace. Only `dropWorkspace()`
+  /// with a Workspace overwrites it, so a click's id survives a start that has not built one yet.
   private var reopen: String?
   let asks = AskQueue()
+  /// Completion notifications. A click opens its conversation in the current Workspace.
+  let notifications = Notifications()
   private var client: BackendClient?
   private var transport: ProcessTransport?
   private var launching = false
@@ -35,6 +44,20 @@ final class AppController {
   /// Opens the main window. RootView sets it, because only SwiftUI can open a scene's window.
   @ObservationIgnored var showWindow: (@MainActor () -> Void)?
 
+  init() {
+    // A click while no Workspace exists (the backend starting or stopped, or a click that
+    // launched mMac) hands the conversation to the next Workspace, which opens it once ready.
+    notifications.openConversation = { [weak self] sessionId in
+      guard let self else { return }
+      self.showMainWindow()
+      if let workspace = self.workspace {
+        Task { await workspace.open(sessionId) }
+      } else {
+        self.reopen = sessionId
+      }
+    }
+  }
+
   /// Starts a backend. Does nothing while one is starting or running.
   func start() async {
     guard client == nil, !launching else { return }
@@ -44,6 +67,20 @@ final class AppController {
     phase = .starting
     dropWorkspace()
     stoppedWhileQuitting = nil
+    // Read before the backend launches: the Keychain may wait on a password prompt, and no
+    // backend must be running meanwhile, since one that died could not be restarted until this
+    // start ends. An error does not stop the launch: the backend starts without a token, and the
+    // Bridges pane shows the error.
+    let token: String
+    // Why this launch could not read the token. The Bridges pane shows it through `SettingsModel`.
+    let tokenError: String?
+    do {
+      token = try await Self.readToken(from: tokens)
+      tokenError = nil
+    } catch {
+      token = ""
+      tokenError = "mMac could not read the bridge token from the Keychain: \(error.localizedDescription)"
+    }
     var launched: ProcessTransport?
     do {
       let repository = try Self.repository()
@@ -66,11 +103,25 @@ final class AppController {
         }
         await self.backendStopped(client)
       }
-      _ = try await client.hello()
-      let started = try await client.start(dataFolder: Self.dataFolder())
+      // Fails when the backend runs but never answers (hello within 15 seconds, start within 45,
+      // as BackendClient sets), so the setup screen and its Try again show instead of a spinner
+      // for ever.
+      let started = try await client.handshake(dataFolder: Self.dataFolder(), bridgeToken: token)
       let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
       reopen = nil
+      // Electron posts unless its window has focus, and with no window it posts too. mMac counts
+      // itself focused only while it is active and the conversation window is open.
+      workspace.turnFinished = { [weak self, weak workspace] session, previous in
+        guard let self, let workspace else { return }
+        if CompletionNotice.shouldPost(
+          previous: previous, next: session.status, enabled: workspace.preferences.notifyOnCompletion,
+          focused: NSApp.isActive && NSApp.windows.contains { $0.isVisible && MMacApp.isMainWindow($0) })
+        {
+          self.notifications.post(for: session)
+        }
+      }
       self.workspace = workspace
+      self.settings = SettingsModel(workspace: workspace, tokens: tokens, tokenError: tokenError)
       phase = .running
       // A backend that stops while history loads shows the stopped screen. Its Restart must not
       // find this start still under way.
@@ -84,6 +135,8 @@ final class AppController {
       transport = nil
       asks.cancelAll()
       launched?.close()
+      // A backend that never answered may not quit when its input closes either.
+      if case BackendError.noAnswer = error { launched?.forceStop() }
       let details = await Self.errorOutput(of: launched)
       phase = .setupFailed(message: error.localizedDescription, details: details)
     }
@@ -150,6 +203,13 @@ final class AppController {
       reopen = workspace.openingSessionId ?? workspace.view?.session.sessionId ?? workspace.pendingReopen
     }
     workspace = nil
+    settings = nil
+  }
+
+  /// Reads the token off the main actor. mMac is signed ad hoc, so a new build's first read can
+  /// wait while the Keychain asks for the login password, and the app must keep drawing meanwhile.
+  private static func readToken(from tokens: any BridgeTokenStore) async throws -> String {
+    try await Task.detached { try tokens.read() ?? "" }.value
   }
 
   /// The backend's last stderr output, once stderr has ended.
@@ -165,14 +225,26 @@ final class AppController {
     return await asks.present(ask, generation: generation)
   }
 
-  /// Opens the main window when no mMac window is visible. Returns false if it cannot.
+  /// Opens the main window when it is not showing. Settings showing does not count. Returns
+  /// false if it cannot.
   @discardableResult
   func revealWindow() -> Bool {
-    if NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) { return true }
+    if NSApp.windows.contains(where: { $0.isVisible && MMacApp.isMainWindow($0) }) { return true }
     guard let showWindow else { return false }
     showWindow()
     NSApp.activate()
     return true
+  }
+
+  /// Brings the main window forward, opening it when it is closed. The File menu's actions use
+  /// it, so what they do shows there, not on the Settings window.
+  func showMainWindow() {
+    if let window = NSApp.windows.first(where: { $0.isVisible && MMacApp.isMainWindow($0) }) {
+      window.makeKeyAndOrderFront(nil)
+    } else {
+      showWindow?()
+    }
+    NSApp.activate()
   }
 
   // MARK: Panels
@@ -193,16 +265,16 @@ final class AppController {
     _ = await workspace.send(addingProject: folder)
   }
 
-  /// "Choose Muse Code…": saves the executable's path and reconnects.
-  func chooseCLI() async {
-    guard let workspace else { return }
+  /// The Muse Code executable for "Choose Muse Code…" in the banner and Browse… in Settings, or
+  /// nil when cancelled. The panel attaches to the window it was started from, the key one. Each
+  /// caller saves the path its own way, so an error shows in its own window.
+  static func chooseCLIPath() async -> String? {
     let panel = NSOpenPanel()
     panel.title = "Choose the Muse Code executable"
     panel.canChooseFiles = true
     panel.canChooseDirectories = false
     panel.showsHiddenFiles = true
-    guard let url = await SheetAlert.run(panel) else { return }
-    await workspace.setCLIPath(url.path)
+    return await SheetAlert.run(panel, preferringKey: true)?.path
   }
 
   /// "Choose checkout…": runs the backend from another Muse Desktop checkout.

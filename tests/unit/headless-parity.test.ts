@@ -41,13 +41,6 @@ const headlessOnly: Record<string, string> = {
 const notYet = [
   'voice',
   'cancel-voice',
-  'mcp-list',
-  'mcp-add',
-  'mcp-enabled',
-  'mcp-remove',
-  'mcp-login',
-  'bridge-status',
-  'bridge-token',
   'compact',
   'attachments',
   'remove-attachment',
@@ -63,7 +56,7 @@ function duplicates(list: string[]) {
 describe('headless method parity', () => {
   it('finds both front doors', () => {
     expect(electron).toHaveLength(53)
-    expect(headless).toHaveLength(29)
+    expect(headless).toHaveLength(36)
   })
 
   it('finds every Electron channel the preload calls', () => {

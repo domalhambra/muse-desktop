@@ -21,6 +21,23 @@ func makeInspector(
   return (Inspector(client: client, project: project), backend)
 }
 
+/// A JSON string literal for `text`.
+func jsonText(_ text: String) -> String {
+  String(decoding: try! JSONEncoder().encode(text), as: UTF8.self)
+}
+
+/// A working diff of one file with two hunks, as `git-raw-diff` returns it.
+let twoHunks = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+ONE\n@@ -9 +9 @@\n-nine\n+NINE\n"
+
+/// Answers the first `git-raw-diff` request with an empty diff.
+@MainActor
+func pushRawDiff(_ backend: ScriptedBackend) throws {
+  guard case .number(let id)? = backend.messages.first(where: { $0["method"] == "git-raw-diff" })?["id"] else {
+    throw WorkspaceError("no git-raw-diff request")
+  }
+  backend.push(reply(Int(id), #""""#))
+}
+
 func statusJSON(_ paths: [String], branch: String = "main") -> String {
   let changes = paths.map { #"{"path":"\#($0)","status":"M","staged":false}"# }.joined(separator: ",")
   return #"{"branch":"\#(branch)","isRepository":true,"changes":[\#(changes)]}"#
@@ -126,6 +143,7 @@ let worktreesJSON =
 
 @MainActor @Test func aDiffForAnEarlierSelectionIsDropped() async throws {
   let (inspector, backend) = await makeInspector { method, args, id in
+    if method == "git-raw-diff" { return [reply(id, #""""#)] }
     guard method == "git-diff", args.last == "b.txt" else { return [] }
     return [reply(id, #""for b""#)]
   }
@@ -154,6 +172,7 @@ let worktreesJSON =
     return
   }
   backend.push(reply(Int(late), #""for a""#))
+  try pushRawDiff(backend)
   await first.value
   #expect(inspector.diff == .loading)
   #expect(backend.messages.filter { $0["method"] == "git-diff" }.count == 1)
@@ -177,7 +196,7 @@ let worktreesJSON =
 
 @MainActor @Test func aLoadedDiffIsMeasuredOnce() async throws {
   let (inspector, _) = await makeInspector { method, _, id in
-    method == "git-diff" ? [reply(id, #""@@ -9 +9,2 @@\n+a\n+bcdef""#)] : []
+    method == "git-diff" ? [reply(id, #""@@ -9 +9,2 @@\n+a\n+bcdef""#)] : [reply(id, #""""#)]
   }
   await inspector.select("a.txt")
   #expect(inspector.diffMetrics == DiffLine.Metrics(maxDigits: 2, maxColumns: 13))
@@ -185,7 +204,7 @@ let worktreesJSON =
 
 @MainActor @Test func aDiffThatFailsShowsItsMessage() async throws {
   let (inspector, _) = await makeInspector { method, _, id in
-    method == "git-diff" ? [failure(id, "This file no longer has changes. Refresh the changes panel.")] : []
+    method == "git-diff" ? [failure(id, "This file no longer has changes. Refresh the changes panel.")] : [reply(id, #""""#)]
   }
   await inspector.select("a.txt")
   #expect(inspector.diff == .failed("This file no longer has changes. Refresh the changes panel."))
@@ -195,7 +214,8 @@ let worktreesJSON =
   let (inspector, backend) = await makeInspector { method, _, id in
     switch method {
     case "git-status": [reply(id, statusJSON(["a.txt"]))]
-    case "git-diff": [reply(id, #""""#)]
+    case "git-diff": [reply(id, jsonText("Working changes\n" + twoHunks))]
+    case "git-raw-diff": [reply(id, jsonText(twoHunks))]
     case "worktrees": [reply(id, "[]")]
     default: [reply(id, "null")]
     }
@@ -207,7 +227,7 @@ let worktreesJSON =
   let names: [JSONValue] = ["git-revert-hunk", "git-stage-file", "git-revert-file"]
   let calls = requests(backend).filter { $0.first.map(names.contains) ?? false }
   #expect(calls == [
-    ["git-revert-hunk", ["/p", "a.txt", 1]],
+    ["git-revert-hunk", ["/p", "a.txt", 1, "@@ -9 +9 @@\n-nine\n+NINE"]],
     ["git-stage-file", ["/p", "a.txt"]],
     ["git-revert-file", ["/p", "a.txt"]],
   ])
@@ -337,6 +357,7 @@ let worktreesJSON =
     return
   }
   backend.push(reply(Int(late), #""for a""#))
+  try pushRawDiff(backend)
   await selecting.value
   #expect(inspector.selected == nil)
   #expect(inspector.diff == .idle)
@@ -374,7 +395,8 @@ let worktreesJSON =
     Task { await inspector.open(directory: "src") },
     Task { await inspector.preview("README.md") },
   ]
-  try await eventually { backend.messages.count == 3 }
+  // The diff is two reads: the labelled diff it shows and the raw diff Revert hunk sends from.
+  try await eventually { backend.messages.count == 4 }
   for read in reads { read.cancel() }
   for read in reads { await read.value }
   if case .failed(let message) = inspector.diff { Issue.record("The diff shows \(message)") }
@@ -435,4 +457,98 @@ let worktreesJSON =
   inspector.show(project: "/p")
   #expect(inspector.generation != shown)
   #expect(inspector.generation != second)
+}
+
+@MainActor @Test func revertHunkSendsTheHunkTheDiffShowed() async throws {
+  let (inspector, backend) = await makeInspector { method, _, id in
+    switch method {
+    case "git-status": [reply(id, statusJSON(["a.txt"]))]
+    case "git-diff": [reply(id, jsonText("Staged changes\n" + twoHunks + "\nWorking changes\n" + twoHunks))]
+    case "git-raw-diff": [reply(id, jsonText(twoHunks))]
+    default: [reply(id, "null")]
+    }
+  }
+  await inspector.select("a.txt")
+  guard case .loaded(let rows) = inspector.diff else { Issue.record("No diff"); return }
+  // The staged hunks carry no index; the working ones count from 0.
+  #expect(rows.compactMap(\.hunkIndex) == [0, 1])
+  await inspector.revertHunk(0)
+  #expect(requests(backend).contains(["git-revert-hunk", ["/p", "a.txt", 0, "@@ -1 +1 @@\n-one\n+ONE"]]))
+}
+
+@MainActor @Test func aStaleRevertShowsTheErrorAndReadsTheDiffAgain() async throws {
+  let (inspector, backend) = await makeInspector { method, _, id in
+    switch method {
+    case "git-status": [reply(id, statusJSON(["a.txt"]))]
+    case "git-diff": [reply(id, jsonText("Working changes\n" + twoHunks))]
+    case "git-raw-diff": [reply(id, jsonText(twoHunks))]
+    // The backend's own words (src/headless/revert-hunk.ts), typed out so the two cannot drift.
+    case "git-revert-hunk": [failure(id, "The file changed since this diff was read. Refresh the diff, then try again.")]
+    default: [reply(id, "[]")]
+    }
+  }
+  var reported: [String] = []
+  inspector.reportError = { reported.append($0) }
+  await inspector.select("a.txt")
+  await inspector.revertHunk(1)
+  #expect(reported == ["The file changed since this diff was read. Refresh the diff, then try again."])
+  #expect(requests(backend).filter { $0.first == "git-diff" }.count == 2)
+  #expect(requests(backend).filter { $0.first == "git-raw-diff" }.count == 2)
+  #expect(inspector.selected == "a.txt")
+}
+
+@MainActor @Test func aRevertIsNotSentWhenTheTwoReadsDisagree() async throws {
+  // The file changed between the labelled diff and the raw one: the hunk shown is not the one sent.
+  let (inspector, backend) = await makeInspector { method, _, id in
+    switch method {
+    case "git-status": [reply(id, statusJSON(["a.txt"]))]
+    case "git-diff": [reply(id, jsonText("Working changes\n" + twoHunks))]
+    case "git-raw-diff": [reply(id, jsonText(twoHunks.replacingOccurrences(of: "NINE", with: "NEUF")))]
+    default: [reply(id, "[]")]
+    }
+  }
+  var reported: [String] = []
+  inspector.reportError = { reported.append($0) }
+  await inspector.select("a.txt")
+  await inspector.revertHunk(1)
+  // Nor when the raw diff has no such hunk.
+  await inspector.revertHunk(5)
+  #expect(!backend.messages.contains { $0["method"] == "git-revert-hunk" })
+  #expect(reported == [Inspector.staleHunk, Inspector.staleHunk])
+  // Each failure reads the diff again.
+  #expect(requests(backend).filter { $0.first == "git-diff" }.count == 3)
+}
+
+@MainActor @Test func closingOrShowingAnotherProjectResetsTheDiffMetrics() async throws {
+  let (inspector, _) = await makeInspector { method, _, id in
+    method == "git-diff" ? [reply(id, #""@@ -9 +9,2 @@\n+a\n+bcdef""#)] : [reply(id, #""""#)]
+  }
+  let empty = DiffLine.Metrics(maxDigits: 0, maxColumns: 0)
+  await inspector.select("a.txt")
+  #expect(inspector.diffMetrics != empty)
+  inspector.close()
+  #expect(inspector.diffMetrics == empty)
+  await inspector.select("a.txt")
+  #expect(inspector.diffMetrics != empty)
+  inspector.show(project: "/q")
+  #expect(inspector.diffMetrics == empty)
+}
+
+@MainActor @Test func aFailedRawReadSaysSoInsteadOfCallingTheFileChanged() async throws {
+  let (inspector, backend) = await makeInspector { method, _, id in
+    switch method {
+    case "git-status": [reply(id, statusJSON(["a.txt"]))]
+    case "git-diff": [reply(id, jsonText("Working changes\n" + twoHunks))]
+    case "git-raw-diff": [failure(id, "git failed")]
+    default: [reply(id, "[]")]
+    }
+  }
+  var reported: [String] = []
+  inspector.reportError = { reported.append($0) }
+  await inspector.select("a.txt")
+  guard case .loaded = inspector.diff else { Issue.record("The diff should still show"); return }
+  await inspector.revertHunk(0)
+  #expect(!backend.messages.contains { $0["method"] == "git-revert-hunk" })
+  #expect(reported == ["mMac could not read this diff again. Refresh the diff, then try again."])
+  #expect(requests(backend).filter { $0.first == "git-raw-diff" }.count == 2)
 }

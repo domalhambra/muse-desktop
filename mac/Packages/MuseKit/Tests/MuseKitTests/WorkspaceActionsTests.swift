@@ -393,7 +393,7 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(Array(requests(backend).suffix(2)) == [["connect", []], ["open", ["s2"]]])
   let id = try #require(lastId(backend, "open"))
   backend.push(reply(id, viewJSON(sessionJSON("s2"))))
-  await reconnecting.value
+  _ = await reconnecting.value
   #expect(workspace.view?.session.sessionId == "s2")
   opening.cancel()
   await opening.value
@@ -554,4 +554,7 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(requests(backend).filter { $0.first == "create" }.count == 1)
   #expect(workspace.errorMessage == nil)
   #expect(!workspace.submitting)
+  #expect(workspace.draft.isEmpty)
+  #expect(workspace.drafts["new:/p"] == nil)
+  #expect(workspace.view?.items.map(\.text) == ["hi"])
 }

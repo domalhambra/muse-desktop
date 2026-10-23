@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
-import { fileURLToPath } from 'node:url'
 import type { AppEvent } from '../shared/protocol'
+import { AgentApi } from '../main/agent-api'
 import { MuseHost, messageOf } from '../main/muse-host'
 import { publish } from '../main/event-bus'
 import { createBackend } from './backend'
+import { loginEnvShell } from './login-env'
 import { Wire } from './wire'
 
 // mMac's backend process: the fork's core in one plain Node process, driven over
@@ -17,8 +18,15 @@ console.dir = (value: unknown) => console.error(value)
 
 // mMac passes the login shell's environment and names the real shell in MMAC_LOGIN_SHELL.
 // discoverCli would start the login shell again; the stub answers from this environment.
-if (process.env.MMAC_LOGIN_SHELL)
-  process.env.SHELL = fileURLToPath(new URL('./login-env.sh', import.meta.url))
+if (process.env.MMAC_LOGIN_SHELL) {
+  try {
+    process.env.SHELL = loginEnvShell()
+  } catch (error) {
+    // One clean line for mMac to show, not a stack trace.
+    console.error(messageOf(error))
+    process.exit(1)
+  }
+}
 
 const { version } = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
@@ -39,6 +47,8 @@ const backend = createBackend({
   emit,
   version,
   quitting: () => quitting,
+  // The AgentApi behind both bridges. It follows sessions through publish() in emit above.
+  agent: (policy) => new AgentApi(muse, policy),
   // Run the quit path after the current Reply is written, so mMac reads it.
   quit: (code) => setImmediate(() => void quit(code)),
 })
@@ -64,7 +74,12 @@ async function quit(code: number) {
     code ||= 1
   }
   // Closing Muse makes waiting requests fail, so drain() cannot wait forever.
-  const results = await Promise.allSettled([muse.close(), backend.preferenceWrites(), wire.drain()])
+  const results = await Promise.allSettled([
+    backend.stopBridges(),
+    muse.close(),
+    backend.preferenceWrites(),
+    wire.drain(),
+  ])
   for (const result of results) if (result.status === 'rejected') failed(result.reason)
   try {
     // A connect that was in progress during the first close has finished by now,

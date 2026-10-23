@@ -15,9 +15,12 @@ extension BackendClient {
     try await call("hello", [.number(Double(backendProtocol))])
   }
 
-  /// Reads mMac's preferences from `dataFolder` and connects to Muse.
-  public func start(dataFolder: URL) async throws -> Started {
-    try await call("start", [["dataFolder": .string(dataFolder.path)]])
+  /// Reads mMac's preferences from `dataFolder`, gives the backend the bridge token, and connects.
+  /// An empty token is not sent.
+  public func start(dataFolder: URL, bridgeToken: String = "") async throws -> Started {
+    var value: [String: JSONValue] = ["dataFolder": .string(dataFolder.path)]
+    if !bridgeToken.isEmpty { value["bridgeToken"] = .string(bridgeToken) }
+    return try await call("start", [.object(value)])
   }
 
   /// Reconnects to Muse. The backend Asks first if a turn is running.
@@ -120,9 +123,12 @@ extension BackendClient {
     _ = try await request("git-revert-file", [.string(project), .string(path)])
   }
 
-  /// Reverts one working-tree hunk, counted from 0 in the raw diff.
-  public func revertHunk(project: String, path: String, index: Int) async throws {
-    _ = try await request("git-revert-hunk", [.string(project), .string(path), .number(Double(index))])
+  /// Reverts one working-tree hunk, counted from 0 in the raw diff. With `expected`, the hunk's
+  /// text as mMac showed it, the backend refuses when the file's hunk no longer matches.
+  public func revertHunk(project: String, path: String, index: Int, expected: String? = nil) async throws {
+    var args: [JSONValue] = [.string(project), .string(path), .number(Double(index))]
+    if let expected { args.append(.string(expected)) }
+    _ = try await request("git-revert-hunk", args)
   }
 
   public func stageFile(project: String, path: String) async throws {
@@ -151,6 +157,33 @@ extension BackendClient {
   public func removeWorktree(project: String, path: String) async throws {
     _ = try await request("worktree-remove", [.string(project), .string(path)])
   }
+
+  // Settings: MCP servers in Muse's settings.json, and the bridges.
+
+  /// The MCP servers in Muse's settings file, and the file's path.
+  public func mcpList() async throws -> McpServerList { try await call("mcp-list") }
+
+  public func mcpAdd(_ server: McpServerInput) async throws {
+    _ = try await request("mcp-add", [JSONValue(encoding: server)])
+  }
+
+  public func mcpSetEnabled(_ name: String, _ enabled: Bool) async throws {
+    _ = try await request("mcp-enabled", [.string(name), .bool(enabled)])
+  }
+
+  public func mcpRemove(_ name: String) async throws {
+    _ = try await request("mcp-remove", [.string(name)])
+  }
+
+  /// Opens Terminal on `muse mcp login <name>`, or `logout`.
+  public func mcpLogin(_ name: String, logout: Bool = false) async throws {
+    _ = try await request("mcp-login", [.string(name), .bool(logout)])
+  }
+
+  public func bridgeStatus() async throws -> BridgeStatus { try await call("bridge-status") }
+
+  /// Makes a new bridge token and returns it. mMac saves it in the Keychain.
+  public func bridgeNewToken() async throws -> String { try await call("bridge-token") }
 
   /// Asks the backend to quit, then waits for it to exit.
   /// Returns false when the person chose to keep Muse working.

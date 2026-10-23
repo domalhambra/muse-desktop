@@ -29,7 +29,18 @@ public final class Inspector {
   public private(set) var selected: String?
   public private(set) var diff: Loadable<[DiffLine]> = .idle
   /// The loaded diff's measurements, taken once when it loads rather than on every render.
-  public private(set) var diffMetrics = DiffLine.Metrics(maxDigits: 0, maxColumns: 0)
+  public private(set) var diffMetrics = Inspector.noMetrics
+  /// Where Revert hunk takes the hunk text it sends, so the backend reverts the hunk the person
+  /// saw or refuses.
+  private enum RawHunks {
+    /// `git-raw-diff` has not answered for the diff shown, or failed.
+    case unread
+    /// The raw diff does not match the diff shown: the file changed between the two reads.
+    case mismatched
+    /// The working-tree hunks, cut from `git-raw-diff` as the backend cuts them.
+    case read([String])
+  }
+  private var rawHunks = RawHunks.unread
   /// True while a review or worktree action runs. The buttons are disabled meanwhile.
   public private(set) var busy = false
   /// A successful merge's message, until the next action.
@@ -50,6 +61,16 @@ public final class Inspector {
   @ObservationIgnored var reportError: @MainActor (String) -> Void = { _ in }
   /// Receives each status read, so the sidebar's badge for this project stays current.
   @ObservationIgnored var statusRead: @MainActor (String, GitStatus) -> Void = { _, _ in }
+  /// True while a view keeps a refresh live that runs `refresh()` whenever the open conversation's
+  /// status changes, as `InspectorView`'s `.task(id:)` does. On macOS 15 that view is built when
+  /// the window opens and stays built, its task restarting on each change, while the inspector is
+  /// collapsed; so this means "the refresh task is live", not "the inspector is on screen".
+  /// The Workspace leaves a turn end's badge read to that refresh. Whatever sets this true must
+  /// keep the refresh alive until it sets it false.
+  @ObservationIgnored public var refreshesOnStatusChange = false
+  /// Receives the project whose status read failed, so the Workspace can read a badge it left to
+  /// this inspector.
+  @ObservationIgnored var statusFailed: @MainActor (String) -> Void = { _ in }
 
   /// Bumped by `show(project:)`. A reply for an earlier project compares it and is dropped, as is
   /// a confirmation the view showed before the inspector moved to another project.
@@ -58,6 +79,16 @@ public final class Inspector {
   private var diffSequence = 0
   private var filesSequence = 0
   private var previewSequence = 0
+
+  static let noMetrics = DiffLine.Metrics(maxDigits: 0, maxColumns: 0)
+
+  /// The backend's refusal when a hunk changed after its diff was read (src/headless/revert-hunk.ts).
+  /// mMac shows it too when it cannot tell which hunk the person saw.
+  nonisolated public static let staleHunk =
+    "The file changed since this diff was read. Refresh the diff, then try again."
+  /// Shown when the raw diff that Revert hunk sends from could not be read.
+  nonisolated public static let unreadHunk =
+    "mMac could not read this diff again. Refresh the diff, then try again."
 
   init(client: BackendClient, project: String) {
     self.client = client
@@ -76,6 +107,8 @@ public final class Inspector {
     error = nil
     selected = nil
     diff = .idle
+    diffMetrics = Self.noMetrics
+    rawHunks = .unread
     busy = false
     notice = nil
     directory = ""
@@ -139,12 +172,14 @@ public final class Inspector {
     } catch {
       guard current() else { return }
       self.error = error.localizedDescription
+      statusFailed(project)
     }
   }
 
   public func select(_ path: String) async {
     selected = path
     diff = .loading
+    rawHunks = .unread
     await loadDiff()
   }
 
@@ -155,6 +190,7 @@ public final class Inspector {
     selected = path
     diffSequence += 1
     diff = .loading
+    rawHunks = .unread
   }
 
   /// Back to the list of changed files.
@@ -162,20 +198,31 @@ public final class Inspector {
     selected = nil
     diffSequence += 1
     diff = .idle
+    diffMetrics = Self.noMetrics
+    rawHunks = .unread
   }
 
   /// Loads the selected file's diff. A reload keeps the rows shown until the new ones arrive.
+  /// It reads the labelled diff it shows and, beside it, the raw working diff that Revert hunk
+  /// sends from. The labelled diff ends with the same working diff, so a file that changed
+  /// between the two reads shows as a mismatch, and no hunk is sent from it.
   private func loadDiff() async {
     guard let path = selected else { return }
     let project = self.project
     let generation = self.generation
     diffSequence += 1
     let sequence = diffSequence
+    let client = self.client
+    async let shownReply = client.gitDiff(project: project, path: path)
+    async let rawReply = client.gitRawDiff(project: project, path: path)
     do {
-      let text = try await client.gitDiff(project: project, path: path)
+      let text = try await shownReply
+      // A failed raw read still shows the diff; Revert hunk then asks for a refresh.
+      let raw = try? await rawReply
       guard sequence == diffSequence, generation == self.generation else { return }
       let rows = DiffLine.parse(text)
       diffMetrics = DiffLine.metrics(rows)
+      rawHunks = raw.map { Self.ends(text, with: $0) ? .read(DiffLine.rawHunks($0)) : .mismatched } ?? .unread
       diff = .loaded(rows)
     } catch is CancellationError {
       // The caller stopped waiting, so nothing shows a message; the next select or refresh loads it.
@@ -183,6 +230,11 @@ public final class Inspector {
       guard sequence == diffSequence, generation == self.generation else { return }
       diff = .failed(error.localizedDescription)
     }
+  }
+
+  /// Compared as bytes, so a "\r" before a "\n" counts.
+  static func ends(_ text: String, with suffix: String) -> Bool {
+    text.utf8.suffix(suffix.utf8.count).elementsEqual(suffix.utf8)
   }
 
   public func stage() async {
@@ -203,10 +255,19 @@ public final class Inspector {
     }
   }
 
+  /// Reverts working-tree hunk `index` of the selected file, sending the hunk's text so the
+  /// backend refuses if the file changed since the diff was read. Either way the diff reloads.
   public func revertHunk(_ index: Int) async {
     guard let path = selected else { return }
+    let source = rawHunks
     await act { client, project in
-      try await client.revertHunk(project: project, path: path, index: index)
+      switch source {
+      case .unread: throw WorkspaceError(Self.unreadHunk)
+      case .mismatched: throw WorkspaceError(Self.staleHunk)
+      case .read(let hunks):
+        guard hunks.indices.contains(index) else { throw WorkspaceError(Self.staleHunk) }
+        try await client.revertHunk(project: project, path: path, index: index, expected: hunks[index])
+      }
       return nil
     }
   }

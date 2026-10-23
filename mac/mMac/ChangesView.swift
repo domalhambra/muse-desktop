@@ -46,7 +46,7 @@ struct ChangesView: View {
         if inspector.git == nil, !workspace.project.isEmpty {
           HStack(spacing: 8) {
             ProgressView().controlSize(.small)
-            Text("Reading your workspace…").foregroundStyle(.secondary)
+            Text("Reading your workspace…").foregroundStyle(.themeSecondary)
           }
         } else {
           EmptyChanges(project: workspace.project, git: inspector.git)
@@ -96,14 +96,14 @@ struct ChangedFileRow: View {
     let name = ChangeLabel.name(change.path)
     HStack(spacing: 8) {
       Image(systemName: FileKind.of(name: name, directory: false).symbol)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.themeSecondary)
         .frame(width: 16)
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 1) {
         Text(name).lineLimit(1)
         Text(ChangeLabel.folder(change.path))
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
           .lineLimit(1)
           .truncationMode(.head)
       }
@@ -111,7 +111,7 @@ struct ChangedFileRow: View {
       Text(ChangeLabel.status(change))
         .font(.caption.monospaced().bold())
         .foregroundStyle(ChangeLabel.isDeleted(change) ? .red : .orange)
-      Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
+      Image(systemName: "chevron.right").font(.caption).foregroundStyle(.themeMuted).accessibilityHidden(true)
     }
     .contentShape(.rect)
   }
@@ -129,7 +129,7 @@ struct EmptyChanges: View {
       : git?.isRepository == true
         ? ("No changes", "Your working tree has no changes.")
         : ("No Git repository", "This folder isn’t a Git repository. Muse can still work with its files.")
-    ContentUnavailableView(title, systemImage: "checkmark", description: Text(text))
+    ContentUnavailableView(title, systemImage: "checkmark", description: Text(text).foregroundStyle(.themeSecondary))
   }
 }
 
@@ -146,10 +146,10 @@ struct WorktreeRow: View {
   var body: some View {
     let name = ProjectPath.name(of: entry.path)
     HStack(spacing: 8) {
-      Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary).accessibilityHidden(true)
+      Image(systemName: "arrow.triangle.branch").foregroundStyle(.themeSecondary).accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 1) {
         Text(name).lineLimit(1).help(entry.path)
-        Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        Text(detail).font(.caption).foregroundStyle(.themeSecondary).lineLimit(1)
       }
       Spacer(minLength: 4)
       Button("Merge", action: merge)
@@ -228,7 +228,7 @@ struct DiffPane: View {
         ProgressView("Loading diff…").frame(maxWidth: .infinity, maxHeight: .infinity)
       case .failed(let message):
         Text(message)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
           .padding()
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       case .loaded(let rows):
@@ -327,6 +327,7 @@ struct DiffView: View, Equatable {
 
 struct DiffRow: View {
   let row: DiffLine
+  @Environment(\.appearance) private var appearance
   /// The width every row shares, so each tint and context-menu target spans the whole row.
   let width: CGFloat
   let gutterWidth: CGFloat
@@ -339,14 +340,21 @@ struct DiffRow: View {
   var body: some View {
     HStack(spacing: DiffView.spacing) {
       Text(row.gutter)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(.themeMuted)
         .frame(width: gutterWidth, alignment: .trailing)
         .accessibilityHidden(true)
-      Text(row.text.isEmpty ? " " : row.text)
+      // A very long line, such as a minified file, shows cut. Copy hunk and Copy diff copy it whole.
+      Text(row.text.isEmpty ? " " : DiffLine.display(row.text))
         .foregroundStyle(foreground)
         .textSelection(.enabled)
         .fixedSize()
-        // "Added, line 12, let b = 3": the tint and the gutter say it only to the eye.
+        // "Added, line 12, let b = 3": the tint and the gutter say it only to the eye. Its own
+        // element, read as text: with the label set on the selectable text itself, in this row,
+        // any accessibility read of an open diff recursed through the label until the main
+        // thread's stack overflowed. Selectable labelled text elsewhere, such as the Bridges
+        // token, did not. Why this row and not that one is not known.
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)
         .accessibilityLabel(row.spoken)
       if let index = row.hunkIndex {
         Button("Revert hunk") { revert(index) }
@@ -372,9 +380,9 @@ struct DiffRow: View {
   /// Added and removed text stays primary for contrast; the row's tint carries the kind.
   private var foreground: Color {
     switch row.kind {
-    case .hunk: .accentColor
-    case .meta: .secondary
-    case .added, .removed, .context: .primary
+    case .hunk: appearance.colors.accent
+    case .meta: appearance.colors.secondary
+    case .added, .removed, .context: appearance.colors.text
     }
   }
 
@@ -382,7 +390,7 @@ struct DiffRow: View {
     switch row.kind {
     case .added: .green.opacity(0.15)
     case .removed: .red.opacity(0.15)
-    case .hunk: .accentColor.opacity(0.1)
+    case .hunk: appearance.colors.accent.opacity(0.1)
     case .meta, .context: .clear
     }
   }

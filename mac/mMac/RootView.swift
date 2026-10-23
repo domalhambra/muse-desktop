@@ -4,6 +4,7 @@ import SwiftUI
 struct RootView: View {
   let controller: AppController
   @Environment(\.openWindow) private var openWindow
+  @Environment(\.appearance) private var appearance
 
   var body: some View {
     Group {
@@ -26,6 +27,8 @@ struct RootView: View {
         }
       }
     }
+    .background(ThemeBackground(palette: appearance.palette))
+    .background { if !MMacApp.keepsWindowState { WindowStateGuard() } }
     // The controller reopens this window for an Ask or a Dock click after it was closed.
     .onAppear { controller.showWindow = { [openWindow] in openWindow(id: MMacApp.mainWindow) } }
   }
@@ -59,6 +62,9 @@ struct MainView: View {
           }
         }
     }
+    .themedToolbar()
+    // The split views exist only from here on.
+    .background { if !MMacApp.keepsWindowState { WindowStateGuard() } }
     .alert(
       "Muse",
       isPresented: Binding(
@@ -90,7 +96,7 @@ struct ProblemView<Actions: View>: View {
       ContentUnavailableView {
         Label(title, systemImage: "exclamationmark.triangle")
       } description: {
-        Text(message)
+        Text(message).foregroundStyle(.themeSecondary)
       } actions: {
         actions
       }

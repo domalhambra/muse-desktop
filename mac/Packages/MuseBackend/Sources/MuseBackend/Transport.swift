@@ -54,20 +54,24 @@ public final class ProcessTransport: Transport, Sendable {
     let errors = Pipe()
     let tail = errorTail
     let ended = errorEnded
+    // The backend's stderr is copied to mMac's own stderr only when that write can never raise
+    // SIGPIPE. fd 2 is not marked F_SETNOSIGPIPE instead: on Darwin the flag lives on the open
+    // file description, so it would change every writer that shares it, even through `dup`. A
+    // pipe or socket whose reader is gone would end mMac with SIGPIPE, so there the copy is
+    // skipped. The tail is kept in every case, for the setup screen.
+    let copy = Self.copyingIsSafe(to: FileHandle.standardError.fileDescriptor)
     errorReader = PipeReader(
       errors.fileHandleForReading,
       received: { data in
-        // `write(_:)` raises an Objective-C exception on a closed pipe; this throws instead.
-        try? FileHandle.standardError.write(contentsOf: data)
+        // `write(_:)` raises an Objective-C exception on a failed write; this throws instead.
+        if copy { try? FileHandle.standardError.write(contentsOf: data) }
         tail.append(data)
       },
       ended: { ended.fire() })
     process.standardError = errors
-    // A write to a backend that has exited must throw, not end mMac with SIGPIPE. Only these
-    // two descriptors are marked: the backend's stdin, and stderr, where its output is copied.
-    // They are marked before the child starts, so its first stderr line is copied safely too.
+    // A write to a backend that has exited must throw, not end mMac with SIGPIPE. Only mMac's
+    // own pipe to the backend's stdin is marked; no other writer shares it.
     _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-    _ = fcntl(FileHandle.standardError.fileDescriptor, F_SETNOSIGPIPE, 1)
     do { try process.run() } catch {
       stdout.end()
       errorReader.end()
@@ -75,11 +79,17 @@ public final class ProcessTransport: Transport, Sendable {
     }
   }
 
-  /// Up to the last 4,000 bytes the child wrote to stderr, trimmed.
-  public var recentErrorOutput: String { errorTail.text }
+  /// A write to a pipe or socket raises SIGPIPE once its reader is gone; a terminal, file or
+  /// /dev/null never does.
+  static func copyingIsSafe(to fd: Int32) -> Bool {
+    var info = stat()
+    guard fstat(fd, &info) == 0 else { return false }
+    let kind = info.st_mode & S_IFMT
+    return kind != S_IFIFO && kind != S_IFSOCK
+  }
 
-  /// The child's last stderr output, once stderr has ended. A grandchild can hold stderr open
-  /// after the child exits, so this waits at most `limit`.
+  /// Up to the last 4,000 bytes the child wrote to stderr, trimmed, once stderr has ended. A
+  /// grandchild can hold stderr open after the child exits, so this waits at most `limit`.
   public func errorOutput(waitingUpTo limit: Duration = .seconds(1)) async -> String {
     let ended = errorEnded
     await withTaskGroup(of: Void.self) { group in

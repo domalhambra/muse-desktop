@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -9,7 +9,10 @@ import type {
   MuseSession,
   SessionView,
 } from '../../src/shared/protocol'
+import type { AgentApi, AgentPolicy } from '../../src/main/agent-api'
+import { splitHunks } from '../../src/main/git'
 import { createBackend, type Muse } from '../../src/headless/backend'
+import type { BridgeFactories } from '../../src/headless/bridges'
 import { HEADLESS_PROTOCOL, type Ask } from '../../src/headless/wire'
 
 let dir = ''
@@ -69,22 +72,57 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     cancelQuestion: vi.fn(async () => {}),
     readOutput: vi.fn(async () => 'stored output'),
     listWorktrees: vi.fn(async () => []),
+    configDir: () => join(dir, 'muse-config'),
     ...overrides,
   } satisfies Muse
 }
 
 /** A backend wired to fakes. `answers` are the choices the fake app gives, in order. */
-function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
+function harness(
+  muse: Muse = fakeMuse(),
+  answers: number[] = [],
+  options: { askStartsQuit?: boolean; dataFolder?: string } = {},
+) {
   const asks: Ask[] = []
+  const dataFolder = join(dir, options.dataFolder ?? 'data')
   const events: AppEvent[] = []
+  const terminal: string[] = []
+  const bridgeLog: string[] = []
+  const policies: AgentPolicy[] = []
   const quit = vi.fn()
   let quitting = false
+  const bridgeFactories: BridgeFactories = {
+    files: (root) => ({
+      start: async () => void bridgeLog.push(`files start ${root}`),
+      stop: async () => void bridgeLog.push('files stop'),
+    }),
+    mcp: (_api, options) => ({
+      start: async () => {
+        if (!options.token) throw new Error('Make a bridge token first.')
+        bridgeLog.push(`mcp start ${options.port}`)
+      },
+      stop: async () => void bridgeLog.push('mcp stop'),
+    }),
+  }
   const backend = createBackend({
     muse,
     emit: (event) => events.push(event),
     version: '0.2.0',
+    openTerminal: async (command) => {
+      terminal.push(command)
+    },
+    agent: (policy) => {
+      policies.push(policy)
+      return { activeCount: 0 } as unknown as AgentApi
+    },
+    bridgeFactories,
     ask: async (value) => {
       asks.push(value)
+      // A quit that starts while the Ask shows: the answer still comes back.
+      if (options.askStartsQuit) {
+        quitting = true
+        return 0
+      }
       return answers.shift() ?? -1
     },
     quitting: () => quitting,
@@ -97,42 +135,37 @@ function harness(muse: Muse = fakeMuse(), answers: number[] = []) {
   }
   const start = async () => {
     await call('hello', HEADLESS_PROTOCOL)
-    await call('start', { dataFolder: join(dir, 'data') })
+    await call('start', { dataFolder })
   }
   const lastPreferences = () =>
     events.filter((event) => event.type === 'preferences').at(-1) as
       Extract<AppEvent, { type: 'preferences' }> | undefined
-  return { asks, events, quit, call, start, lastPreferences, setQuitting: () => (quitting = true) }
+  return {
+    asks,
+    events,
+    terminal,
+    bridgeLog,
+    quit,
+    call,
+    start,
+    lastPreferences,
+    backend,
+    /** The file the backend saves preferences in. */
+    preferencesFile: join(dataFolder, 'preferences.json'),
+    /** The policy the backend gave the agent factory in start. */
+    agentPolicy: () => {
+      const policy = policies.at(-1)
+      if (!policy) throw new Error('The backend built no agent.')
+      return policy
+    },
+    setQuitting: () => (quitting = true),
+  }
 }
 
 async function folder(name: string) {
   const path = join(dir, name)
   await mkdir(path)
   return path
-}
-
-/** A backend whose Ask starts the quit path before it answers Reconnect. */
-function createBackendWithAskThatQuits(muse: Muse) {
-  let quitting = false
-  const backend = createBackend({
-    muse,
-    emit: () => {},
-    version: '0.2.0',
-    ask: async () => {
-      quitting = true
-      return 0
-    },
-    quitting: () => quitting,
-    quit: vi.fn(),
-  })
-  const call = (name: string, ...args: unknown[]) => backend.methods.get(name)!(...args)
-  return {
-    call,
-    start: async () => {
-      await call('hello', HEADLESS_PROTOCOL)
-      await call('start', { dataFolder: join(dir, 'data-quit') })
-    },
-  }
 }
 
 describe('headless backend', () => {
@@ -372,7 +405,7 @@ describe('headless backend, M1 methods', () => {
     expect(muse.connect).toHaveBeenCalledWith('/opt/muse')
 
     // A quit that starts while the Ask shows: the answer comes back, but connect must stop.
-    const quitting = createBackendWithAskThatQuits(muse)
+    const quitting = harness(muse, [], { askStartsQuit: true, dataFolder: 'data-quit' })
     await quitting.start()
     vi.mocked(muse.connect).mockClear()
     await expect(quitting.call('connect')).rejects.toThrow('The backend is quitting.')
@@ -394,13 +427,13 @@ describe('headless backend, M1 methods', () => {
   })
 
   it('serializes preference writes, so overlapping saves of different fields both land', async () => {
-    const { call, start, lastPreferences } = harness()
+    const { call, start, lastPreferences, preferencesFile } = harness()
     await start()
     await Promise.all([
       call('preferences', { reasoningEffort: 'low' }),
       call('preferences', { cliPath: '/opt/muse' }),
     ])
-    const saved = JSON.parse(await readFile(join(dir, 'data', 'preferences.json'), 'utf8'))
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
     expect(saved.reasoningEffort).toBe('low')
     expect(saved.cliPath).toBe('/opt/muse')
     expect(lastPreferences()?.preferences).toMatchObject({
@@ -429,6 +462,30 @@ async function repository(name = 'repo') {
   git('commit', '-q', '-m', 'first')
   return { path, git, gitIn }
 }
+
+/**
+ * `git diff` of a CRLF a.txt with two hunks, as git prints it. Byte-exact: the \r stay.
+ * Task 8's Swift test reads the same bytes from
+ * mac/Packages/MuseKit/Tests/MuseKitTests/Fixtures/crlf-two-hunks.diff.
+ */
+const CRLF_TWO_HUNKS_DIFF =
+  'diff --git a/a.txt b/a.txt\n' +
+  'index f68ba2a..f952615 100644\n' +
+  '--- a/a.txt\n' +
+  '+++ b/a.txt\n' +
+  '@@ -1,5 +1,5 @@\n' +
+  ' one\r\n' +
+  '-two\r\n' +
+  '+TWO\r\n' +
+  ' three\r\n' +
+  ' x\r\n' +
+  ' x\r\n' +
+  '@@ -22,4 +22,5 @@ x\n' +
+  ' x\r\n' +
+  ' x\r\n' +
+  ' ten\r\n' +
+  '+ten and a half\r\n' +
+  ' eleven\r\n'
 
 describe('headless backend, M2 inspector methods', () => {
   // The backend's own git calls inherit this environment, so keep global config out of them.
@@ -465,18 +522,25 @@ describe('headless backend, M2 inspector methods', () => {
     expect(await call('git-raw-diff', path, 'a.txt')).toContain('+TWO')
   })
 
+  /** A repository whose a.txt changed in two places, so its diff has two hunks. */
+  async function repositoryWithTwoHunks() {
+    const repo = await repository()
+    await writeFile(join(repo.path, 'a.txt'), twoHunks)
+    await writeFile(join(repo.path, 'b.txt'), 'new\n')
+    return repo
+  }
+  const twoHunks = 'one\nTWO\nthree\n' + 'x\n'.repeat(20) + 'ten\nten and a half\neleven\n'
+
   it('reverts a hunk, reverts a file and stages a file', async () => {
-    const { path, git } = await repository()
-    await writeFile(
-      join(path, 'a.txt'),
-      'one\nTWO\nthree\n' + 'x\n'.repeat(20) + 'ten\nten and a half\neleven\n',
-    )
-    await writeFile(join(path, 'b.txt'), 'new\n')
+    const { path, git } = await repositoryWithTwoHunks()
     const { call, start } = harness()
     await start()
     await call('add-project', path)
     const before = await readFile(join(path, 'a.txt'), 'utf8')
-    await expect(call('git-revert-hunk', path, 'a.txt', -1)).rejects.toThrow()
+    // The index check runs before revertHunk, which would say "That hunk no longer exists".
+    await expect(call('git-revert-hunk', path, 'a.txt', -1)).rejects.toThrow(
+      /Too small: expected number to be >=0/,
+    )
     expect(await readFile(join(path, 'a.txt'), 'utf8')).toBe(before)
     await call('git-revert-hunk', path, 'a.txt', 0)
     const afterHunk = await readFile(join(path, 'a.txt'), 'utf8')
@@ -487,6 +551,75 @@ describe('headless backend, M2 inspector methods', () => {
     await call('git-revert-file', path, 'b.txt')
     await call('git-revert-file', path, 'a.txt')
     expect(git('status', '--porcelain')).toBe('')
+  })
+
+  it('refuses to revert a hunk that changed since the diff was read', async () => {
+    const { path } = await repositoryWithTwoHunks()
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    const raw = (await call('git-raw-diff', path, 'a.txt')) as string
+    const hunks = splitHunks(raw).hunks
+    expect(hunks).toHaveLength(2)
+    // An outside edit changes the first hunk after mMac read the diff.
+    await writeFile(join(path, 'a.txt'), twoHunks.replace('TWO', 'TWO, edited outside'))
+    const before = await readFile(join(path, 'a.txt'), 'utf8')
+    await expect(call('git-revert-hunk', path, 'a.txt', 0, hunks[0])).rejects.toThrow(
+      'The file changed since this diff was read. Refresh the diff, then try again.',
+    )
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).toBe(before)
+    // The current hunk text goes through, and a call without it works as in M2.
+    const current = splitHunks((await call('git-raw-diff', path, 'a.txt')) as string).hunks
+    await call('git-revert-hunk', path, 'a.txt', 0, current[0])
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).toContain('two\n')
+    await call('git-revert-hunk', path, 'a.txt', 0)
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).not.toContain('ten and a half')
+  })
+
+  it('refuses an out-of-range index when it is sent with hunk text', async () => {
+    const { path } = await repositoryWithTwoHunks()
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    const before = await readFile(join(path, 'a.txt'), 'utf8')
+    await expect(call('git-revert-hunk', path, 'a.txt', 5, 'anything')).rejects.toThrow(
+      'The file changed since this diff was read. Refresh the diff, then try again.',
+    )
+    expect(await readFile(join(path, 'a.txt'), 'utf8')).toBe(before)
+  })
+
+  it('reverts the first hunk of a CRLF file from the exact text splitHunks gives', async () => {
+    const { path, git } = await repository()
+    const crlf = (text: string) => text.replace(/\n/g, '\r\n')
+    await writeFile(
+      join(path, 'a.txt'),
+      crlf('one\ntwo\nthree\n' + 'x\n'.repeat(20) + 'ten\neleven\n'),
+    )
+    git('add', '.')
+    git('commit', '-q', '-m', 'crlf')
+    await writeFile(join(path, 'a.txt'), crlf(twoHunks))
+    const { call, start } = harness()
+    await start()
+    await call('add-project', path)
+    const raw = (await call('git-raw-diff', path, 'a.txt')) as string
+    expect(raw).toBe(CRLF_TWO_HUNKS_DIFF)
+    // The Swift tests read this file, so it must be the same bytes.
+    expect(
+      await readFile(
+        new URL(
+          '../../mac/Packages/MuseKit/Tests/MuseKitTests/Fixtures/crlf-two-hunks.diff',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ).toBe(CRLF_TWO_HUNKS_DIFF)
+    const { hunks } = splitHunks(raw)
+    expect(hunks).toHaveLength(2)
+    await call('git-revert-hunk', path, 'a.txt', 0, hunks[0])
+    const after = await readFile(join(path, 'a.txt'), 'utf8')
+    expect(after).toBe(
+      crlf('one\ntwo\nthree\n' + 'x\n'.repeat(20) + 'ten\nten and a half\neleven\n'),
+    )
   })
 
   it('lists files and reads one, inside the project only', async () => {
@@ -575,5 +708,214 @@ describe('headless backend, M2 inspector methods', () => {
     await call('add-project', project)
     await call('create', project, null, { worktree: true })
     expect(muse.create).toHaveBeenCalledWith(project, undefined, { worktree: true })
+  })
+})
+
+describe('headless backend, M3 MCP methods', () => {
+  async function configured() {
+    const configDir = join(dir, 'muse-config')
+    await mkdir(configDir, { recursive: true })
+    await writeFile(
+      join(configDir, 'settings.json'),
+      JSON.stringify({
+        model: 'keep-me',
+        mcpServers: {
+          files: { command: 'npx', args: ['-y', 'fs'], env: { TOKEN: 'secret' } },
+          remote: { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } },
+        },
+      }),
+    )
+    const h = harness(
+      fakeMuse({ configDir: () => configDir, status: { ...ready, path: '/opt/muse' } }),
+    )
+    await h.start()
+    return { ...h, file: join(configDir, 'settings.json') }
+  }
+
+  it('lists servers with secret names only', async () => {
+    const { call, file } = await configured()
+    const list = (await call('mcp-list')) as { file: string; servers: unknown[] }
+    expect(list.file).toBe(file)
+    expect(list.servers).toEqual([
+      {
+        name: 'files',
+        transport: 'stdio',
+        enabled: true,
+        command: 'npx',
+        args: ['-y', 'fs'],
+        envNames: ['TOKEN'],
+      },
+      {
+        name: 'remote',
+        transport: 'http',
+        enabled: true,
+        url: 'https://example.com/mcp',
+        headerNames: ['Authorization'],
+      },
+    ])
+    expect(JSON.stringify(list)).not.toContain('secret')
+    expect(JSON.stringify(list)).not.toContain('Bearer')
+  })
+
+  it('adds, turns off and removes one entry, keeping every other key', async () => {
+    const { call, file } = await configured()
+    await call('mcp-add', {
+      name: 'new_one',
+      transport: 'stdio',
+      command: 'node',
+      args: [],
+      env: {},
+    })
+    await call('mcp-enabled', 'files', false)
+    await call('mcp-remove', 'remote')
+    const saved = JSON.parse(await readFile(file, 'utf8'))
+    expect(saved.model).toBe('keep-me')
+    expect(saved.schema_version).toBe(1)
+    expect(saved.mcpServers.files.enabled).toBe(false)
+    expect(saved.mcpServers.files).not.toHaveProperty('disabled')
+    expect(saved.mcpServers.files.env).toEqual({ TOKEN: 'secret' })
+    expect(saved.mcpServers).not.toHaveProperty('remote')
+    expect(saved.mcpServers.new_one).toEqual({ command: 'node', args: [], env: {} })
+  })
+
+  it('turns a server back on by removing the enabled key', async () => {
+    const { call, file } = await configured()
+    await call('mcp-enabled', 'files', false)
+    await call('mcp-enabled', 'files', true)
+    const saved = JSON.parse(await readFile(file, 'utf8'))
+    expect(saved.mcpServers.files).not.toHaveProperty('enabled')
+  })
+
+  it('refuses a bad name and writes nothing', async () => {
+    const { call, file } = await configured()
+    const before = await readFile(file, 'utf8')
+    await expect(
+      call('mcp-add', { name: 'bad name', transport: 'stdio', command: 'x' }),
+    ).rejects.toThrow('Use letters, numbers, - and _ for the server name.')
+    await expect(call('mcp-remove', '../x')).rejects.toThrow()
+    await expect(call('mcp-enabled', '../x', false)).rejects.toThrow()
+    expect(await readFile(file, 'utf8')).toBe(before)
+  })
+
+  it('signs in to remote servers only, through Terminal', async () => {
+    const { call, terminal } = await configured()
+    await expect(call('mcp-login', 'files')).rejects.toThrow('Only remote MCP servers use sign-in.')
+    await expect(call('mcp-login', 'missing')).rejects.toThrow(
+      'Only remote MCP servers use sign-in.',
+    )
+    expect(terminal).toEqual([])
+    await call('mcp-login', 'remote')
+    await call('mcp-login', 'remote', true)
+    expect(terminal).toEqual([
+      `cd '${homedir()}' && '/opt/muse' 'mcp' 'login' 'remote'`,
+      `cd '${homedir()}' && '/opt/muse' 'mcp' 'logout' 'remote'`,
+    ])
+  })
+})
+
+describe('headless backend, M3 bridges', () => {
+  it('takes the token in start and keeps it out of preferences and events', async () => {
+    const h = harness()
+    await h.call('hello', HEADLESS_PROTOCOL)
+    await h.call('start', { dataFolder: join(dir, 'data'), bridgeToken: 'tok-123' })
+    const status = (await h.call('bridge-status')) as { folder: string; mcp: { hasToken: boolean } }
+    expect(status.folder).toBe(join(dir, 'data', 'bridge'))
+    expect(status.mcp.hasToken).toBe(true)
+    await h.call('preferences', { bridgeFilesEnabled: true, bridgeMcpEnabled: true })
+    expect(await readFile(join(dir, 'data', 'preferences.json'), 'utf8')).not.toContain('tok-123')
+    expect(JSON.stringify(h.events)).not.toContain('tok-123')
+    expect(JSON.stringify(await h.call('bridge-status'))).not.toContain('tok-123')
+    expect(h.bridgeLog).toEqual([`files start ${join(dir, 'data', 'bridge')}`, 'mcp start 7735'])
+  })
+
+  it('refuses a token that is not a short string', async () => {
+    const h = harness()
+    await h.call('hello', HEADLESS_PROTOCOL)
+    await expect(
+      h.call('start', { dataFolder: join(dir, 'data'), bridgeToken: 'x'.repeat(257) }),
+    ).rejects.toThrow()
+    await expect(
+      h.call('start', { dataFolder: join(dir, 'data'), bridgeToken: 42 }),
+    ).rejects.toThrow()
+  })
+
+  it('syncs the bridges after start connects, as the preferences say', async () => {
+    const muse = fakeMuse()
+    const h = harness(muse)
+    await folder('data')
+    await writeFile(
+      join(dir, 'data', 'preferences.json'),
+      JSON.stringify({ bridgeFilesEnabled: true }),
+    )
+    await h.start()
+    expect(muse.connect).toHaveBeenCalled()
+    expect(h.bridgeLog).toEqual([`files start ${join(dir, 'data', 'bridge')}`])
+  })
+
+  it('makes a new token and reports it', async () => {
+    const h = harness()
+    await h.start()
+    expect(((await h.call('bridge-status')) as { mcp: { hasToken: boolean } }).mcp.hasToken).toBe(
+      false,
+    )
+    const token = (await h.call('bridge-token')) as string
+    expect(token).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    expect(((await h.call('bridge-status')) as { mcp: { hasToken: boolean } }).mcp.hasToken).toBe(
+      true,
+    )
+    expect(JSON.stringify(h.events)).not.toContain(token)
+  })
+
+  it('restarts a running MCP bridge with a new token', async () => {
+    const h = harness()
+    await h.call('hello', HEADLESS_PROTOCOL)
+    await h.call('start', { dataFolder: join(dir, 'data'), bridgeToken: 'tok-123' })
+    await h.call('preferences', { bridgeMcpEnabled: true })
+    await h.call('bridge-token')
+    expect(h.bridgeLog).toEqual(['mcp start 7735', 'mcp stop', 'mcp start 7735'])
+  })
+
+  it('syncs the bridges when a bridge preference is saved', async () => {
+    const h = harness()
+    await h.start()
+    await h.call('preferences', { bridgeFilesEnabled: true })
+    expect(((await h.call('bridge-status')) as { files: { running: boolean } }).files.running).toBe(
+      true,
+    )
+    await h.call('preferences', { reasoningEffort: 'low' })
+    await h.call('bridge-status')
+    expect(h.bridgeLog).toEqual([`files start ${join(dir, 'data', 'bridge')}`])
+  })
+
+  it('stops both bridges on the quit path', async () => {
+    const h = harness()
+    await h.start()
+    await h.call('preferences', { bridgeFilesEnabled: true })
+    await h.call('bridge-token')
+    await h.call('preferences', { bridgeMcpEnabled: true })
+    await h.backend.stopBridges()
+    expect(h.bridgeLog.slice(-2)).toEqual(['files stop', 'mcp stop'])
+  })
+
+  it('refuses agent work in a project that is not trusted', async () => {
+    const h = harness()
+    await h.start()
+    const project = await folder('untrusted')
+    await h.call('add-project', project)
+    await expect(h.agentPolicy().resolveProject(project)).rejects.toThrow(
+      'That project is not trusted in mMac. Open it there first.',
+    )
+  })
+
+  it('lets agent work into a trusted project and its Muse worktrees', async () => {
+    const h = harness(fakeMuse(), [0])
+    await h.start()
+    const project = await folder('trusted')
+    await h.call('add-project', project)
+    await h.call('create', project)
+    expect(await h.agentPolicy().resolveProject(project)).toBe(project)
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    await mkdir(worktree, { recursive: true })
+    expect(await h.agentPolicy().resolveProject(worktree)).toBe(worktree)
   })
 })

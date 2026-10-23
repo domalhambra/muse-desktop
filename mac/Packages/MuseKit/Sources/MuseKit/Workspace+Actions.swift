@@ -67,9 +67,12 @@ extension Workspace {
       // Clear the draft only where it still holds what was sent.
       for key in [startKey, sessionId] where drafts[key] == text { drafts[key] = nil }
       // Its own detached task: cancelling the caller must not stop the wait, or a rejection that
-      // comes later would leave the conversation shown as running. Detached, so the task
-      // inherits neither the caller's cancellation nor the main actor: the error path below is
-      // one main-actor hop away, which `AppController.dropWorkspace()` relies on.
+      // comes later would leave the conversation shown as running. Detached, so the task inherits
+      // neither the caller's cancellation nor the main actor: a caller cancelled before this call,
+      // or during it, still sends the message and gets the conversation. The error path below is
+      // then one main-actor hop away. `AppController.dropWorkspace()` assumes that order: a send
+      // the stop cut off has put its text back before the event stream ends the backend. Nothing
+      // enforces it.
       let client = self.client
       let request = Task.detached {
         try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode)
@@ -140,35 +143,51 @@ extension Workspace {
     }
   }
 
+  /// Saves preference fields. The backend's reply, and its `preferences` event, carry the whole set.
+  @discardableResult
+  public func save(_ patch: PreferencesPatch) async -> Bool {
+    do {
+      preferences = try await client.preferences(patch)
+      return true
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
+    }
+  }
+
   /// Saves the reasoning effort, which every later message uses.
   public func chooseEffort(_ effort: String) async {
-    await run { self.preferences = try await self.client.preferences(PreferencesPatch(reasoningEffort: effort)) }
+    await save(PreferencesPatch(reasoningEffort: effort))
   }
 
   /// Saves a custom Muse Code path (empty for automatic detection), then reconnects.
   public func setCLIPath(_ path: String) async {
     // Electron trims the field before saving it.
     let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-    do {
-      preferences = try await client.preferences(PreferencesPatch(cliPath: trimmed))
-    } catch {
-      errorMessage = error.localizedDescription
-      return
-    }
+    guard await save(PreferencesPatch(cliPath: trimmed)) else { return }
     await reconnect()
   }
 
   /// Reconnects to Muse, then reopens the conversation last clicked, as Electron reopens `activeId`:
-  /// the one opening, or else the one shown.
-  public func reconnect() async {
+  /// the one opening, or else the one shown. Returns true when the connect call succeeded.
+  @discardableResult
+  public func reconnect() async -> Bool {
+    await reconnect { self.errorMessage = $0 }
+  }
+
+  /// `reconnect()`, with the connect call's error going to `report`: the Settings window shows its
+  /// own errors. An error reopening the conversation still shows here.
+  func reconnect(reportingTo report: (String) -> Void) async -> Bool {
     do {
       let next = try await client.connect()
       apply(.connection(next))
       if next.isReady, let sessionId = openingSessionId ?? view?.session.sessionId {
         await open(sessionId, force: true)
       }
+      return true
     } catch {
-      errorMessage = error.localizedDescription
+      report(error.localizedDescription)
+      return false
     }
   }
 

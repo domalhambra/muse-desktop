@@ -22,7 +22,7 @@ struct ConversationView: View {
         } else {
           ContentUnavailableView(
             "Start a conversation", systemImage: "bubble.left.and.bubble.right",
-            description: Text("Ask a question or describe what you want to build."))
+            description: Text("Ask a question or describe what you want to build.").foregroundStyle(.themeSecondary))
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -64,7 +64,13 @@ struct ConnectionBanner: View {
         .lineLimit(3)
       Spacer()
       Button("Reconnect") { Task { await workspace.reconnect() } }
-      Button("Choose Muse Code…") { Task { await controller.chooseCLI() } }
+      MuseCodeSettingsButton { Text("Set up") }
+      Button("Choose Muse Code…") {
+        Task {
+          guard let path = await AppController.chooseCLIPath() else { return }
+          await workspace.setCLIPath(path)
+        }
+      }
       if !workspace.preferences.cliPath.isEmpty {
         Button("Use automatic detection") { Task { await workspace.setCLIPath("") } }
       }
@@ -104,6 +110,7 @@ struct RenameSheet: View {
         Button("Cancel", action: close).keyboardShortcut(.cancelAction)
         Button("Save", action: save)
           .keyboardShortcut(.defaultAction)
+          .buttonStyle(.primary)
           .disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }
     }

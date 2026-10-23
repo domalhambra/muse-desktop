@@ -1,3 +1,4 @@
+import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
@@ -6,6 +7,7 @@ import SwiftUI
 struct ComposerView: View {
   let controller: AppController
   @Bindable var workspace: Workspace
+  @Environment(\.appearance) private var appearance
   /// The text area's height, which it measures itself.
   @State private var inputHeight: CGFloat = 17
   /// A choice still being saved. The picker shows it until the Workspace answers, then shows the
@@ -18,12 +20,13 @@ struct ComposerView: View {
       if workspace.isRunning { runningBar }
       ComposerTextView(
         text: $workspace.draft, height: $inputHeight, placeholder: placeholder,
+        placeholderColor: NSColor(appearance.colors.muted),
         isEnabled: workspace.openingSessionId == nil, focusRequest: workspace.composerFocusRequest,
         onSubmit: submit
       )
       .frame(height: inputHeight)
       .padding(10)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+      .background(appearance.colors.input, in: RoundedRectangle(cornerRadius: 8))
       HStack(spacing: 10) {
         Picker("Model", selection: modelSelection) {
           if !workspace.models.contains(where: { $0.modelId == workspace.modelId }) {
@@ -34,16 +37,21 @@ struct ComposerView: View {
           }
         }
         .fixedSize()
+        // The stock bezel: the theme's light accent under a white label is unreadable.
+        .tint(nil)
         .disabled(workspace.submitting || workspace.models.isEmpty)
         .accessibilityIdentifier("model-picker")
         Picker("Reasoning effort", selection: effortSelection) {
           ForEach(ReasoningEffort.allCases) { effort in Text(effort.label).tag(effort.rawValue) }
-          // A newer CLI's effort that this list does not know still shows.
-          if ReasoningEffort(rawValue: workspace.effort) == nil {
-            Text(workspace.effort).tag(workspace.effort)
+          // A newer CLI's effort that this list does not know still shows, including one being
+          // saved, which the picker shows until the save ends.
+          let shown = pendingEffort ?? workspace.effort
+          if ReasoningEffort(rawValue: shown) == nil {
+            Text(shown).tag(shown)
           }
         }
         .fixedSize()
+        .tint(nil)
         if workspace.canStartInWorktree {
           let label =
             workspace.startInWorktree
@@ -58,7 +66,7 @@ struct ComposerView: View {
           .help(label)
         }
         Spacer()
-        Text("↵ Send · ⇧ ↵ New line").font(.caption).foregroundStyle(.tertiary)
+        Text("↵ Send · ⇧ ↵ New line").font(.caption).foregroundStyle(.themeMuted)
         Button(action: submit) {
           if workspace.submitting {
             ProgressView().controlSize(.small)
@@ -75,7 +83,7 @@ struct ComposerView: View {
       if let footnote {
         Text(footnote)
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
           .accessibilityIdentifier("composer-footnote")
       }
     }
@@ -88,7 +96,7 @@ struct ComposerView: View {
       Text(
         Activity.isBackgroundOnly(workspace.view?.items ?? [])
           ? "Finishing background tasks…" : "Muse is working…")
-      Text("Send a follow-up to queue or steer.").foregroundStyle(.secondary)
+      Text("Send a follow-up to queue or steer.").foregroundStyle(.themeSecondary)
       Spacer()
       Picker("Follow-up behavior", selection: $workspace.mode) {
         Text("Queue next").tag(SendMode.queue)
@@ -96,6 +104,8 @@ struct ComposerView: View {
       }
       .pickerStyle(.segmented)
       .fixedSize()
+      // The stock selected segment: the theme's light accent under a white label is unreadable.
+      .tint(nil)
       Button("Stop Muse", systemImage: "stop.circle.fill") { Task { await workspace.stop() } }
         .labelStyle(.iconOnly)
         .help("Stop Muse")

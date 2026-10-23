@@ -156,6 +156,57 @@ private let viewJSON = #"""
   }
 }
 
+@Test(.timeLimit(.minutes(1))) func settingsCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "start":
+      return [#"{"id":\#(id),"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#]
+    case "mcp-list":
+      return [#"{"id":\#(id),"ok":true,"value":{"file":"/c/settings.json","servers":[]}}"#]
+    case "bridge-status":
+      return [#"{"id":\#(id),"ok":true,"value":{"folder":"/b","files":{"enabled":false,"running":false},"mcp":{"enabled":false,"running":false,"url":"http://127.0.0.1:7735/mcp","hasToken":false},"activeJobs":0}}"#]
+    case "bridge-token":
+      return [#"{"id":\#(id),"ok":true,"value":"new-token"}"#]
+    default:
+      return [#"{"id":\#(id),"ok":true,"value":null}"#]
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let folder = URL(fileURLWithPath: "/d")
+  #expect(try await client.start(dataFolder: folder).preferences.bridgeMcpPort == 7735)
+  _ = try await client.start(dataFolder: folder, bridgeToken: "")
+  _ = try await client.start(dataFolder: folder, bridgeToken: "secret")
+  #expect(try await client.mcpList().file == "/c/settings.json")
+  try await client.mcpAdd(.stdio(name: "a", command: "node", args: ["x"], env: [:]))
+  try await client.mcpAdd(.http(name: "b", url: "https://e.com/mcp", headers: ["H": "v"]))
+  try await client.mcpSetEnabled("a", false)
+  try await client.mcpRemove("a")
+  try await client.mcpLogin("b")
+  try await client.mcpLogin("b", logout: true)
+  #expect(try await client.bridgeStatus().folder == "/b")
+  #expect(try await client.bridgeNewToken() == "new-token")
+  try await client.revertHunk(project: "/p", path: "a.txt", index: 1, expected: "@@ -1 +1 @@\n-a\n+b\n")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [
+    ["start", [["dataFolder": "/d"]]],
+    ["start", [["dataFolder": "/d"]]],
+    ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]],
+    ["mcp-list", []],
+    ["mcp-add", [["name": "a", "transport": "stdio", "command": "node", "args": ["x"], "env": [:]]]],
+    ["mcp-add", [["name": "b", "transport": "http", "url": "https://e.com/mcp", "headers": ["H": "v"]]]],
+    ["mcp-enabled", ["a", false]],
+    ["mcp-remove", ["a"]],
+    ["mcp-login", ["b", false]],
+    ["mcp-login", ["b", true]],
+    ["bridge-status", []],
+    ["bridge-token", []],
+    ["git-revert-hunk", ["/p", "a.txt", 1, "@@ -1 +1 @@\n-a\n+b\n"]],
+  ])
+}
+
 /// Polls `condition` until it holds. The test's time limit ends a wait that never does.
 private func waitFor(_ condition: () -> Bool) async throws {
   while !condition() { try await Task.sleep(for: .milliseconds(5)) }
@@ -211,4 +262,94 @@ private func waitFor(_ condition: () -> Bool) async throws {
   task.cancel()
   await #expect(throws: CancellationError.self) { try await task.value }
   #expect(backend.messages.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func theHandshakeSendsHelloThenStart() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "hello": return [#"{"id":\#(id),"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#]
+    case "start": return [#"{"id":\#(id),"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#]
+    default: return []
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let started = try await client.handshake(
+    dataFolder: URL(fileURLWithPath: "/d"), bridgeToken: "secret", helloTimeout: .seconds(10),
+    startTimeout: .seconds(10))
+  #expect(started.status.state == "ready")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [["hello", [1]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
+}
+
+@Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersHelloFailsTheHandshake() async throws {
+  // Alive, reading its input, and silent: mMac must not wait on it for ever.
+  let backend = ScriptedBackend { _ in [] }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let timeout = Duration.milliseconds(200)
+  await #expect(throws: BackendError.noAnswer(method: "hello", after: timeout)) {
+    _ = try await client.handshake(
+      dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: timeout, startTimeout: .seconds(10))
+  }
+  #expect(backend.messages.map { $0["method"] } == ["hello"])
+}
+
+@Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersStartFailsTheHandshake() async throws {
+  let backend = ScriptedBackend { message in
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let timeout = Duration.milliseconds(200)
+  await #expect(throws: BackendError.noAnswer(method: "start", after: timeout)) {
+    _ = try await client.handshake(
+      dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: .seconds(10), startTimeout: timeout)
+  }
+  #expect(BackendError.noAnswer(method: "start", after: .seconds(45)).localizedDescription
+    == "The Muse backend did not answer start within 45 seconds.")
+}
+
+@Test func theHandshakeGivesStartLongerThanHello() {
+  // start waits for Muse to connect: `muse --version` (6 s a candidate), then Muse's initialize
+  // (15 s, muse-host.ts), then the bridges. Its limit must outlast Muse's own 15-second message.
+  #expect(BackendClient.helloTimeout == .seconds(15))
+  #expect(BackendClient.startTimeout == .seconds(45))
+}
+
+@Test(.timeLimit(.minutes(1))) func startHasItsOwnLimitAfterHello() async throws {
+  // hello answers at once; start answers after hello's limit has passed but within its own.
+  let backend = ScriptedBackend { message in
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let late = Task {
+    try await Task.sleep(for: .milliseconds(500))
+    backend.push(#"{"id":2,"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#)
+  }
+  let started = try await client.handshake(
+    dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: .milliseconds(200), startTimeout: .seconds(10))
+  try await late.value
+  #expect(started.status.state == "ready")
+}
+
+@Test(.timeLimit(.minutes(1))) func aReplyAfterTheTimeoutIsIgnoredAndTheClientStillWorks() async throws {
+  // hello (id 1) is never answered in time. sessions (id 2) is answered at once.
+  let backend = ScriptedBackend { message in
+    message["method"] == "sessions" ? [#"{"id":2,"ok":true,"value":"fresh"}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let timeout = Duration.milliseconds(200)
+  await #expect(throws: BackendError.noAnswer(method: "hello", after: timeout)) {
+    _ = try await client.handshake(
+      dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: timeout, startTimeout: timeout)
+  }
+  // The late hello Reply arrives now. Nothing waits for id 1, so it is dropped.
+  backend.push(#"{"id":1,"ok":true,"value":"stale"}"#)
+  #expect(try await client.request("sessions") == "fresh")
+  #expect(backend.messages.map { $0["method"] } == ["hello", "sessions"])
 }

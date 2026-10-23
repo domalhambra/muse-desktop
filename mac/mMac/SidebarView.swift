@@ -5,6 +5,7 @@ import SwiftUI
 struct SidebarView: View {
   let controller: AppController
   @Bindable var workspace: Workspace
+  @Environment(\.appearance) private var appearance
   /// The picker entry that opens the panel instead of choosing a project.
   private static let openAnother = "\u{0}open-another"
   /// Changed after the open panel closes, so the picker draws the current project again
@@ -31,13 +32,19 @@ struct SidebarView: View {
         Picker("Current project", selection: projectSelection) {
           Text("All projects").tag("")
           ForEach(projects, id: \.self) { path in
-            Text(projectLabel(path)).tag(path)
+            Text(projectLabel(path)).lineLimit(1).truncationMode(.middle).tag(path)
           }
           Divider()
           Text("Open another project…").tag(Self.openAnother)
         }
         // The label is for VoiceOver only, as in Electron, so project names fit at 240 points.
         .labelsHidden()
+        // A long name loses its middle, so the folder's end stays visible; the tooltip has it all.
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .help(workspace.project.isEmpty ? "All projects" : workspace.project)
+        // The stock bezel: the theme's light accent under a white label is unreadable.
+        .tint(nil)
         .id(pickerGeneration)
         // The folder's own status: a worktree shows its branch once read, never its parent's.
         if let git = workspace.projectBadge, git.isRepository {
@@ -48,7 +55,7 @@ struct SidebarView: View {
             GitBadgeView(status: git)
           }
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
           .accessibilityElement(children: .combine)
           .accessibilityIdentifier("project-git-badge")
         }
@@ -56,6 +63,8 @@ struct SidebarView: View {
       history
     }
     .listStyle(.sidebar)
+    .scrollContentBackground(.hidden)
+    .background(appearance.colors.sidebar)
     .onKeyPress(.return) {
       guard let sessionId = highlighted else { return .ignored }
       highlighted = nil
@@ -135,7 +144,7 @@ struct SidebarView: View {
       Section {
         VStack(alignment: .leading, spacing: 6) {
           Text("Could not load your conversation history.").font(.headline)
-          Text(error).foregroundStyle(.secondary)
+          Text(error).foregroundStyle(.themeSecondary)
           Button("Try again") { Task { await workspace.refreshSessions() } }
         }
       }
@@ -171,26 +180,33 @@ struct SidebarView: View {
       Section {
         VStack(alignment: .leading, spacing: 2) {
           Text("No conversations yet").font(.headline)
-          Text("Start a conversation in this project.").foregroundStyle(.secondary)
+          Text("Start a conversation in this project.").foregroundStyle(.themeSecondary)
         }
       }
     }
   }
 
-  /// On a bar background, so rows do not show through it as the list scrolls.
+  /// On the sidebar's solid color, so rows do not show through it as the list scrolls. A click opens
+  /// Settings on the Muse Code pane, as Electron's status pill does.
   private var connectionFooter: some View {
     VStack(spacing: 0) {
       Divider()
-      HStack(spacing: 6) {
-        Circle().fill(dotColor).frame(width: 7, height: 7)
-        Text(statusText).font(.caption).foregroundStyle(.secondary)
-        Spacer()
+      MuseCodeSettingsButton {
+        HStack(spacing: 6) {
+          Circle().fill(dotColor).frame(width: 7, height: 7)
+          Text(statusText).font(.caption).foregroundStyle(.themeSecondary)
+          Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .contentShape(.rect)
       }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 8)
+      .buttonStyle(.plain)
+      .accessibilityLabel("Muse Code settings")
+      .accessibilityValue(statusText)
       .help(workspace.status.version.map { "Muse Code \($0)" } ?? workspace.status.message ?? "")
     }
-    .background(.bar)
+    .background(appearance.colors.sidebarSolid)
   }
 
   private var statusText: String {
@@ -205,7 +221,7 @@ struct SidebarView: View {
   private var dotColor: Color {
     switch workspace.status.state {
     case "ready": .green
-    case "connecting": .accentColor
+    case "connecting": appearance.colors.accent
     default: .orange
     }
   }
@@ -221,7 +237,7 @@ struct SessionRow: View {
       if session.status == "running" {
         ProgressView().controlSize(.mini).accessibilityLabel("Working")
       } else {
-        Image(systemName: "bubble.left").foregroundStyle(.secondary).accessibilityHidden(true)
+        Image(systemName: "bubble.left").foregroundStyle(.themeSecondary).accessibilityHidden(true)
       }
       VStack(alignment: .leading, spacing: 2) {
         Text(SessionTitle.of(session)).lineLimit(1)
@@ -229,7 +245,7 @@ struct SessionRow: View {
         if showProject, let root = session.workspaceRoot, !root.isEmpty {
           Text(ProjectPath.name(of: root))
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.themeSecondary)
             .lineLimit(1)
         }
       }
@@ -245,7 +261,7 @@ struct SessionRow: View {
       TimelineView(.everyMinute) { context in
         Text(RelativeTime.text(SidebarSections.activity(session), now: context.date))
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
           .monospacedDigit()
       }
     }

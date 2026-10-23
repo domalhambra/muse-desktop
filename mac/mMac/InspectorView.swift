@@ -8,6 +8,7 @@ struct InspectorView: View {
   let controller: AppController
   let workspace: Workspace
   @Bindable var inspector: Inspector
+  @Environment(\.appearance) private var appearance
 
   var body: some View {
     // Built once per render, for the tab's count and the list, so the list compares entries
@@ -33,16 +34,23 @@ struct InspectorView: View {
     }
     // As Electron: read again when the project changes and when the open conversation's status
     // does, so a turn that ends shows what it changed.
+    // The Changes, Files and Activity lists draw on the column's color.
+    .scrollContentBackground(.hidden)
+    .background(appearance.colors.dialog)
     .task(id: RefreshKey(project: workspace.project, status: workspace.view?.session.status)) {
       await inspector.refresh()
     }
+    // This view stays built, and the task above live, while the inspector is collapsed, so the
+    // Workspace leaves a turn end's badge read to it. Set together: the flag promises the task.
+    .onAppear { inspector.refreshesOnStatusChange = true }
+    .onDisappear { inspector.refreshesOnStatusChange = false }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Project inspector")
   }
 
   private var header: some View {
     HStack(spacing: 10) {
-      Image(systemName: "folder").font(.title3).foregroundStyle(.secondary).accessibilityHidden(true)
+      Image(systemName: "folder").font(.title3).foregroundStyle(.themeSecondary).accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 3) {
         Text(workspace.project.isEmpty ? "No project selected" : ProjectPath.name(of: workspace.project))
           .font(.headline)
@@ -54,9 +62,9 @@ struct InspectorView: View {
             GitBadgeView(status: git)
           }
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.themeSecondary)
         } else {
-          Text("Local project").font(.caption).foregroundStyle(.secondary)
+          Text("Local project").font(.caption).foregroundStyle(.themeSecondary)
         }
       }
       Spacer(minLength: 0)
@@ -68,12 +76,13 @@ struct InspectorView: View {
   private func tabs(activityCount: Int) -> some View {
     HStack(spacing: 8) {
       Picker("Inspector view", selection: $inspector.tab) {
-        Text(Self.counted("Changes", inspector.git?.changes.count ?? 0)).tag(Inspector.Tab.changes)
+        Text(ChangeLabel.counted("Changes", inspector.git?.changes.count ?? 0)).tag(Inspector.Tab.changes)
         Text("Files").tag(Inspector.Tab.files)
-        Text(Self.counted("Activity", activityCount)).tag(Inspector.Tab.activity)
+        Text(ChangeLabel.counted("Activity", activityCount)).tag(Inspector.Tab.activity)
       }
       .pickerStyle(.segmented)
       .labelsHidden()
+      .tint(nil)
       Button {
         Task { await inspector.refresh() }
       } label: {
@@ -93,9 +102,6 @@ struct InspectorView: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
   }
-
-  /// "Changes 3", or "Changes" at zero, as Electron's tab badges.
-  static func counted(_ title: String, _ count: Int) -> String { count > 0 ? "\(title) \(count)" : title }
 
   /// What makes the inspector read the project again.
   struct RefreshKey: Equatable {
@@ -126,14 +132,14 @@ struct ActivityView: View {
     if entries.isEmpty {
       ContentUnavailableView(
         "No activity yet", systemImage: "terminal",
-        description: Text("Tool calls, file edits, and agent activity appear here."))
+        description: Text("Tool calls, file edits, and agent activity appear here.").foregroundStyle(.themeSecondary))
     } else {
       List(entries) { entry in
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           ActivityStatusIcon(status: entry.status)
           VStack(alignment: .leading, spacing: 2) {
             Text(entry.title).bold().lineLimit(1)
-            Text(entry.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            Text(entry.detail).font(.caption).foregroundStyle(.themeSecondary).lineLimit(2)
           }
         }
         .accessibilityElement(children: .combine)
@@ -162,7 +168,7 @@ struct UsagePanel: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text("SESSION USAGE").font(.caption2.bold()).foregroundStyle(.secondary)
+      Text("SESSION USAGE").font(.caption2.bold()).foregroundStyle(.themeSecondary)
         .accessibilityAddTraits(.isHeader)
       row("Input", usage.input)
       row("Output", usage.output)
@@ -174,7 +180,7 @@ struct UsagePanel: View {
 
   private func row(_ title: String, _ value: Int) -> some View {
     HStack {
-      Text(title).foregroundStyle(.secondary)
+      Text(title).foregroundStyle(.themeSecondary)
       Spacer()
       Text(value.formatted()).monospacedDigit()
     }

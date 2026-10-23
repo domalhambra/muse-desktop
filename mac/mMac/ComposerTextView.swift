@@ -10,6 +10,8 @@ struct ComposerTextView: NSViewRepresentable {
   /// The height the text needs, from one line to `maxHeight`. The caller frames the view with it.
   @Binding var height: CGFloat
   let placeholder: String
+  /// The theme's muted color: AppKit's placeholder color is too faint on the themes' fields.
+  var placeholderColor = NSColor.placeholderTextColor
   var isEnabled = true
   /// Bumped when the composer should take keyboard focus, with the cursor at the end.
   var focusRequest = 0
@@ -113,6 +115,10 @@ struct ComposerTextView: NSViewRepresentable {
       textView.setAccessibilityPlaceholderValue(placeholder)
       textView.needsDisplay = true
     }
+    if textView.placeholderColor != placeholderColor {
+      textView.placeholderColor = placeholderColor
+      textView.needsDisplay = true
+    }
     if textView.isEditable != isEnabled {
       textView.isEditable = isEnabled
       textView.textColor = isEnabled ? .labelColor : .secondaryLabelColor
@@ -157,6 +163,7 @@ struct ComposerTextView: NSViewRepresentable {
 /// The NSTextView behind the composer: its keys, its placeholder, its first focus.
 final class ComposerNSTextView: NSTextView {
   var placeholder = ""
+  var placeholderColor = NSColor.placeholderTextColor
   var onSubmit: (() -> Void)?
   var onWidthChange: (() -> Void)?
   private var focusedOnce = false
@@ -244,6 +251,6 @@ final class ComposerNSTextView: NSTextView {
     let origin = textContainerOrigin
     (placeholder as NSString).draw(
       at: NSPoint(x: origin.x + padding, y: origin.y),
-      withAttributes: [.font: font ?? ComposerTextView.font, .foregroundColor: NSColor.placeholderTextColor])
+      withAttributes: [.font: font ?? ComposerTextView.font, .foregroundColor: placeholderColor])
   }
 }

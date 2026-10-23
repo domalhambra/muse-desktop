@@ -1,14 +1,23 @@
 // A scripted stand-in for src/headless/server.ts, for mMac's UI tests. It speaks the line
 // protocol of src/headless/wire.ts (keep `protocol` below equal to HEADLESS_PROTOCOL) and
-// serves one conversation that asks once, then waits on an approval and a question. It also
-// answers the inspector's methods from fixed data, and its rename Asks before it replies.
-// Each request and Ask answer is appended to the file FAKE_BACKEND_LOG names.
+// serves three conversations. The first asks once when opened, then waits on an approval and a
+// question. It also answers the inspector's and the Settings window's methods from fixed or
+// in-memory data, and its rename Asks before it replies. A `send` of "crash now" ends the
+// process with code 1, as a backend that crashes does.
+// Each request and Ask answer is appended to the file FAKE_BACKEND_LOG names, with the fake's
+// start and every reply it writes, so a failed test shows how far the fake got.
 import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const logFile = process.env.FAKE_BACKEND_LOG
 const record = (entry) => logFile && appendFileSync(logFile, `${JSON.stringify(entry)}\n`)
-const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
+const write = (message) => {
+  if ('id' in message) {
+    record({ reply: message.id, ok: message.ok, ...(message.ok ? {} : { error: message.error }) })
+  }
+  process.stdout.write(`${JSON.stringify(message)}\n`)
+}
+record({ fake: 'started', pid: process.pid })
 
 const project = process.env.MMAC_TEST_PROJECT ?? '/tmp'
 const now = new Date().toISOString()
@@ -23,6 +32,16 @@ const session = {
   name: 'Fake conversation',
   turnCount: 1,
 }
+// Two more conversations, with no cards, for the restart test.
+const others = [
+  ['fake-2', 'Second fake conversation', 'The second conversation says hello.'],
+  ['fake-3', 'Third fake conversation', 'The third conversation says hello.'],
+].map(([sessionId, name, text]) => ({
+  session: { ...session, sessionId, name },
+  items: [
+    { itemId: `${sessionId}-a1`, kind: 'agentMessage', revision: 1, status: 'completed', text },
+  ],
+}))
 const preferences = {
   theme: 'muse',
   cliPath: '',
@@ -31,6 +50,66 @@ const preferences = {
   reasoningEffort: 'high',
   archivedSessionIds: [],
   pinnedSessionIds: [],
+  fontSize: 'comfortable',
+  reduceMotion: false,
+  notifyOnCompletion: false,
+  bridgeFilesEnabled: false,
+  bridgeMcpEnabled: false,
+  bridgeMcpPort: 7735,
+}
+// The Settings window's state. The paths are only strings; the fake never creates them.
+const mcp = { file: '/tmp/fake-muse/settings.json', servers: [] }
+let bridgeToken = ''
+
+function bridgeStatus() {
+  return {
+    folder: '/tmp/fake-mmac/bridge',
+    files: { enabled: preferences.bridgeFilesEnabled, running: preferences.bridgeFilesEnabled },
+    mcp: {
+      enabled: preferences.bridgeMcpEnabled,
+      running: preferences.bridgeMcpEnabled && Boolean(bridgeToken),
+      url: `http://127.0.0.1:${preferences.bridgeMcpPort}/mcp`,
+      hasToken: Boolean(bridgeToken),
+    },
+    activeJobs: 0,
+  }
+}
+
+const settingsMethods = {
+  'mcp-list': () => mcp,
+  'mcp-add': (server) => {
+    mcp.servers.push(
+      server.transport === 'stdio'
+        ? {
+            name: server.name,
+            transport: 'stdio',
+            enabled: true,
+            command: server.command,
+            args: server.args,
+            envNames: Object.keys(server.env),
+          }
+        : {
+            name: server.name,
+            transport: 'http',
+            enabled: true,
+            url: server.url,
+            headerNames: Object.keys(server.headers),
+          },
+    )
+    return null
+  },
+  'mcp-enabled': (name, enabled) => {
+    const server = mcp.servers.find((entry) => entry.name === name)
+    if (server) server.enabled = enabled
+    return null
+  },
+  'mcp-remove': (name) => {
+    mcp.servers = mcp.servers.filter((entry) => entry.name !== name)
+    return null
+  },
+  'mcp-login': () => null,
+  'bridge-status': () => bridgeStatus(),
+  'bridge-token': () => (bridgeToken = 'fake-token-' + Date.now()),
 }
 const models = [
   {
@@ -91,6 +170,8 @@ const diff = [
   ' let c = 4',
   '',
 ].join('\n')
+// The plain working diff Revert hunk counts from. The labelled diff above ends with it.
+const rawDiff = diff.slice('Working changes\n'.length)
 const worktreePath = `${project}/.muse/worktrees/feature`
 let approvals = [
   {
@@ -128,10 +209,15 @@ let questions = [
     ],
   },
 ]
-const view = () => ({ session, items, approvals, questions })
-// Sends the changed conversation shortly after a reply, as MuseHost does.
+const view = (sessionId = 'fake-1') => {
+  const other = others.find((entry) => entry.session.sessionId === sessionId)
+  return other
+    ? { ...other, approvals: [], questions: [] }
+    : { session, items, approvals, questions }
+}
+// Sends the changed first conversation shortly after a reply, as MuseHost does.
 const update = () => setTimeout(() => write({ event: { type: 'session', view: view() } }), 50)
-const ready = { state: 'ready', version: 'fake' }
+const ready = { state: 'ready', version: 'fake', path: '/usr/local/bin/muse' }
 
 const methods = {
   // As backend.ts does: a client that speaks another protocol gets an error reply.
@@ -140,10 +226,21 @@ const methods = {
       throw new Error(`mMac speaks backend protocol ${theirs}, but the fake speaks 1.`)
     return { protocol: 1, version: 'fake' }
   },
-  start: () => ({ preferences, status: ready }),
-  sessions: () => ({ sessions: [session], nextCursor: null }),
+  start: (options) => {
+    bridgeToken = options?.bridgeToken ?? ''
+    return { preferences, status: ready }
+  },
+  sessions: () => ({
+    sessions: [session, ...others.map((entry) => entry.session)],
+    nextCursor: null,
+  }),
   models: () => models,
-  open: () => view(),
+  open: (sessionId) => view(sessionId),
+  send: ({ text }) => {
+    // A crash: no reply, and stdout closes with the process.
+    if (text === 'crash now') process.exit(1)
+    return null
+  },
   'set-model': (_, modelId) => {
     session.modelId = modelId
     update()
@@ -163,6 +260,7 @@ const methods = {
   preferences: (patch) => Object.assign(preferences, patch),
   'git-status': () => ({ branch: 'main', isRepository: true, changes }),
   'git-diff': () => diff,
+  'git-raw-diff': () => rawDiff,
   'git-revert-hunk': () => null,
   'git-stage-file': () => null,
   'git-revert-file': () => null,
@@ -180,6 +278,7 @@ const methods = {
   ],
   'worktree-merge': () => ({ ok: true, output: 'Merged muse/feature.' }),
   'worktree-remove': () => null,
+  ...settingsMethods,
   shutdown: () => {
     setTimeout(() => process.exit(0), 50)
     return true
@@ -201,10 +300,11 @@ createInterface({ input: process.stdin })
       return
     }
     record({ method: message.method, args: message.args ?? [] })
-    // The first open Asks first, so the test can press Escape on a real Ask sheet.
-    if (message.method === 'open' && !asked) {
+    // The first open of the first conversation Asks first, so the test can press Escape on a
+    // real Ask sheet.
+    if (message.method === 'open' && message.args?.[0] === 'fake-1' && !asked) {
       asked = true
-      pending = { id: message.id, value: view }
+      pending = { id: message.id, value: () => view('fake-1') }
       write({
         ask: 1,
         kind: 'confirm',

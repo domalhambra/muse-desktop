@@ -63,6 +63,54 @@ public actor BackendClient {
     }
   }
 
+  /// How long `hello` may take. The backend answers it without starting Muse.
+  public static let helloTimeout: Duration = .seconds(15)
+
+  /// How long `start` may take. The backend answers it once Muse has connected: the login-shell
+  /// probe (up to 6 seconds, `src/main/cli.ts`), `muse --version` (up to 6 seconds a candidate),
+  /// Muse's initialize (15 seconds, `src/main/muse-host.ts`), then the bridges. With one candidate
+  /// that is about 27 seconds at worst. This limit outlasts that, so Muse's clearer message shows
+  /// first.
+  public static let startTimeout: Duration = .seconds(45)
+
+  /// The launch handshake: `hello` within `helloTimeout`, then `start` within `startTimeout`. A
+  /// backend that is running but never answers fails with `BackendError.noAnswer` for the request
+  /// it left unanswered, instead of leaving mMac starting for ever. Each step is logged.
+  public func handshake(
+    dataFolder: URL, bridgeToken: String = "", helloTimeout: Duration = helloTimeout,
+    startTimeout: Duration = startTimeout
+  ) async throws -> Started {
+    Self.log.info("Sent hello")
+    _ = try await answer("hello", within: helloTimeout) { try await self.hello() }
+    Self.log.info("Got hello")
+    Self.log.info("Sent start")
+    let started = try await answer("start", within: startTimeout) {
+      try await self.start(dataFolder: dataFolder, bridgeToken: bridgeToken)
+    }
+    Self.log.info("Got start")
+    return started
+  }
+
+  /// `work`'s result, or `BackendError.noAnswer` once `timeout` passes. The request then stops
+  /// waiting, as a cancelled caller's does, and a Reply that comes later is dropped.
+  private func answer<T: Sendable>(
+    _ method: String, within timeout: Duration, _ work: @escaping @Sendable () async throws -> T
+  ) async throws -> T {
+    try await withThrowingTaskGroup(of: T?.self) { group in
+      group.addTask { try await work() }
+      group.addTask {
+        try await Task.sleep(for: timeout)
+        return nil
+      }
+      defer { group.cancelAll() }
+      guard let first = try await group.next(), let value = first else {
+        Self.log.error("No answer to \(method, privacy: .public) in time")
+        throw BackendError.noAnswer(method: method, after: timeout)
+      }
+      return value
+    }
+  }
+
   /// Stops waiting for a request whose caller was cancelled.
   private func abandon(_ id: Int) {
     pending.removeValue(forKey: id)?.resume(throwing: CancellationError())

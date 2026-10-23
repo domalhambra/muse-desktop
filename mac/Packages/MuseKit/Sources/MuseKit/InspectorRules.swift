@@ -21,7 +21,8 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
   /// What VoiceOver reads for the row: "Added, line 12, let b = 3", "Line 5, …", "Hunk, @@ …".
   public var spoken: String {
     let line = gutter.isEmpty ? "" : "line \(gutter), "
-    // Added, removed and context rows lose their one-character prefix.
+    // Added, removed and context rows lose their one-character prefix. A long line is read cut.
+    let text = Self.display(text)
     let content = text.count > 1 ? String(text.dropFirst()) : "blank"
     switch kind {
     case .added: return "Added, \(line)\(content)"
@@ -34,11 +35,50 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
     }
   }
 
+  /// The longest diff line shown whole. Longer lines, such as minified files, show cut.
+  public static let longLine = 2_000
+
+  /// A diff line as the diff view shows it: cut after `longLine` characters, ending in "…".
+  /// It walks at most `longLine` characters, not the whole line, since it runs on every render.
+  public static func display(_ text: String) -> String {
+    guard let cut = text.index(text.startIndex, offsetBy: longLine, limitedBy: text.endIndex),
+      cut != text.endIndex
+    else { return text }
+    return String(text[..<cut]) + "…"
+  }
+
+  /// The hunks of a raw `git diff`, exactly as `splitHunks` in src/main/git.ts cuts them: one final
+  /// newline dropped, split on "\n", each hunk from an `@@` line to the next. It splits bytes, as
+  /// JavaScript's `split('\n')` does, because Swift reads "\r\n" as one Character that is not "\n";
+  /// so a line of a file with Windows line ends keeps its "\r".
+  public static func rawHunks(_ raw: String) -> [String] {
+    let newline = UInt8(ascii: "\n")
+    let at = UInt8(ascii: "@")
+    var bytes = Array(raw.utf8)
+    if bytes.last == newline { bytes.removeLast() }
+    func opens(_ line: ArraySlice<UInt8>) -> Bool { line.starts(with: [at, at]) }
+    let lines = bytes.split(separator: newline, omittingEmptySubsequences: false)
+    guard let start = lines.firstIndex(where: opens) else { return [] }
+    var hunks: [String] = []
+    var current: [ArraySlice<UInt8>] = []
+    func finish() {
+      guard !current.isEmpty else { return }
+      hunks.append(String(decoding: Array(current.joined(separator: [newline])), as: UTF8.self))
+      current = []
+    }
+    for line in lines[start...] {
+      if opens(line) { finish() }
+      current.append(line)
+    }
+    finish()
+    return hunks
+  }
+
   /// What a diff view needs to size its rows, measured once per loaded diff.
   public struct Metrics: Equatable, Sendable {
     /// Digits in the largest gutter number.
     public let maxDigits: Int
-    /// The longest row's text in columns, a tab counted as eight.
+    /// The longest row's text as shown (`display`) in columns, a tab counted as eight.
     public let maxColumns: Int
 
     public init(maxDigits: Int, maxColumns: Int) {
@@ -52,12 +92,12 @@ public struct DiffLine: Equatable, Sendable, Identifiable {
     var columns = 0
     for row in rows {
       largest = max(largest, row.newNumber ?? row.oldNumber ?? 0)
-      columns = max(columns, row.text.unicodeScalars.reduce(0) { $0 + ($1 == "\t" ? 8 : 1) })
+      columns = max(columns, display(row.text).unicodeScalars.reduce(0) { $0 + ($1 == "\t" ? 8 : 1) })
     }
     return Metrics(maxDigits: largest > 0 ? String(largest).count : 0, maxColumns: columns)
   }
 
-  /// The diff as text, without gutters: "Copy diff".
+  /// The diff as text, without gutters: "Copy diff". Long lines are whole.
   public static func text(_ rows: [DiffLine]) -> String { rows.map(\.text).joined(separator: "\n") }
 
   /// The hunk whose header is row `id`, as text without gutters: "Copy hunk". It runs to the next
@@ -216,6 +256,9 @@ public struct Breadcrumb: Equatable, Sendable, Identifiable {
 
 /// A changed file's row in the Changes tab, as Electron draws it.
 public enum ChangeLabel {
+  /// A tab title with its count, as Electron writes "Changes 3". No count when there is none.
+  public static func counted(_ title: String, _ count: Int) -> String { count > 0 ? "\(title) \(count)" : title }
+
   /// `??` (untracked) shows as `U`.
   public static func status(_ change: GitChange) -> String { change.status == "??" ? "U" : change.status }
 
@@ -300,13 +343,10 @@ public struct ActivityEntry: Equatable, Sendable, Identifiable {
     return ToolPresentation.first(item.statusLine, item.objective, item.fallbackText) ?? item.status
   }
 
-  /// `webSearch` becomes `Web Search`: a space before each capital, and a capital first letter.
+  /// `webSearch` becomes `Web Search`: the kind's words, and a capital first letter.
   static func titled(_ kind: String) -> String {
-    let spaced = kind.reduce(into: "") { text, character in
-      if character.isUppercase { text += " " }
-      text.append(character)
-    }
-    return spaced.prefix(1).uppercased() + spaced.dropFirst()
+    let words = ToolPresentation.words(kind)
+    return words.prefix(1).uppercased() + words.dropFirst()
   }
 }
 

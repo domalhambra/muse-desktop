@@ -105,7 +105,9 @@ let fullViewJSON = #"""
   #expect(try await client.readFile(project: "/p", path: "a.txt") == "text")
   let worktrees = try await client.worktrees(project: "/p")
   #expect(worktrees.map(\.branch) == ["main", nil])
-  #expect(try await client.mergeWorktree(project: "/p", path: "/p/.muse/worktrees/w").ok == false)
+  let merge = try await client.mergeWorktree(project: "/p", path: "/p/.muse/worktrees/w")
+  #expect(merge.ok == false)
+  #expect(merge.output == "Merging muse/w has conflicts")
   try await client.removeWorktree(project: "/p", path: "/p/.muse/worktrees/w")
   let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
   #expect(sent == [
@@ -179,4 +181,82 @@ let fullViewJSON = #"""
   let line = #"{"itemId":"r1","kind":"reasoning","revision":1,"status":"inProgress","summary":["One",null,"Three"]}"#
   let item = try JSONDecoder().decode(TranscriptItem.self, from: Data(line.utf8))
   #expect(item.summary == ["One", "Three"])
+}
+
+@Test func preferencesDecodeEveryFieldWithElectronsDefaults() throws {
+  let empty = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
+  #expect(empty.theme == "muse")
+  #expect(empty.fontSize == "comfortable")
+  #expect(!empty.reduceMotion && !empty.notifyOnCompletion)
+  #expect(!empty.bridgeFilesEnabled && !empty.bridgeMcpEnabled)
+  #expect(empty.bridgeMcpPort == 7735)
+  #expect(empty == Preferences())
+  let full = try JSONDecoder().decode(
+    Preferences.self,
+    from: Data(#"{"theme":"moonlight","fontSize":"large","reduceMotion":true,"notifyOnCompletion":true,"bridgeFilesEnabled":true,"bridgeMcpEnabled":true,"bridgeMcpPort":8000}"#.utf8))
+  #expect(full.theme == "moonlight" && full.fontSize == "large" && full.bridgeMcpPort == 8000)
+  #expect(full.reduceMotion && full.notifyOnCompletion && full.bridgeFilesEnabled && full.bridgeMcpEnabled)
+}
+
+@Test func aPatchSendsOnlyItsFields() throws {
+  let data = try JSONEncoder().encode(PreferencesPatch(theme: "moonlight", bridgeMcpPort: 7736))
+  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+  #expect(object?.keys.sorted() == ["bridgeMcpPort", "theme"])
+  let every = PreferencesPatch(
+    cliPath: "/m", reasoningEffort: "low", theme: "muse", fontSize: "large", reduceMotion: true,
+    notifyOnCompletion: true, bridgeFilesEnabled: true, bridgeMcpEnabled: false, bridgeMcpPort: 7735)
+  let all = try JSONSerialization.jsonObject(with: JSONEncoder().encode(every)) as? [String: Any]
+  #expect(all?.keys.sorted() == [
+    "bridgeFilesEnabled", "bridgeMcpEnabled", "bridgeMcpPort", "cliPath", "fontSize",
+    "notifyOnCompletion", "reasoningEffort", "reduceMotion", "theme",
+  ])
+  #expect(PreferencesPatch(bridgeMcpEnabled: true).touchesBridges)
+  #expect(!PreferencesPatch(theme: "muse").touchesBridges)
+}
+
+@Test func mcpShapesRoundTrip() throws {
+  let list = try JSONDecoder().decode(
+    McpServerList.self,
+    from: Data(#"{"file":"/c/settings.json","servers":[{"name":"files","transport":"stdio","enabled":true,"command":"npx","args":["-y"],"envNames":["TOKEN"]},{"name":"remote","transport":"http","enabled":false,"url":"https://e.com/mcp","headerNames":[]}]}"#.utf8))
+  #expect(list.file == "/c/settings.json")
+  #expect(list.servers.map(\.name) == ["files", "remote"])
+  #expect(list.servers[0].isRemote == false && list.servers[1].isRemote)
+  #expect(list.servers[0].detail == "npx -y" && list.servers[1].detail == "https://e.com/mcp")
+  #expect(list.servers[0].secretNames == ["TOKEN"] && list.servers[1].secretNames.isEmpty)
+  let stdio = try JSONSerialization.jsonObject(
+    with: JSONEncoder().encode(McpServerInput.stdio(name: "a", command: "node", args: ["x"], env: ["K": "v"])))
+    as? [String: Any]
+  #expect(stdio?["transport"] as? String == "stdio" && stdio?["args"] as? [String] == ["x"])
+  #expect(stdio?["name"] as? String == "a" && stdio?["command"] as? String == "node")
+  #expect(stdio?["env"] as? [String: String] == ["K": "v"])
+  let http = try JSONSerialization.jsonObject(
+    with: JSONEncoder().encode(McpServerInput.http(name: "b", url: "https://e.com", headers: [:])))
+    as? [String: Any]
+  #expect(http?["transport"] as? String == "http" && http?["url"] as? String == "https://e.com")
+  #expect(http?["headers"] as? [String: String] == [:])
+}
+
+@Test func bridgeStatusDecodes() throws {
+  let status = try JSONDecoder().decode(
+    BridgeStatus.self,
+    from: Data(#"{"folder":"/d/bridge","files":{"enabled":true,"running":false,"error":"x"},"mcp":{"enabled":true,"running":true,"url":"http://127.0.0.1:7735/mcp","hasToken":true},"activeJobs":1}"#.utf8))
+  #expect(status.files.error == "x" && status.mcp.hasToken && status.activeJobs == 1)
+  #expect(status.folder == "/d/bridge" && status.mcp.url == "http://127.0.0.1:7735/mcp" && status.mcp.error == nil)
+}
+
+@Test func settingsModelsHavePublicInitializers() {
+  let server = McpServer(name: "a", transport: "stdio", enabled: true, command: "node", args: ["x"])
+  #expect(server.detail == "node x")
+  #expect(McpServerList(file: "/f", servers: [server]).servers.count == 1)
+  let status = BridgeStatus(
+    folder: "/b", files: BridgeStatus.Part(enabled: false, running: false),
+    mcp: BridgeStatus.Mcp(enabled: true, running: false, url: "http://127.0.0.1:7735/mcp", hasToken: false),
+    activeJobs: 0)
+  #expect(status.mcp.error == nil)
+}
+
+@Test func sessionUsageCanChange() {
+  var view = SessionView(session: Session(sessionId: "s", updatedAt: "2026-10-21T00:00:00Z"))
+  view.usage = Usage(input: 1, output: 2, total: 3)
+  #expect(view.usage?.total == 3)
 }

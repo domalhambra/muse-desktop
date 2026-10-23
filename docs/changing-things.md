@@ -66,8 +66,8 @@ Back up both files before you test either feature against your real Muse. The te
 
 ## Change mMac or its backend
 
-- Edit: `src/headless/backend.ts` for a backend method (the process itself is `src/headless/server.ts`), `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift client, `mac/Packages/MuseKit/` for logic (Markdown, the transcript and sidebar rules, the `Workspace` store), and `mac/mMac/` for views. The inspector's rules (diff rows, file kinds, breadcrumbs, change labels, Git badges and activity rows) are in `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift`. Its store is `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift`. `src/headless/login-env.sh` answers `discoverCli`'s login-shell read from the environment mMac passed. `src/headless/server.ts` points `SHELL` at it when `MMAC_LOGIN_SHELL` is set. Keep it executable.
-- Test: `tests/unit/headless-backend.test.ts`, `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts`, `tests/unit/headless-login-env.test.ts`, `swift test` for both packages (`mac/Packages/MuseBackend/Tests/` and `mac/Packages/MuseKit/Tests/`), and the UI tests in `mac/mMacUITests/`.
+- Edit: `src/headless/backend.ts` for a backend method (the process itself is `src/headless/server.ts`), `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift client, `mac/Packages/MuseKit/` for logic (Markdown, the transcript and sidebar rules, the `Workspace` store), and `mac/mMac/` for views. The inspector's rules (diff rows, file kinds, breadcrumbs, change labels, Git badges and activity rows) are in `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift`. Its store is `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift`. `src/headless/login-env.sh` answers `discoverCli`'s login-shell read from the environment mMac passed. `src/headless/server.ts` points `SHELL` at it when `MMAC_LOGIN_SHELL` is set, and `src/headless/login-env.ts` checks that it is there. Keep it executable. The Settings window's backend parts are `src/headless/bridges.ts` (both bridges), `src/headless/terminal.ts` (Terminal for `muse mcp login`) and `src/headless/revert-hunk.ts` (the guarded Revert hunk). Its rules are in `mac/Packages/MuseKit/Sources/MuseKit/SettingsRules.swift`, its store is `mac/Packages/MuseKit/Sources/MuseKit/SettingsModel.swift`, and the token store is `mac/Packages/MuseKit/Sources/MuseKit/BridgeTokenStore.swift`. Its panes are `mac/mMac/SettingsView.swift` and the four pane files beside it.
+- Test: `tests/unit/headless-backend.test.ts`, `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts`, `tests/unit/headless-login-env.test.ts`, `tests/unit/headless-bridges.test.ts`, `tests/unit/headless-terminal.test.ts`, `tests/unit/headless-revert-hunk.test.ts`, `swift test` for both packages (`mac/Packages/MuseBackend/Tests/` and `mac/Packages/MuseKit/Tests/`), and the UI tests in `mac/mMacUITests/`.
 - Prove: `npm run test:headless`, both `swift test` runs and the `xcodebuild test` run in "Prove a change".
 - Read first: `docs/superpowers/specs/2026-10-21-mac-app-design.md`.
 
@@ -93,7 +93,24 @@ XcodeGen writes the Xcode project and its Info.plist from `mac/project.yml`. Do 
 
 mMac starts the backend from the checkout it was built in, with `node --import tsx src/headless/server.ts`. `npm run headless` starts the same backend for a person or a smoke check. mMac does not use it, because npm prints a banner on stdout.
 
-mMac keeps its preferences in `~/Library/Application Support/mMac`. Set `MMAC_DATA_FOLDER` to use another folder.
+mMac keeps its preferences and its bridge folder in `~/Library/Application Support/mMac`. Set `MMAC_DATA_FOLDER` to use another folder.
+
+### Keep test runs away from Dom's token
+
+mMac keeps the MCP bridge token in the login Keychain, service `com.domalhambra.mmac.bridge-token` (see `docs/bridge.md`). A run of mMac that is not Dom's own use must not read or write that item. Debug builds take two variables. Release builds ignore both.
+
+- `MMAC_KEYCHAIN_SERVICE` names another Keychain service, such as `com.domalhambra.mmac.test`. The account stays `mcp-bridge`.
+- `MMAC_TOKEN_STORE=memory` keeps the token in memory, with no Keychain at all. The UI tests set it, because after each ad-hoc rebuild the Keychain asks for the login password.
+
+After a run with a test service, delete its item:
+
+```sh
+security delete-generic-password -s com.domalhambra.mmac.test
+```
+
+macOS can ask for your login password first. A test must never type it. `security find-generic-password -s <service>`, without `-w`, shows whether the item exists and prints no secret. Never add `-w` in a test: it reads the secret, and macOS asks for the password.
+
+`swift test` for `MuseKit` writes one item with a random service, `com.domalhambra.mmac.test.` and a UUID, and deletes it even when an expectation fails. A run that stops in the middle can leave it. Search for `com.domalhambra.mmac.test` in Keychain Access to find such items.
 
 ### Run the UI tests
 
@@ -105,7 +122,9 @@ The UI tests drive the real desktop. Before you run them:
 
 The echo test pastes its first message through the general pasteboard, then restores every item the pasteboard held. Do not copy anything while it runs.
 
-Debug builds keep the window's user defaults, such as `inspectorShown`, in the suite that `MMAC_DEFAULTS_SUITE` names. The UI tests set it to `com.domalhambra.mmac.uitests`, and mMac empties it at launch. Your own mMac defaults stay unchanged.
+Debug builds keep the window's user defaults, such as `inspectorShown`, in the suite that `MMAC_DEFAULTS_SUITE` names. The UI tests set it to `com.domalhambra.mmac.uitests`, and mMac empties it at launch. With the variable set, mMac also turns off window restoration and AppKit's frame autosave for both windows and the sidebar split (`mac/mMac/WindowStateGuard.swift`). Your own mMac defaults stay unchanged. AppKit's open panel still writes a few keys of its own (see `docs/decisions.md`, 2026-10-22). Every UI-test launch also sets `MMAC_TOKEN_STORE=memory`, `-ApplePersistenceIgnoreState YES` and `-NSQuitAlwaysKeepsWindows NO`.
+
+To run the UI tests several times and check the real defaults, run `mac/scripts/ui-tests.sh` with the number of runs, such as `mac/scripts/ui-tests.sh 3`. The default is 3. The script runs each pass under `caffeinate` with a 15-minute limit, stops at the first failed run, and compares the `com.domalhambra.mmac` defaults before and after. It only reads that domain. Its logs go to the `ui-tests` folder in `.cache/`. Warning: on a timeout or Ctrl-C, it stops every mMac built in the `mmac` folder in `.cache/`, a test's or not, and the test runner and the fake backend. Quit your own build from that folder before you run the script.
 
 The scheme keeps screen capture off (`captureScreenshotsAutomatically: false` in `mac/project.yml`). Keep it off: a recording captures whatever else is on the screen.
 

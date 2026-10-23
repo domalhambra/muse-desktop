@@ -5,11 +5,15 @@ import SwiftUI
 /// Draws Markdown blocks. Links open only on the web, as Electron allows.
 struct MarkdownView: View {
   let blocks: [MarkdownBlock]
+  @Environment(\.appearance) private var appearance
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       ForEach(MarkdownBlock.identified(blocks)) { item in BlockView(block: item.block) }
     }
+    // The reading size, as Electron's `.markdown`: paragraphs, lists, quotes and table cells.
+    // Headings, code blocks and link icons set their own fonts.
+    .font(.system(size: appearance.textSize.points))
     .environment(
       \.openURL,
       OpenURLAction { url in
@@ -20,19 +24,22 @@ struct MarkdownView: View {
 
 struct BlockView: View {
   let block: MarkdownBlock
+  @Environment(\.appearance) private var appearance
 
   var body: some View {
     switch block {
     case .heading(let level, let text):
-      Text(text).font(level == 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
+      Text(text)
+        .font(.system(size: appearance.headingSize(level: level), weight: .bold))
+        .foregroundStyle(appearance.colors.heading)
     case .paragraph(let text):
       LinkedText(text: text)
     case .code(let language, let code):
       CodeBlockView(language: language, code: code)
     case .quote(let blocks):
       HStack(alignment: .top, spacing: 8) {
-        RoundedRectangle(cornerRadius: 1).fill(.tertiary).frame(width: 3)
-        MarkdownView(blocks: blocks).foregroundStyle(.secondary)
+        RoundedRectangle(cornerRadius: 1).fill(.themeMuted).frame(width: 3)
+        MarkdownView(blocks: blocks).foregroundStyle(.themeSecondary)
       }
     case .list(let ordered, let start, let items):
       VStack(alignment: .leading, spacing: 4) {
@@ -40,7 +47,7 @@ struct BlockView: View {
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(marker(ordered: ordered, number: start + index, checked: item.checked))
               .monospacedDigit()
-              .foregroundStyle(.secondary)
+              .foregroundStyle(.themeSecondary)
             MarkdownView(blocks: item.blocks)
           }
         }
@@ -76,7 +83,7 @@ struct LinkedText: View {
         // Accessibility gets the icon as an unlabelled attachment character (U+FFFC), not the
         // symbol's name, and a plain-text copy leaves it out. An empty `.accessibilityLabel` on it
         // changes neither.
-        result = result + Text(Image(systemName: "arrow.up.right")).font(.caption2).foregroundStyle(.secondary)
+        result = result + Text(Image(systemName: "arrow.up.right")).font(.caption2).foregroundStyle(.themeSecondary)
       }
     }
     return result
@@ -87,6 +94,7 @@ struct LinkedText: View {
 struct CodeBlockView: View {
   let language: String?
   let code: String
+  @Environment(\.appearance) private var appearance
   @State private var copied = false
   @State private var copyFailed = false
   /// Resets "Copied". A second click restarts the 1.8 seconds.
@@ -95,7 +103,7 @@ struct CodeBlockView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack {
-        Text(language ?? "code").font(.caption.monospaced()).foregroundStyle(.secondary)
+        Text(language ?? "code").font(.caption.monospaced()).foregroundStyle(.themeSecondary)
         Spacer()
         Button(copyFailed ? "Select to copy" : copied ? "Copied" : "Copy", action: copy)
           .buttonStyle(.borderless)
@@ -115,8 +123,7 @@ struct CodeBlockView: View {
           .padding(10)
       }
     }
-    // Strong enough that the block's edge shows in the dark appearance too.
-    .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+    .background(appearance.colors.codeBackground, in: RoundedRectangle(cornerRadius: 8))
     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
   }
 

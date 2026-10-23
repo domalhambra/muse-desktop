@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -67,6 +68,32 @@ function alive(pid: number) {
   }
 }
 
+/** A port the OS just gave out, closed again so the backend's MCP bridge can bind it. */
+function freePort() {
+  return new Promise<number>((resolve, reject) => {
+    const server = createServer()
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      server.close(() =>
+        typeof address === 'object' && address ? resolve(address.port) : reject(),
+      )
+    })
+  })
+}
+
+/** True when something accepts a TCP connection on 127.0.0.1 at this port. */
+function listening(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const socket = connect(port, '127.0.0.1')
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('error', () => resolve(false))
+  })
+}
+
 async function until(check: () => boolean, what: string, milliseconds = 15000) {
   const deadline = Date.now() + milliseconds
   while (!check()) {
@@ -79,7 +106,13 @@ function launch(label: string, extraEnvironment: Record<string, string | undefin
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/headless/server.ts'], {
     cwd: root,
     env: { ...environment, ...extraEnvironment },
-    stdio: ['pipe', 'pipe', 'inherit'],
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  // stderr still reaches this terminal, and is kept so the run can check what it leaks.
+  let stderr = ''
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString()
+    process.stderr.write(chunk)
   })
   const exited = new Promise<number | null>((resolve) => child.on('exit', resolve))
   const pending = new Map<
@@ -150,6 +183,7 @@ function launch(label: string, extraEnvironment: Record<string, string | undefin
     serves,
     request,
     recordServes,
+    stderr: () => stderr,
     fault: () => fault,
   }
 }
@@ -186,7 +220,8 @@ try {
   await assert.rejects(backend.request('sessions'), /Send hello first/)
   const hello = (await backend.request('hello', HEADLESS_PROTOCOL)) as { protocol: number }
   assert.equal(hello.protocol, HEADLESS_PROTOCOL)
-  const started = (await backend.request('start', { dataFolder })) as {
+  const bridgeToken = 'verify-token'
+  const started = (await backend.request('start', { dataFolder, bridgeToken })) as {
     status: { state: string; version?: string; message?: string }
   }
   assert.equal(
@@ -263,6 +298,20 @@ try {
   await assert.rejects(backend.request('output', sessionId, replyItem), /no stored output/)
   console.log('PASS · Rename, models, preferences and the stored-output error')
 
+  // The MCP bridge on a free port, with the token from start. It binds 127.0.0.1 only.
+  const bridgePort = await freePort()
+  await backend.request('preferences', { bridgeMcpEnabled: true, bridgeMcpPort: bridgePort })
+  const bridge = (await backend.request('bridge-status')) as {
+    folder: string
+    mcp: { running: boolean; hasToken: boolean; url: string; error?: string }
+  }
+  assert.equal(bridge.folder, join(dataFolder, 'bridge'))
+  assert(bridge.mcp.running, bridge.mcp.error ?? 'The MCP bridge should be running.')
+  assert(bridge.mcp.hasToken, 'The token from start should reach the MCP bridge.')
+  assert.equal(bridge.mcp.url, `http://127.0.0.1:${bridgePort}/mcp`)
+  assert(await listening(bridgePort), 'The MCP bridge should accept connections.')
+  console.log('PASS · start with a bridge token; bridge-status reports the MCP bridge running')
+
   // Only the trust Ask, before and after shutdown: an unexpected Ask must not be quietly confirmed.
   assert.equal(backend.asks.length, 1, 'Only the trust Ask was expected before shutdown.')
   backend.recordServes()
@@ -271,6 +320,13 @@ try {
   assert.equal(backend.asks.length, 1, 'Shutdown should not raise an Ask.')
   await until(() => ownedGone(backend), 'muse serve to stop after shutdown')
   console.log('PASS · shutdown exits 0 and leaves no muse process')
+  // Process exit closes the port too; the stopBridges unit test covers the quit wiring.
+  assert(!(await listening(bridgePort)), `Port ${bridgePort} should be closed after the exit.`)
+  console.log('PASS · No bridge port stays open after the backend exits')
+  assert(!(await readFile(join(dataFolder, 'preferences.json'), 'utf8')).includes(bridgeToken))
+  assert(!JSON.stringify(backend.events).includes(bridgeToken), 'An event carried the token.')
+  assert(!backend.stderr().includes(bridgeToken), 'stderr carried the token.')
+  console.log('PASS · The token is not in preferences.json, an event or stderr')
 
   const closing = launch('The stdin-closing backend')
   backends.push(closing)
