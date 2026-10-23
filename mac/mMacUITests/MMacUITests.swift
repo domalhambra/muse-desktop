@@ -23,7 +23,22 @@ final class MMacUITests: XCTestCase {
   }
 
   override func tearDown() async throws {
+    keepRequestLog()
     try? FileManager.default.removeItem(at: temporary)
+  }
+
+  /// Copies the fake backend's request log, passed or failed, to `MMAC_UI_LOG_DIR` as
+  /// `<testName>-requests.jsonl`. `mac/scripts/ui-tests.sh` sets the folder through
+  /// `TEST_RUNNER_MMAC_UI_LOG_DIR`. The teardown blocks have stopped the app by now.
+  private func keepRequestLog() {
+    guard let folder = ProcessInfo.processInfo.environment["MMAC_UI_LOG_DIR"], !folder.isEmpty,
+      let log = fakeLog, FileManager.default.fileExists(atPath: log.path)
+    else { return }
+    // `name` reads "-[MMacUITests testName]".
+    let test = name.split(separator: " ").last.map { String($0.dropLast()) } ?? "test"
+    let target = URL(fileURLWithPath: folder).appending(path: "\(test)-requests.jsonl")
+    try? FileManager.default.removeItem(at: target)
+    try? FileManager.default.copyItem(at: log, to: target)
   }
 
   private func launch(cliPath: String, extra: [String: String] = [:]) throws -> XCUIApplication {
