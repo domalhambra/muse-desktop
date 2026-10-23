@@ -222,9 +222,9 @@ const ready = { state: 'ready', version: 'fake', path: '/usr/local/bin/muse' }
 const methods = {
   // As backend.ts does: a client that speaks another protocol gets an error reply.
   hello: (theirs) => {
-    if (theirs !== 1)
-      throw new Error(`mMac speaks backend protocol ${theirs}, but the fake speaks 1.`)
-    return { protocol: 1, version: 'fake' }
+    if (theirs !== 2)
+      throw new Error(`mMac speaks backend protocol ${theirs}, but the fake speaks 2.`)
+    return { protocol: 2, version: 'fake' }
   },
   start: (options) => {
     bridgeToken = options?.bridgeToken ?? ''

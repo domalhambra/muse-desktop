@@ -106,6 +106,22 @@ extension BackendClient {
     _ = try await request("set-model", [.string(sessionId), .string(modelId)])
   }
 
+  /// Selects one of Muse's four approval modes. It applies to Muse's next action. Returns the mode
+  /// in effect, which can differ from the one asked for.
+  public func setApprovalMode(sessionId: String, mode: String) async throws -> String {
+    try await call("set-approval-mode", [.string(sessionId), .string(mode)])
+  }
+
+  /// A side session seeded from the conversation, loaded and subscribed. Its kind is `sideChat`.
+  public func sideChat(_ sessionId: String) async throws -> SessionView {
+    try await call("side-chat", [.string(sessionId)])
+  }
+
+  /// Runs a shell command in the conversation's folder. The result arrives as a `userShell` item.
+  public func shell(sessionId: String, command: String) async throws {
+    _ = try await request("shell", [.string(sessionId), .string(command)])
+  }
+
   public func approve(sessionId: String, approvalId: String, choiceId: String) async throws {
     _ = try await request("approve", [.string(sessionId), .string(approvalId), .string(choiceId)])
   }

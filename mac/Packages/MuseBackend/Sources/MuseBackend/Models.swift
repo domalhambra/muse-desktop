@@ -48,6 +48,7 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
   /// `subagent` and `reminder` sessions never show in the sidebar.
   public let kind: String?
   public let worktree: Worktree?
+  public var approvalMode: ApprovalModeState?
   public var id: String { sessionId }
 
   public init(
@@ -55,7 +56,7 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     updatedAt: String, lastActivityAt: String? = nil, status: String = "idle",
     activeTurnId: String? = nil, modelId: String? = nil, name: String? = nil,
     title: String? = nil, firstUserPrompt: String? = nil, kind: String? = nil,
-    worktree: Worktree? = nil
+    worktree: Worktree? = nil, approvalMode: ApprovalModeState? = nil
   ) {
     self.sessionId = sessionId
     self.workspaceRoot = workspaceRoot
@@ -70,7 +71,14 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     self.firstUserPrompt = firstUserPrompt
     self.kind = kind
     self.worktree = worktree
+    self.approvalMode = approvalMode
   }
+}
+
+/// The approval mode in effect, as `session/setApprovalMode` returns it and the session carries it.
+public struct ApprovalModeState: Codable, Equatable, Sendable {
+  public let mode: String
+  public init(mode: String) { self.mode = mode }
 }
 
 public struct SessionList: Codable, Equatable, Sendable {
@@ -108,6 +116,15 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     }
   }
 
+  public struct ItemUsage: Codable, Equatable, Sendable {
+    public let inputTokens: Int
+    public let outputTokens: Int
+    public init(inputTokens: Int, outputTokens: Int) {
+      self.inputTokens = inputTokens
+      self.outputTokens = outputTokens
+    }
+  }
+
   public let itemId: String
   /// `userMessage`, `agentMessage`, `reasoning`, `toolCall`, `reminderChild`, `hookRun` and more.
   public let kind: String
@@ -137,6 +154,10 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
   public let outputRef: OutputRef?
   public let patchSummary: PatchSummary?
   public let result: ToolResult?
+  public let exitCode: Int?
+  public let sideSessionId: String?
+  public let controlStatus: String?
+  public let usage: ItemUsage?
   public var id: String { itemId }
 
   public init(
@@ -148,7 +169,8 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     finalSummary: String? = nil, recordedAt: String? = nil, reminderAgentId: String? = nil,
     durationMs: Double? = nil, truncated: Bool? = nil, retracted: Bool? = nil,
     blocking: Bool? = nil, outputRef: OutputRef? = nil, patchSummary: PatchSummary? = nil,
-    result: ToolResult? = nil
+    result: ToolResult? = nil, exitCode: Int? = nil, sideSessionId: String? = nil,
+    controlStatus: String? = nil, usage: ItemUsage? = nil
   ) {
     self.itemId = itemId
     self.kind = kind
@@ -177,6 +199,10 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     self.outputRef = outputRef
     self.patchSummary = patchSummary
     self.result = result
+    self.exitCode = exitCode
+    self.sideSessionId = sideSessionId
+    self.controlStatus = controlStatus
+    self.usage = usage
   }
 }
 
@@ -212,6 +238,10 @@ extension TranscriptItem {
     outputRef = try c.decodeIfPresent(OutputRef.self, forKey: .outputRef)
     patchSummary = try c.decodeIfPresent(PatchSummary.self, forKey: .patchSummary)
     result = try c.decodeIfPresent(ToolResult.self, forKey: .result)
+    exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
+    sideSessionId = try c.decodeIfPresent(String.self, forKey: .sideSessionId)
+    controlStatus = try c.decodeIfPresent(String.self, forKey: .controlStatus)
+    usage = try c.decodeIfPresent(ItemUsage.self, forKey: .usage)
   }
 }
 
@@ -474,13 +504,15 @@ public struct SessionView: Codable, Equatable, Sendable {
   public var approvals: [Approval]
   public var questions: [UserQuestion]
   public var usage: Usage?
+  public var context: ContextUsage?
+  public var todos: [TodoItem]?
   public let error: String?
   public let historyNotice: String?
 
   public init(
     session: Session, items: [TranscriptItem] = [], approvals: [Approval] = [],
     questions: [UserQuestion] = [], usage: Usage? = nil, error: String? = nil,
-    historyNotice: String? = nil
+    historyNotice: String? = nil, context: ContextUsage? = nil, todos: [TodoItem]? = nil
   ) {
     self.session = session
     self.items = items
@@ -489,6 +521,34 @@ public struct SessionView: Codable, Equatable, Sendable {
     self.usage = usage
     self.error = error
     self.historyNotice = historyNotice
+    self.context = context
+    self.todos = todos
+  }
+}
+
+/// `session/contextUsage`: how full the context window is. `window` is nil when the model has no limit.
+public struct ContextUsage: Codable, Equatable, Sendable {
+  public let used: Int
+  public let window: Int?
+  /// `normal`, `warning` or `blocked`.
+  public let pressure: String
+  public init(used: Int, window: Int? = nil, pressure: String) {
+    self.used = used
+    self.window = window
+    self.pressure = pressure
+  }
+}
+
+/// One todo of the agent's list.
+public struct TodoItem: Codable, Equatable, Sendable {
+  public let text: String
+  /// `pending`, `inProgress`, `completed` or `cancelled`.
+  public let status: String
+  public let activeForm: String?
+  public init(text: String, status: String, activeForm: String? = nil) {
+    self.text = text
+    self.status = status
+    self.activeForm = activeForm
   }
 }
 

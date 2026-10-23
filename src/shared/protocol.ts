@@ -31,6 +31,14 @@ export const itemSchema = z.object({
   finalSummary: z.string().optional(),
   outputRef: z.object({ id: z.string(), byteLen: z.number().optional() }).passthrough().optional(),
   patchSummary: z.object({ added: z.number(), removed: z.number(), files: z.number() }).optional(),
+  /** `userShell`: the process exit code, when it exited by code. */
+  exitCode: z.number().optional(),
+  /** `sideChat`: the side session this row stands for. */
+  sideSessionId: z.string().optional(),
+  /** `subagent`: `accepted`, `starting`, `running`, `resultReady`, `closing`, `closed` or more. */
+  controlStatus: z.string().optional(),
+  /** `subagent`: the child's observed usage, updated in place. */
+  usage: z.object({ inputTokens: z.number(), outputTokens: z.number() }).passthrough().optional(),
   result: z
     .object({ text: z.string().optional(), summary: z.string().optional() })
     .passthrough()

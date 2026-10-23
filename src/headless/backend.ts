@@ -6,6 +6,7 @@ import { basename, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import {
   answerSchema,
+  approvalModeSchema,
   effortSchema,
   preferencesPatchSchema,
   preferencesSchema,
@@ -68,6 +69,9 @@ export type Muse = Pick<
   | 'rename'
   | 'models'
   | 'setModel'
+  | 'setApprovalMode'
+  | 'sideChat'
+  | 'runShell'
   | 'approve'
   | 'answer'
   | 'cancelQuestion'
@@ -379,6 +383,27 @@ export function createBackend({
     const sessionId = id.parse(session)
     await sessionProject(sessionId)
     return muse.setModel(sessionId, id.parse(model))
+  })
+
+  // Muse's approval mode for one conversation. It applies to Muse's next action.
+  method('set-approval-mode', async (session, mode) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.setApprovalMode(sessionId, approvalModeSchema.parse(mode))
+  })
+
+  // A side session seeded from the conversation. mMac shows it in a sheet; it never joins the sidebar.
+  method('side-chat', async (session) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.sideChat(sessionId)
+  })
+
+  // The composer's `!` escape: a shell command in the conversation's folder.
+  method('shell', async (session, command) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.runShell(sessionId, z.string().min(1).max(10000).parse(command))
   })
 
   method('approve', async (session, approval, choice) => {
