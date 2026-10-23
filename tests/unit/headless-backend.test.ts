@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -53,7 +53,9 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     open: vi.fn(async (sessionId: string) => view(session({ sessionId }))),
     send: vi.fn(async () => {}),
     cancel: vi.fn(async () => {}),
+    compact: vi.fn(async () => ({ status: 'started' })),
     getSession: vi.fn(() => session()),
+    getView: vi.fn((sessionId: string) => view(session({ sessionId }))),
     hasActiveTurns: vi.fn(() => false),
     rename: vi.fn(async () => {}),
     models: vi.fn(async () => [
@@ -370,6 +372,7 @@ describe('headless backend, M1 methods', () => {
     ['approve', 'approve', ['s1', 'a1', 'c1']],
     ['answer', 'answer', ['s1', 'u1', [{ questionId: 'q', selectedLabel: 'Yes' }]]],
     ['cancel-question', 'cancelQuestion', ['s1', 'u1']],
+    ['compact', 'compact', ['s1']],
   ] as const)('%s stops at a cancelled trust check', async (name, hostMethod, args) => {
     const project = await folder('project')
     const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
@@ -810,6 +813,96 @@ describe('headless backend, M3 MCP methods', () => {
       `cd '${homedir()}' && '/opt/muse' 'mcp' 'login' 'remote'`,
       `cd '${homedir()}' && '/opt/muse' 'mcp' 'logout' 'remote'`,
     ])
+  })
+})
+
+describe('headless backend, M4a conversation actions', () => {
+  it('compacts after the trust check and returns Muse’s status', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse({
+      getSession: vi.fn(() => session({ workspaceRoot: project })),
+      compact: vi.fn(async () => ({ status: 'noop' })),
+    })
+    const { call, start, asks } = harness(muse, [0])
+    await start()
+    expect(await call('compact', 's1')).toEqual({ status: 'noop' })
+    expect(muse.compact).toHaveBeenCalledWith('s1')
+    expect(asks).toHaveLength(1)
+  })
+
+  it('exports the open view to the chosen path, mode 0600, without a trust check', async () => {
+    const exported = view(session({ name: 'Plan', workspaceRoot: '/p' }))
+    exported.items = [
+      { itemId: 'i1', kind: 'userMessage', revision: 1, status: 'completed', text: 'Hello' },
+    ]
+    const muse = fakeMuse({ getView: vi.fn(() => exported) })
+    const { call, start, asks } = harness(muse)
+    await start()
+    const path = join(dir, 'Plan.md')
+    // A file the person chose to replace: its old mode must not stay.
+    await writeFile(path, 'old', { mode: 0o644 })
+    expect(await call('export', 's1', path)).toBe(path)
+    expect(muse.getView).toHaveBeenCalledWith('s1')
+    expect(await readFile(path, 'utf8')).toBe('# Plan\n\nProject: /p\n\n## You\n\nHello\n')
+    expect((await stat(path)).mode & 0o777).toBe(0o600)
+    expect(asks).toHaveLength(0)
+  })
+
+  it('titles an unnamed conversation with the sidebar title mMac sends', async () => {
+    const { call, start } = harness()
+    await start()
+    const path = join(dir, 'out.md')
+    await call('export', 's1', path, 'Fix the login bug')
+    expect(await readFile(path, 'utf8')).toBe('# Fix the login bug\n\nProject: None\n')
+    await call('export', 's1', path)
+    expect(await readFile(path, 'utf8')).toBe('# Muse conversation\n\nProject: None\n')
+  })
+
+  it('writes nothing for a conversation that is not open, or for a relative path', async () => {
+    const muse = fakeMuse({
+      getView: vi.fn((sessionId: string): SessionView => {
+        if (sessionId === 'gone')
+          throw new Error('Open this conversation before performing an action.')
+        return view(session({ sessionId }))
+      }),
+    })
+    const { call, start } = harness(muse)
+    await start()
+    const path = join(dir, 'never.md')
+    await expect(call('export', 'gone', path)).rejects.toThrow(
+      'Open this conversation before performing an action.',
+    )
+    await expect(call('export', 's1', 'never.md')).rejects.toThrow()
+    await expect(readFile(path)).rejects.toThrow('ENOENT')
+  })
+
+  it('opens Terminal in a known project, then with the CLI', async () => {
+    const project = await folder("O'Brien project")
+    const { call, start, terminal } = harness(fakeMuse({ status: { ...ready, path: '/opt/muse' } }))
+    await start()
+    await expect(call('terminal', project)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    await expect(call('cli-terminal', project)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    expect(terminal).toEqual([])
+    await call('add-project', project)
+    await call('terminal', project)
+    await call('cli-terminal', project)
+    expect(terminal).toEqual([
+      `cd '${dir}/O'\\''Brien project'`,
+      `cd '${dir}/O'\\''Brien project' && '/opt/muse'`,
+    ])
+  })
+
+  it('runs muse when the CLI path is not known', async () => {
+    const project = await folder('project')
+    const { call, start, terminal } = harness()
+    await start()
+    await call('add-project', project)
+    await call('cli-terminal', project)
+    expect(terminal).toEqual([`cd '${project}' && 'muse'`])
   })
 })
 

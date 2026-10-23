@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, realpath, stat } from 'node:fs/promises'
+import { chmod, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import {
   answerSchema,
@@ -36,8 +36,9 @@ import { readPreferences, writePreferences } from '../main/preferences'
 import { mergeWorktree, removeWorktree } from '../main/worktrees'
 import { projectRoot, worktreeParent } from '../shared/worktree'
 import { Bridges, type BridgeFactories } from './bridges'
+import { exportMarkdown, exportTitle } from './export'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
-import { openInTerminal, terminalCommand } from './terminal'
+import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
 // mMac's backend methods and the state they share. src/headless/server.ts owns
@@ -56,7 +57,9 @@ export type Muse = Pick<
   | 'open'
   | 'send'
   | 'cancel'
+  | 'compact'
   | 'getSession'
+  | 'getView'
   | 'hasActiveTurns'
   | 'rename'
   | 'models'
@@ -100,6 +103,9 @@ export function createBackend({
 }: BackendDeps) {
   const id = z.string().min(1).max(200)
   const pathSchema = z.string().min(1).max(4096)
+  // A file mMac chose in its own panel or wrote itself: always a full path, never one the
+  // backend would resolve against its own working folder.
+  const absolutePath = pathSchema.refine((value) => isAbsolute(value))
   const methods = new Map<string, Method>()
   let greeted = false
   let starting = false
@@ -336,6 +342,12 @@ export function createBackend({
 
   method('cancel', (value) => muse.cancel(id.parse(value)))
 
+  method('compact', async (value) => {
+    const sessionId = id.parse(value)
+    await sessionProject(sessionId)
+    return muse.compact(sessionId)
+  })
+
   method('preferences', (value) => savePreferences(preferencesPatchSchema.parse(value)))
 
   method('rename', async (session, name) => {
@@ -371,6 +383,22 @@ export function createBackend({
   })
 
   method('output', (session, item) => muse.readOutput(id.parse(session), id.parse(item)))
+
+  // Markdown export, as src/main/index.ts's `export` handler writes it. mMac shows the save
+  // panel and sends the path; like Electron, this needs the conversation open, not trusted.
+  method('export', async (session, path, fallback) => {
+    const view = muse.getView(id.parse(session))
+    const file = absolutePath.parse(path)
+    const title = exportTitle(
+      view.session,
+      z.string().max(1000).nullish().parse(fallback) ?? undefined,
+    )
+    await writeFile(file, exportMarkdown(view, title), { mode: 0o600 })
+    // writeFile sets the mode only on a new file. A file the person replaced would keep its old
+    // mode, as in Electron; mMac sets it every time.
+    await chmod(file, 0o600)
+    return file
+  })
 
   // The inspector, as src/main/index.ts registers it. Like Electron, these check that the
   // project is known but do not ask to trust it.
@@ -433,6 +461,14 @@ export function createBackend({
     if (busy) throw new Error('A conversation is still working in this worktree.')
     await removeWorktree(root, target)
   })
+
+  // The inspector's footer, as src/main/index.ts's `terminal` and `cli-terminal` open it. mMac
+  // reveals the folder in Finder itself.
+  method('terminal', async (project) => openTerminal(folderCommand(await knownProject(project))))
+
+  method('cli-terminal', async (project) =>
+    openTerminal(terminalCommand(await knownProject(project), muse.status.path || 'muse', [])),
+  )
 
   // MCP servers, as src/main/index.ts registers them: direct edits of Muse's settings.json.
   const mcpFile = () => settingsFile(muse.configDir())
