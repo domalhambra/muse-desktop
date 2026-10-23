@@ -223,6 +223,19 @@ extension BackendClient {
   /// Makes a new bridge token and returns it. mMac saves it in the Keychain.
   public func bridgeNewToken() async throws -> String { try await call("bridge-token") }
 
+  // Voice input. mMac records and writes the WAV; the backend runs the CLI.
+
+  /// Transcribes mMac's recording, a 16 kHz mono WAV in its temp folder, with
+  /// `muse voice transcribe`. The backend deletes the file, whatever the outcome.
+  public func voice(_ url: URL) async throws -> String {
+    try await call("voice", [.string(url.path)])
+  }
+
+  /// Stops a transcription in progress.
+  public func cancelVoice() async throws {
+    _ = try await request("cancel-voice")
+  }
+
   /// Asks the backend to quit, then waits for it to exit.
   /// Returns false when the person chose to keep Muse working.
   public func shutdown(timeout: Duration = .seconds(5)) async throws -> Bool {

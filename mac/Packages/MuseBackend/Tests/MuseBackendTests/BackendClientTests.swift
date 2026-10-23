@@ -264,6 +264,22 @@ private let viewJSON = #"""
   ])
 }
 
+@Test(.timeLimit(.minutes(1))) func voiceCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    return message["method"] == "voice"
+      ? [#"{"id":\#(id),"ok":true,"value":"A voice draft to review."}"#]
+      : [#"{"id":\#(id),"ok":true,"value":null}"#]
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  #expect(try await client.voice(URL(fileURLWithPath: "/t/mmac-voice/clip.wav")) == "A voice draft to review.")
+  try await client.cancelVoice()
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [["voice", ["/t/mmac-voice/clip.wav"]], ["cancel-voice", []]])
+}
+
 /// Polls `condition` until it holds. The test's time limit ends a wait that never does.
 private func waitFor(_ condition: () -> Bool) async throws {
   while !condition() { try await Task.sleep(for: .milliseconds(5)) }
