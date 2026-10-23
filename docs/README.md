@@ -24,6 +24,7 @@ Every document under `docs/`, with when to read it. The router is `CLAUDE.md` at
 | `superpowers/plans/2026-10-22-mmac-m3.md`                     | You build or check M3, mMac's Settings window. Built 2026-10-22. Ends with what M4 carries, the live run included.                                       |
 | `superpowers/specs/2026-10-22-mmac-m4a-design.md`             | You build or check M4a: the last seven parity features, the size measurement, the parity check and the removal of Electron's shell. Approved 2026-10-22. |
 | `superpowers/plans/2026-10-22-mmac-m4a-survey.md`             | You need Electron's exact strings, calls or limits for ⌘K, pins and archives, export, composer commands, attachments, voice or the open-in actions.      |
+| `superpowers/plans/2026-10-22-mmac-m4a.md`                    | You build or check M4a. It holds the interface contract, the tasks, and the parity report.                                                               |
 
 The extensions plan itself was attached to the cloud session's first message and was never committed. The discovery record holds every difference from it.
 

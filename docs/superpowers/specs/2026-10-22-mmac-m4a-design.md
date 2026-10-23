@@ -95,7 +95,7 @@ Unit and backend tests stay in M4a. Every task writes its tests first. The M4a g
 - **Backend:** `compact(sessionId)` calls `muse.compact`. The toast reads "There is no conversation history to compact yet." for `noop`, else "Muse is compacting this conversation."
 - **App:**
   - A popup above the composer shows the commands. While it shows, Tab chooses a row instead of moving focus.
-  - A toast surface shows successes for 4 seconds and errors until dismissed.
+  - A toast shows each success for 4 seconds. Errors keep mMac's alert, as in M1 to M3. Electron shows errors as toasts that stay until dismissed.
   - `/rename` with no argument opens the Rename sheet. `/settings` opens Settings. `/help` opens the Help sheet. `/voice` starts or stops voice input.
 
 ### `@file`, attachments, drag-and-drop and paste
