@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
+import { lstatSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // The documentation standard's check, run with the suite. `docs/README.md`
@@ -8,8 +10,20 @@ import { fileURLToPath } from 'node:url'
 // `scripts/docs_check.py` is vendored byte for byte from Dom's workspace;
 // this test only runs it. Two gitignored folders may be absent: `release/`,
 // the build output `README.md` names, and `.cache/`, where
-// `docs/releasing.md` says the Sparkle tools land.
+// `docs/releasing.md` says the Sparkle tools land. In a linked worktree,
+// `.git` is a file that names the main checkout's Git folder, so the `.git/`
+// paths the docs quote exist only in the main checkout. That exception
+// applies in a linked worktree only.
 const root = fileURLToPath(new URL('../..', import.meta.url))
+
+/** True when `.git` is a file: a linked worktree, not the main checkout. */
+function linkedWorktree() {
+  try {
+    return lstatSync(join(root, '.git')).isFile()
+  } catch {
+    return false
+  }
+}
 
 const args = [
   'scripts/docs_check.py',
@@ -24,6 +38,7 @@ const args = [
   'release/',
   '--known-absent',
   '.cache/',
+  ...(linkedWorktree() ? ['--known-absent', '.git/'] : []),
 ]
 
 describe('documentation', () => {
