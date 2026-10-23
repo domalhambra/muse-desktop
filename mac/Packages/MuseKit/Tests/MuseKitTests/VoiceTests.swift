@@ -428,6 +428,8 @@ private func clipBase() throws -> URL {
   return base
 }
 
+/// Guards the generation check that already follows `capture.stop()`. It passes without the
+/// encode-window fix; `aCancelDuringTheEncodeSendsNothingAndDeletesTheClip` covers that.
 @MainActor @Test func aCancelWhileTheRecorderStopsSendsNothing() async throws {
   let capture = FakeCapture()
   capture.holdsStop = true

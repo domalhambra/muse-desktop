@@ -284,7 +284,9 @@ extension Workspace {
   }
 
   /// Adds `text` on a new line when the draft has text, as Electron does, and focuses the composer.
+  /// Nothing while a conversation opens, as a drop: the text would land in the old draft.
   func appendToDraft(_ text: String) {
+    guard composerIsEditable else { return }
     let current = draft
     draft = current + (current.isEmpty ? "" : "\n") + text
     composerFocusRequest += 1
