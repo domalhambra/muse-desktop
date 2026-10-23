@@ -21,4 +21,6 @@ Use sentence case and concise action labels. **Project** means a local folder; *
 
 ## Accessibility
 
-Icon buttons have accessibility labels and help tags. Alerts, sheets and panels are native. The command menu, the slash and mention popups and the sidebar work from the keyboard. The composer handles Shift–Return and input methods. Text size and Reduce motion work with macOS's own settings. Statuses include text, not color alone. Images in replies never load, so remote content cannot appear in the transcript.
+Icon buttons have accessibility labels and help tags. Alerts, sheets and panels are native. The command menu, the slash and mention popups and the sidebar work from the keyboard. The composer handles Shift–Return and input methods. Text size and Reduce motion work with macOS's own settings. Statuses include text, not color alone. Images in replies never load, so remote content cannot appear in the transcript. A subagent sheet is read-only.
+
+The composer's Mode picker names Muse's four modes as Muse words them: Allow all, Prompt unmatched, On request, Deny unmatched. A mode Muse names that the picker does not know shows as Muse's own name for it. The side chat and child sheets' fields are native: no custom rounded-rectangle drawing, as in Dom's design standards.
