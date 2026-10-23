@@ -28,8 +28,10 @@ struct ComposerView: View {
   @State private var mentionOwner: ObjectIdentifier?
   /// Bumped after a popup rewrites the draft, so the text area takes focus with the cursor at the end.
   @State private var cursorRequest = 0
-  /// A file drag is over the composer.
-  @State private var dragging = false
+  /// A file drag is over the text view, or over the rest of the composer. Each has its own flag,
+  /// so a late "exited" from one does not hide the ring while the drag is over the other.
+  @State private var draggingOverText = false
+  @State private var draggingOverComposer = false
 
   var body: some View {
     @Bindable var sheets = controller.sheets
@@ -46,15 +48,16 @@ struct ComposerView: View {
         isEnabled: workspace.openingSessionId == nil, focusRequest: workspace.composerFocusRequest,
         cursorRequest: cursorRequest, onSubmit: submit, onPopupKey: popupKey,
         onDropFiles: { urls in Task { await workspace.drop(urls) } },
-        onDragChange: { dragging = $0 },
-        onPasteFiles: { urls in Task { await workspace.attach(urls) } },
+        onDragChange: { draggingOverText = $0 },
+        // As a drop: a pasted folder inside the project becomes a mention.
+        onPasteFiles: { urls in Task { await workspace.drop(urls) } },
         onPasteImage: { data in Task { await workspace.attachPasted(data, type: UTType.png.identifier) } }
       )
       .frame(height: inputHeight)
       .padding(10)
       .background(appearance.colors.input, in: RoundedRectangle(cornerRadius: 8))
       // Electron's `is-dragging` ring.
-      .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(appearance.colors.accent, lineWidth: dragging ? 2 : 0))
+      .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(appearance.colors.accent, lineWidth: draggingOverText || draggingOverComposer ? 2 : 0))
       .overlay(alignment: .top) {
         popup(commands: commands, mentionRows: mentionRows)
           // Above the field, 10 points clear, as Electron's `.slash-menu`.
@@ -125,12 +128,18 @@ struct ComposerView: View {
     }
     .padding(12)
     // A drop outside the text lands here; the text view takes its own through `onDropFiles`.
-    .dropDestination(for: URL.self) { urls, _ in
-      let files = urls.filter(\.isFileURL)
-      guard !files.isEmpty else { return false }
-      Task { await workspace.drop(files) }
+    // File URLs only, so a web link dragged over the composer neither lights the ring nor drops.
+    .onDrop(of: [.fileURL], isTargeted: $draggingOverComposer) { providers in
+      Task {
+        var urls: [URL] = []
+        for provider in providers {
+          if let url = await Self.fileURL(provider) { urls.append(url) }
+        }
+        guard !urls.isEmpty else { return }
+        await workspace.drop(urls)
+      }
       return true
-    } isTargeted: { dragging = $0 }
+    }
     .onChange(of: workspace.draft) {
       commandIndex = 0
       mentionIndex = 0
@@ -147,6 +156,15 @@ struct ComposerView: View {
         mentionOwner = ObjectIdentifier(workspace)
       }
       await mentionMenu?.update(draft: workspace.draft)
+    }
+  }
+
+  /// The file URL a dropped item carries, or nil.
+  private static func fileURL(_ provider: NSItemProvider) async -> URL? {
+    await withCheckedContinuation { continuation in
+      _ = provider.loadObject(ofClass: URL.self) { url, _ in
+        continuation.resume(returning: url?.isFileURL == true ? url : nil)
+      }
     }
   }
 

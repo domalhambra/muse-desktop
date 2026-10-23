@@ -100,7 +100,10 @@ struct FlowLayout: Layout {
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     let rows = rows(within: proposal.width ?? .infinity, subviews)
     let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(rows.count - 1, 0))
-    return CGSize(width: proposal.width ?? (rows.map(\.width).max() ?? 0), height: height)
+    // With no width, or an infinite one, the widest row.
+    let widest = rows.map(\.width).max() ?? 0
+    let width = proposal.width.map { $0.isFinite ? $0 : widest } ?? widest
+    return CGSize(width: width, height: height)
   }
 
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
@@ -109,8 +112,11 @@ struct FlowLayout: Layout {
       var x = bounds.minX
       for index in row.indices {
         let size = subviews[index].sizeThatFits(.unspecified)
-        subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-        x += size.width + spacing
+        // Never wider than the row, so a chip in a narrow composer shrinks rather than overflows.
+        let width = min(size.width, bounds.width)
+        subviews[index].place(
+          at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: width, height: size.height))
+        x += width + spacing
       }
       y += row.height + spacing
     }

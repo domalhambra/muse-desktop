@@ -25,7 +25,7 @@ struct ComposerTextView: NSViewRepresentable {
   var onDropFiles: ([URL]) -> Void = { _ in }
   /// A file drag entered (true) or left (false) the text.
   var onDragChange: (Bool) -> Void = { _ in }
-  /// Files copied in Finder, pasted.
+  /// Files or folders copied in Finder, pasted, for the drop plan.
   var onPasteFiles: ([URL]) -> Void = { _ in }
   /// Image data pasted with no text, as PNG. The composer passes it to `attachPasted` as `public.png`.
   var onPasteImage: (Data) -> Void = { _ in }
@@ -262,21 +262,34 @@ final class ComposerNSTextView: NSTextView {
     return true
   }
 
-  /// Files copied in Finder attach. An image with no text attaches as a PNG. Text pastes as before.
+  /// Files copied in Finder go to the drop plan. An image with no text attaches as a PNG. Text
+  /// pastes as before.
   override func paste(_ sender: Any?) {
+    if !pasteAttachments() { super.paste(sender) }
+  }
+
+  /// Edit › Paste and Match Style (⌥⇧⌘V) handles files and images as Paste does.
+  override func pasteAsPlainText(_ sender: Any?) {
+    if !pasteAttachments() { super.pasteAsPlainText(sender) }
+  }
+
+  /// Passes the general pasteboard's files or image on. True when it took them; false leaves the
+  /// paste to NSTextView.
+  private func pasteAttachments() -> Bool {
+    guard isEditable else { return false }
     let pasteboard = NSPasteboard.general
-    if isEditable, let onPasteFiles {
+    if let onPasteFiles {
       let urls = Self.fileURLs(pasteboard)
       if !urls.isEmpty {
         onPasteFiles(urls)
-        return
+        return true
       }
     }
-    if isEditable, let onPasteImage, pasteboard.string(forType: .string) == nil, let png = Self.pngData(pasteboard) {
+    if let onPasteImage, pasteboard.string(forType: .string) == nil, let png = Self.pngData(pasteboard) {
       onPasteImage(png)
-      return
+      return true
     }
-    super.paste(sender)
+    return false
   }
 
   var lineHeight: CGFloat {
