@@ -112,6 +112,12 @@ macOS can ask for your login password first. A test must never type it. `securit
 
 `swift test` for `MuseKit` writes one item with a random service, `com.domalhambra.mmac.test.` and a UUID, and deletes it even when an expectation fails. A run that stops in the middle can leave it. Search for `com.domalhambra.mmac.test` in Keychain Access to find such items.
 
+### Measure mMac's size
+
+Run `mac/scripts/measure-size.sh`. It builds mMac twice: a clean Release build for the disk number, and a Release build with the compilation condition `MMAC_MEASURE` for the memory number. The `MMAC_MEASURE` build keeps the bridge token in memory, keeps its window defaults in the suite `com.domalhambra.mmac.measure` (the script deletes it), and runs the checkout it was built from. So it never reads Dom's Keychain item or changes his defaults. The script checks the build's marker line before it launches it.
+
+Then the script launches that build and the installed Muse Desktop, one at a time, each for about 80 seconds, with a temporary home (`HOME`, `CFFIXED_USER_HOME`, `MUSE_HOME`, `XDG_*`, `ZDOTDIR`). `CFFIXED_USER_HOME` is the variable that moves `~/Library` for both apps. Quit both apps first, and leave both windows alone while the script runs. `--builds-only` builds and checks the markers, and launches nothing. The report is `.cache/size/report.txt`. The results and the method are in "Size" in `docs/architecture.md`.
+
 ### Run the UI tests
 
 The UI tests drive the real desktop. Before you run them:

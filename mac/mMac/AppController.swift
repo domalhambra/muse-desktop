@@ -24,7 +24,7 @@ final class AppController {
   private(set) var voice: VoiceSession?
   /// Read once: in memory mode every read of `BridgeTokenStores.app` makes a new, empty store, so
   /// every `start` and every `SettingsModel` must share this one.
-  let tokens: any BridgeTokenStore = BridgeTokenStores.app
+  let tokens: any BridgeTokenStore = AppController.tokenStore()
   /// The last Workspace's unsent drafts, for the next backend's Workspace.
   private var drafts: [String: String] = [:]
   /// The conversation the last Workspace showed or was opening, or one whose notification was
@@ -220,6 +220,20 @@ final class AppController {
     try await Task.detached { try tokens.read() ?? "" }.value
   }
 
+  /// This build's token store. The size measurement's build (`MMAC_MEASURE`, which only
+  /// `mac/scripts/measure-size.sh` sets) is a Release build that keeps the token in memory, so a
+  /// measurement never reads or writes the real Keychain item.
+  private nonisolated static func tokenStore() -> any BridgeTokenStore {
+    #if MMAC_MEASURE
+      // The script looks for this line in the binary before it launches the build, and in
+      // mMac's stderr after. Keep the two in step.
+      FileHandle.standardError.write(Data("mMac measurement build: the bridge token stays in memory.\n".utf8))
+      return MemoryTokenStore()
+    #else
+      return BridgeTokenStores.app
+    #endif
+  }
+
   /// The backend's last stderr output, once stderr has ended.
   private static func errorOutput(of transport: ProcessTransport?) async -> String {
     await transport?.errorOutput() ?? ""
@@ -314,8 +328,14 @@ final class AppController {
   }
 
   /// The checkout the backend runs from: the one chosen in the app, else the one this build came from.
+  /// The size measurement's build always runs the checkout it came from, so its numbers are that
+  /// checkout's, whatever checkout Dom chose in his own mMac.
   static func repository() throws -> URL {
-    let chosen = UserDefaults.standard.string(forKey: repositoryKey)
+    #if MMAC_MEASURE
+      let chosen: String? = nil
+    #else
+      let chosen = UserDefaults.standard.string(forKey: repositoryKey)
+    #endif
     let built = Bundle.main.object(forInfoDictionaryKey: repositoryKey) as? String
     guard let path = chosen ?? built else {
       throw SetupError("This mMac build does not name a Muse Desktop checkout. Choose one.")

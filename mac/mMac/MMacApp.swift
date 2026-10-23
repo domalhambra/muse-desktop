@@ -13,12 +13,18 @@ struct MMacApp: App {
     window.identifier?.rawValue == mainWindow
   }
 
-  #if DEBUG
+  #if DEBUG || MMAC_MEASURE
     /// The UI tests' own defaults suite, from `MMAC_DEFAULTS_SUITE`. Debug builds only; nil when
-    /// the variable is unset or empty.
+    /// the variable is unset or empty. The size measurement's build (`MMAC_MEASURE`) always has
+    /// one, `com.domalhambra.mmac.measure` unless the variable names another, so it never writes
+    /// Dom's defaults.
     static let testDefaultsSuite: String? = {
       guard let suite = ProcessInfo.processInfo.environment["MMAC_DEFAULTS_SUITE"], !suite.isEmpty else {
-        return nil
+        #if MMAC_MEASURE
+          return "com.domalhambra.mmac.measure"
+        #else
+          return nil
+        #endif
       }
       return suite
     }()
@@ -29,7 +35,7 @@ struct MMacApp: App {
   /// starts from the defaults and never reads or changes Dom's. The test runner is sandboxed and
   /// cannot reach mMac's preferences itself.
   static let appStorage: UserDefaults = {
-    #if DEBUG
+    #if DEBUG || MMAC_MEASURE
       if let suite = testDefaultsSuite, let defaults = UserDefaults(suiteName: suite) {
         defaults.removePersistentDomain(forName: suite)
         return defaults
@@ -44,7 +50,7 @@ struct MMacApp: App {
   /// standard defaults, not in `appStorage`, so such a run turns those saves off instead: see
   /// `WindowStateGuard`.
   static let keepsWindowState: Bool = {
-    #if DEBUG
+    #if DEBUG || MMAC_MEASURE
       if testDefaultsSuite != nil { return false }
     #endif
     return true
