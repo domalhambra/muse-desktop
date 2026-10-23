@@ -6,6 +6,7 @@ const wire = vi.hoisted(() => ({
   command: vi.fn(),
   close: vi.fn(),
   initializeResult: { experimentalApi: true } as Record<string, unknown>,
+  initializeOptions: {} as Record<string, unknown>,
   receive: (_notification: { method: string; params: Record<string, unknown> }) => {},
 }))
 const trust = vi.hoisted(() => ({ record: vi.fn(async () => true) }))
@@ -20,19 +21,22 @@ vi.mock('@muse-code/sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@muse-code/sdk')>()),
   spawnMspConnection: () => ({
     close: wire.close,
-    initialize: async () => ({
-      close: wire.close,
-      initializeResult: wire.initializeResult,
-      connection: {
-        request: wire.request,
-        command: wire.command,
-        closed: new Promise(() => {}),
-        onNotification: (callback: typeof wire.receive) => {
-          wire.receive = callback
+    initialize: async (options: Record<string, unknown>) => {
+      wire.initializeOptions = options
+      return {
+        close: wire.close,
+        initializeResult: wire.initializeResult,
+        connection: {
+          request: wire.request,
+          command: wire.command,
+          closed: new Promise(() => {}),
+          onNotification: (callback: typeof wire.receive) => {
+            wire.receive = callback
+          },
+          onProtocolError: () => {},
         },
-        onProtocolError: () => {},
-      },
-    }),
+      }
+    },
   }),
 }))
 import { MuseHost } from '../../src/main/muse-host'
@@ -303,6 +307,45 @@ describe('Muse protocol boundary', () => {
     ])
     notify('session/todoListChanged', { items: [], revision: 2, sourceTool: 'TodoWrite' })
     expect(host.getView('s1').todos).toEqual([])
+    await host.close()
+  })
+
+  it('opens a side chat as a loaded session of its own', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    wire.command.mockImplementation(async (method: string) => {
+      if (method === 'session/sideChat')
+        return { ...result(), session: { ...session, sessionId: 'side-1', kind: 'sideChat' } }
+      return method === 'session/start' || method === 'session/resume' ? result() : {}
+    })
+    const side = await host.sideChat('s1')
+    expect(side.session.sessionId).toBe('side-1')
+    expect(wire.command).toHaveBeenCalledWith(
+      'session/sideChat',
+      { sessionId: 's1' },
+      { maxAttempts: 1 },
+    )
+    // Loaded: a send goes straight out, with no resume first.
+    wire.command.mockClear()
+    await host.send('side-1', [{ type: 'text', text: 'hi' }], 'high', 'queue', 'hi')
+    expect(wire.command.mock.calls.map((call) => call[0])).toEqual(['turn/start'])
+    await host.close()
+  })
+
+  it('runs a shell command in the session and asks for the userShell capability', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    await host.runShell('s1', 'echo hi')
+    expect(wire.command).toHaveBeenLastCalledWith(
+      'session/userShell',
+      { sessionId: 's1', commandText: 'echo hi' },
+      { maxAttempts: 1 },
+    )
+    expect(wire.initializeOptions).toMatchObject({
+      capabilities: { requestedCapabilities: ['sessionListStream', 'userShell'] },
+    })
     await host.close()
   })
 

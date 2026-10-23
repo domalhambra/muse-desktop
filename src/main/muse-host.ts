@@ -87,7 +87,7 @@ export class MuseHost {
             clientInfo: { name: 'muse_desktop', title: 'Muse Desktop', version: '0.2.0' },
             capabilities: {
               userInputDialogs: true,
-              requestedCapabilities: ['sessionListStream'],
+              requestedCapabilities: ['sessionListStream', 'userShell'],
               experimentalApi: true,
             },
           }),
@@ -405,6 +405,34 @@ export class MuseHost {
     this.requireSession(sessionId).view.session.approvalMode = result.effectiveMode
     this.schedule(sessionId)
     return result.effectiveMode.mode
+  }
+
+  /**
+   * A side session seeded from `sessionId`: a place for a question that must not join the main
+   * conversation. Muse returns the new session's resume envelope (msp.d.ts, `session/sideChat`),
+   * so it is hydrated loaded, like a created session. The caller shows it; it never joins the
+   * sidebar (its kind is `sideChat`).
+   */
+  async sideChat(sessionId: string): Promise<SessionView> {
+    await this.resume(sessionId)
+    const result = sessionResultSchema.parse(
+      await this.connection.command('session/sideChat', { sessionId }, { maxAttempts: 1 }),
+    )
+    const live = await this.hydrate(result, true)
+    return this.view(live)
+  }
+
+  /**
+   * Runs a shell command in the session's folder, the TUI's `!` escape (msp.d.ts,
+   * `session/userShell`). The result arrives as a `userShell` item through the item events.
+   */
+  async runShell(sessionId: string, commandText: string) {
+    await this.resume(sessionId)
+    await this.connection.command(
+      'session/userShell',
+      { sessionId, commandText },
+      { maxAttempts: 1 },
+    )
   }
 
   async approve(sessionId: string, approvalId: string, choiceId: string) {
