@@ -103,7 +103,7 @@ struct CommandMenuView: View {
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(index == selected ? [.isButton, .isSelected] : .isButton)
     .accessibilityAction { choose(index, in: entries) }
-    .accessibilityIdentifier("command-\(entry.id)")
+    .accessibilityIdentifier("palette-\(entry.id)")
   }
 
   /// Electron's key hints.

@@ -226,9 +226,9 @@ final class ComposerNSTextView: NSTextView {
   }
 
   override func keyDown(with event: NSEvent) {
-    // A popup takes its keys first. Composition owns every key until it commits, and a held
-    // Return repeats into the send below, which ignores repeats.
-    if !hasMarkedText(), let key = Self.popupKey(event), !(key == .enter && event.isARepeat),
+    // A popup takes its keys first, while the composer is editable. Composition owns every key
+    // until it commits, and a held Return repeats into the send below, which ignores repeats.
+    if isEditable, !hasMarkedText(), let key = Self.popupKey(event), !(key == .enter && event.isARepeat),
       onPopupKey?(key) == true
     {
       return

@@ -129,9 +129,6 @@ struct ComposerView: View {
       }
       await mentionMenu?.update(draft: workspace.draft)
     }
-    .sheet(isPresented: $sheets.help) {
-      HelpSheet { controller.sheets.help = false }
-    }
   }
 
   /// What the mention task is keyed on. A nil folder means no mention is typed.
@@ -156,8 +153,7 @@ struct ComposerView: View {
     }
   }
 
-  /// No popup while a window sheet shows: the composer has no keys then, and the ⌘K sheet's
-  /// `command-new` and `command-settings` rows would share an identifier with the slash popup's.
+  /// No popup and no popup keys while a window sheet shows: the sheet has the keys then.
   private var showsPopups: Bool { !controller.sheets.anyShown }
 
   /// The @ mention at the end of the draft. Only with a project, as in Electron.

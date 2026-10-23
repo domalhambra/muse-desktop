@@ -2,6 +2,7 @@ import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
+import os
 
 /// A list that floats above the composer. The composer keeps keyboard focus: its keys move the
 /// highlight, and a click chooses a row.
@@ -99,10 +100,18 @@ struct MentionList: View {
 /// identifier. A disabled picker stays shut, as Electron's does.
 @MainActor
 enum PickerOpener {
+  private static let log = Logger(subsystem: "com.domalhambra.mmac", category: "composer")
+
   static func open(_ identifier: String) {
     guard let window = NSApp.windows.first(where: { $0.isVisible && MMacApp.isMainWindow($0) }),
-      let content = window.contentView, let button = find(identifier, in: content), button.isEnabled
+      let content = window.contentView
     else { return }
+    guard let button = find(identifier, in: content) else {
+      // SwiftUI may stop putting the identifier on the pop-up button; say so rather than do nothing.
+      log.error("No pop-up button with identifier \(identifier, privacy: .public)")
+      return
+    }
+    guard button.isEnabled else { return }
     window.makeFirstResponder(button)
     // After this turn of the run loop: the menu tracks in a loop of its own, which must not start
     // inside a SwiftUI update.

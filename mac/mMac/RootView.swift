@@ -77,6 +77,10 @@ struct MainView: View {
     .sheet(isPresented: $sheets.commandMenu, onDismiss: runChosen) {
       CommandMenuView(controller: controller, workspace: workspace)
     }
+    // Here rather than on the composer, so a composer that goes away cannot leave `help` set.
+    .sheet(isPresented: $sheets.help) {
+      HelpSheet { controller.sheets.help = false }
+    }
     .alert(
       "Muse",
       isPresented: Binding(
