@@ -6,7 +6,7 @@ mMac needs macOS 15 or newer, Node.js 22.12 or newer on the login shell's PATH, 
 
 ## Supported workflows
 
-Automatic CLI discovery with the login-shell environment; a custom CLI path; session listing, reading, resuming, renaming and Markdown export; ⌘K search; local pins and archives; streamed messages and tool items; reasoning summaries; server-provided approval choices; agent questions; stop, queue and steer; model selection and reasoning effort; text and image attachments by the paperclip, a drop or a paste; `@` mentions of project files; composer commands; project file previews; Git status and diffs; diff review; worktree conversations; Finder, Terminal and full CLI handoff from the inspector; the Muse and Moonlight themes, text size, Reduce motion and completion notifications; microphone recording and CLI voice transcription; MCP servers; both bridges.
+Automatic CLI discovery with the login-shell environment; a custom CLI path; session listing, reading, resuming, renaming and Markdown export; ⌘K search; local pins and archives; streamed messages and tool items; reasoning summaries; server-provided approval choices; agent questions; stop, queue and steer; model selection and reasoning effort; text and image attachments by the paperclip, a drop or a paste; `@` mentions of project files; composer commands; project file previews; Git status and diffs; diff review; worktree conversations; Finder, Terminal and full CLI handoff from the inspector; permission modes (Allow all, Prompt unmatched, On request, Deny unmatched); the `!` shell escape in the composer; side chat; the context gauge; the Tasks, Agents and Preview inspector tabs; the file context menu; Desktop's session shortcuts (⌘⇧] and ⌘⇧[, Esc to stop, ⌘;, ⌘/); the Muse and Moonlight themes, text size, Reduce motion and completion notifications; microphone recording and CLI voice transcription; MCP servers; both bridges.
 
 ## Practical limits
 
@@ -26,6 +26,14 @@ Automatic CLI discovery with the login-shell environment; a custom CLI path; ses
 - Merge refuses a worktree with uncommitted changes, and aborts a merge with conflicts so the main checkout stays unchanged. Remove keeps the worktree's branch.
 - MCP server changes take effect when mMac reconnects to Muse. The pane offers **Reconnect** and never reconnects during your work on its own. Remote servers that need OAuth sign in through `muse mcp login`, which opens in Terminal.
 - The diff view shows hunk revert buttons for working-tree changes only. Staged changes have none.
+
+## Session controls (M5a)
+
+- The host asks Muse for the `userShell` capability at the handshake (`requestedCapabilities`), beside `sessionListStream`. Without the grant, `'session/userShell'` fails and mMac shows Muse's error.
+- `'session/setApprovalMode'` takes one of Muse's four modes and returns the mode in effect, which can differ from the one asked for. It applies to Muse's next action; an action already awaiting approval is not re-decided.
+- `'session/sideChat'` returns the new side session's resume envelope. The side session's kind is `sideChat`; it never appears in the sidebar or ⌘K.
+- The host folds `'session/approvalModeChanged'`, `'session/contextUsage'` (`usedTokens`, `windowTokens`, `pressure`) and `'session/todoListChanged'` (the whole list, replaced each time). A reopened conversation shows context and todos after the next event.
+- Subagent items carry `childSessionId`, `controlStatus` and `usage`; shell items carry `exitCode`; side chat items carry `sideSessionId`. All are optional: an older CLI's items still decode.
 
 ## Voice
 
