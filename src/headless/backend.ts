@@ -593,7 +593,7 @@ export function createBackend({
       try {
         if (info.size > MAX_VOICE_BYTES) throw new Error(TOO_LONG)
         // At most one byte past the limit, so a file that grew after the stat cannot fill memory.
-        const buffer = Buffer.alloc(MAX_VOICE_BYTES + 1)
+        const buffer = Buffer.alloc(Math.min(info.size, MAX_VOICE_BYTES) + 1)
         let length = 0
         while (length < buffer.length) {
           const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
@@ -612,8 +612,18 @@ export function createBackend({
     }
   }
 
+  // Raised by every cancel. A cancel that lands while takeRecording still reads finds no active
+  // transcription to abort, so voice compares this count before and after the read.
+  let voiceCancels = 0
+  const cancelVoice = () => {
+    voiceCancels += 1
+    return voice.cancel()
+  }
+
   method('voice', async (value) => {
+    const cancels = voiceCancels
     const data = await takeRecording(value)
+    if (cancels !== voiceCancels) throw new Error('Voice transcription cancelled.')
     try {
       return await voice.transcribe(data, current().cliPath)
     } catch (error) {
@@ -626,7 +636,7 @@ export function createBackend({
     }
   })
 
-  method('cancel-voice', () => voice.cancel())
+  method('cancel-voice', () => cancelVoice())
 
   method('shutdown', async () => {
     if (muse.hasActiveTurns()) {
@@ -649,6 +659,6 @@ export function createBackend({
     /** Stops both bridges for good: the quit path. */
     stopBridges: () => bridges?.stop() ?? Promise.resolve(),
     /** Cancels a transcription in progress: the quit path. */
-    stopVoice: () => voice.cancel(),
+    stopVoice: () => cancelVoice(),
   }
 }

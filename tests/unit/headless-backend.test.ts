@@ -1303,6 +1303,17 @@ describe('headless backend, M4a voice', () => {
     await expect(stat(path)).rejects.toThrow('ENOENT')
   }, 20_000)
 
+  it('stops a voice call that is cancelled while the recording is still being read', async () => {
+    const h = harness()
+    await h.start()
+    const path = await recording()
+    const pending = h.call('voice', path)
+    await h.call('cancel-voice') // Lands before the read ends.
+    expect((await failure(pending)).message).toBe('Voice transcription cancelled.')
+    expect(h.voice.transcribe).not.toHaveBeenCalled()
+    await expect(stat(path)).rejects.toThrow('ENOENT')
+  })
+
   it('cancels a transcription on cancel-voice and on the quit path', async () => {
     const h = harness()
     await h.start()
