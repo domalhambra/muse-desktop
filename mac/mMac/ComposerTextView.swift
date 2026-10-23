@@ -366,6 +366,9 @@ final class ComposerNSTextView: NSTextView {
   /// popup shows, `keyDown` gives Tab to it before this runs.
   override func insertTab(_ sender: Any?) { window?.selectNextKeyView(nil) }
   override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(nil) }
+  /// A bare Escape does nothing, as in Electron's textarea. NSTextView's own `cancelOperation`
+  /// opens the word-completion list. While a popup shows, `keyDown` gives Escape to it first.
+  override func cancelOperation(_ sender: Any?) {}
 
   override func didChangeText() {
     super.didChangeText()

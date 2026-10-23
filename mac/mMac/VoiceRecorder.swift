@@ -113,6 +113,8 @@ final class SampleBuffer: Sendable {
     self.sampleRate = sampleRate
     meterLength = max(Int(sampleRate * VoiceMeter.interval), 1)
     self.report = report
+    // Room for the two-minute limit, so a long recording does not copy its samples as it grows.
+    state.withLock { $0.samples.reserveCapacity(Int(sampleRate) * VoiceWAV.maxSeconds) }
   }
 
   /// Adds one tap buffer, averaged to mono, and reports the five bars each time 120 ms have gathered.

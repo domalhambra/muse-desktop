@@ -151,21 +151,25 @@ private struct VoiceCommand: View {
 
   var body: some View {
     Button("Voice Input") {
-      // Only in the conversation window, and not over one of its sheets: Electron ignores
-      // Option-V while a dialog is open. A sheet is the key window while it shows; the checks on
-      // `attachedSheet` and `anyShown` are the ones ⌘K and the composer's popups use.
-      guard let window = NSApp.keyWindow, MMacApp.isMainWindow(window), window.attachedSheet == nil,
-        !controller.sheets.anyShown
-      else { return }
-      Task { await controller.voice?.toggle() }
+      guard canRun, let voice = controller.voice else { return }
+      Task { await voice.toggle() }
     }
     .keyboardShortcut("v", modifiers: .option)
-    .disabled(!enabled)
+    // On whenever a Workspace exists, so ⌥V is always taken here: a disabled item would let the
+    // key fall through and type "√" into the draft. When voice cannot run, the press does nothing,
+    // as Electron's handler prevents the default and its toggle returns early.
+    .disabled(controller.voice == nil)
   }
 
-  /// As the mic button: idle needs the connection and no send in flight; a recording can always stop.
-  private var enabled: Bool {
-    guard let voice = controller.voice, let workspace = controller.workspace else { return false }
+  /// Only in the conversation window, and not over one of its sheets: Electron ignores Option-V
+  /// while a dialog is open. A sheet is the key window while it shows; the checks on
+  /// `attachedSheet` and `anyShown` are the ones ⌘K and the composer's popups use. Then as the mic
+  /// button: idle needs the connection and no send in flight; a recording can always stop.
+  private var canRun: Bool {
+    guard let voice = controller.voice, let workspace = controller.workspace,
+      let window = NSApp.keyWindow, MMacApp.isMainWindow(window), window.attachedSheet == nil,
+      !controller.sheets.anyShown
+    else { return false }
     switch voice.phase {
     case .idle: return workspace.isConnected && !workspace.submitting
     case .recording: return true

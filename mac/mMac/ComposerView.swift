@@ -303,6 +303,9 @@ struct ComposerView: View {
     case .help:
       controller.sheets.help = true
     case .toggleVoice:
+      // As Electron's toggle, which returns early while the mic button is disabled: a command runs
+      // while disconnected, but voice input needs the connection.
+      guard workspace.isConnected else { return }
       Task { await controller.voice?.toggle() }
     case .cancelVoice:
       controller.voice?.cancel()

@@ -107,7 +107,8 @@ struct VoiceCancellation: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .onChange(of: voice?.isBusy ?? false) { _, busy in
+      // `initial`, so a view that appears while voice is busy installs the monitor too.
+      .onChange(of: voice?.isBusy ?? false, initial: true) { _, busy in
         if busy { addMonitor() } else { removeMonitor() }
       }
       .onReceive(NotificationCenter.default.publisher(for: NSWindow.didMiniaturizeNotification)) { note in
@@ -128,13 +129,14 @@ struct VoiceCancellation: ViewModifier {
       guard event.keyCode == 53, !event.isARepeat else { return event }
       let eventWindow = event.window
       // Local monitors run on the main thread. `assumeIsolated` must return a Sendable value and
-      // NSEvent is not, so it returns a Bool, as SheetAlert's Escape monitor does.
-      let handled = MainActor.assumeIsolated { () -> Bool in
-        guard let voice, voice.isBusy, let eventWindow, MMacApp.isMainWindow(eventWindow) else { return false }
+      // NSEvent is not, so it returns nothing and the event is passed on below.
+      MainActor.assumeIsolated {
+        guard let voice, voice.isBusy, let eventWindow, MMacApp.isMainWindow(eventWindow) else { return }
         voice.cancel()
-        return true
       }
-      return handled ? nil : event
+      // The key goes on in every case, as in Electron, where Escape cancels voice input and also
+      // reaches the composer: an open popup closes. With no popup the composer ignores it.
+      return event
     }
   }
 
