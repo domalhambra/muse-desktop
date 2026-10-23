@@ -360,3 +360,52 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(voice.levels == VoiceSession.restingLevels)
   #expect(VoiceSession.cancelLabel == "Cancel voice input")
 }
+
+@MainActor @Test func theFolderGoesAfterATranscriptionError() async throws {
+  let probe = FileProbe()
+  let (voice, _, _, _, _) = await makeVoice { method, args, id in
+    guard method == "voice" else { return [reply(id, "null")] }
+    if case .string(let path)? = args.first { probe.record(path) }
+    return [failure(id, "Muse voice needs authentication. Run muse login in Terminal, then try again.")]
+  }
+  await voice.toggle()
+  await voice.toggle()
+  let seen = try #require(probe.seen)
+  #expect(seen.fileMode == 0o600)
+  #expect(!FileManager.default.fileExists(atPath: (seen.path as NSString).deletingLastPathComponent))
+}
+
+@MainActor @Test func theFolderGoesAfterACancelDuringTranscription() async throws {
+  let probe = FileProbe()
+  let (voice, _, backend, _, _) = await makeVoice { method, args, id in
+    guard method == "voice" else { return [reply(id, "null")] }
+    if case .string(let path)? = args.first { probe.record(path) }
+    return []
+  }
+  await voice.toggle()
+  let stopping = Task { await voice.toggle() }
+  try await eventually { probe.seen != nil }
+  let folder = (try #require(probe.seen).path as NSString).deletingLastPathComponent
+  voice.cancel()
+  try await eventually { backend.messages.contains { $0["method"] == "cancel-voice" } }
+  let id = try #require(lastId(backend, "voice"))
+  backend.push(reply(id, #""late text""#))
+  await stopping.value
+  try await eventually { !FileManager.default.fileExists(atPath: folder) }
+}
+
+@MainActor @Test func aToggleWhileTranscribingIsIgnored() async throws {
+  let (voice, _, backend, _, _) = await makeVoice { method, _, id in
+    method == "voice" ? [] : [reply(id, "null")]
+  }
+  await voice.toggle()
+  let stopping = Task { await voice.toggle() }
+  try await eventually { voice.phase == .transcribing && backend.messages.contains { $0["method"] == "voice" } }
+  await voice.toggle()
+  #expect(voice.phase == .transcribing)
+  #expect(backend.messages.filter { $0["method"] == "voice" }.count == 1)
+  let id = try #require(lastId(backend, "voice"))
+  backend.push(reply(id, #""done""#))
+  await stopping.value
+  #expect(voice.phase == .idle)
+}

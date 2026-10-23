@@ -235,7 +235,8 @@ public final class VoiceSession {
   }
 
   /// Esc, the pill's cancel button, `/voice cancel`, and a hidden window: drop the recording or
-  /// the transcription, with no message, as Electron's cancel.
+  /// the transcription, with no message, as Electron's cancel. A cancel does not cancel the
+  /// detached request: the folder (already emptied by the backend) goes when its reply comes.
   public func cancel() {
     guard phase != .idle else { return }
     generation += 1
@@ -255,7 +256,10 @@ public final class VoiceSession {
   func tick() {
     guard phase == .recording else { return }
     elapsed = max(0, Int((uptime() - startedAt).rounded(.down)))
-    if elapsed >= Self.autoStopSeconds { Task { await self.stop() } }
+    if elapsed >= Self.autoStopSeconds {
+      stopTimer()
+      Task { await self.stop() }
+    }
   }
 
   private func show(_ next: [Double]) {
