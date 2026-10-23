@@ -136,7 +136,7 @@
     {
       "id": 19,
       "subject": "Task 19: Review the branch, the full gate, the PR",
-      "status": "in_progress",
+      "status": "completed",
       "description": "Review the branch, the full gate, the PR\n\n**Goal:** The whole branch is read once with fresh eyes, the full gate passes, and a PR from `mac-m5a` into `extensions` is open for Dom.\n\n**Files:**\n\n- Any file a review finding touches.\n\n**Acceptance Criteria:**\n\n- [ ] A read of `git diff origin/extensions...mac-m5a` finds no leftover placeholder, no `print` or `console.log` debugging, no `@unchecked Sendable`, and every new public symbol documented.\n- [ ] The full gate in \"Prove a change\" passes, every command.\n- [ ] The PR's body lists the eight features with their tests, what differs from this plan, and what moves to the live run.\n\n**Verify:** The gate's last command \u2192 `** TEST SUCCEEDED **`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"The gate's last command \\u2192 `** TEST SUCCEEDED **`.\", \"acceptanceCriteria\": [\"A read of `git diff origin/extensions...mac-m5a` finds no leftover placeholder, no `print` or `console.log` debugging, no `@unchecked Sendable`, and every new public symbol documented.\", \"The full gate in \\\"Prove a change\\\" passes, every command.\", \"The PR's body lists the eight features with their tests, what differs from this plan, and what moves to the live run.\"]}\n```",
       "blockedBy": [18]
     }
