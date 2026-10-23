@@ -130,6 +130,29 @@ extension Workspace {
     await run { try await self.client.cancel(sessionId) }
   }
 
+  /// The inspector footer's Terminal: Terminal opens in the current project's folder.
+  public func openProjectInTerminal() async {
+    guard !project.isEmpty else { return }
+    let project = project
+    await run { try await self.client.openTerminal(project: project) }
+  }
+
+  /// The inspector footer's Muse Code: Terminal opens the full CLI in the current project's folder.
+  public func openProjectInMuseCode() async {
+    guard !project.isEmpty else { return }
+    let project = project
+    await run { try await self.client.openCLITerminal(project: project) }
+  }
+
+  /// The inspector footer's Finder: opens the project folder itself, as Electron's `reveal-project`.
+  /// The app passes `NSWorkspace.shared.open`; it returns false when the folder did not open.
+  public func revealProject(using open: (URL) -> Bool) {
+    guard !project.isEmpty else { return }
+    if !open(URL(fileURLWithPath: project, isDirectory: true)) {
+      errorMessage = "mMac could not open \(project)."
+    }
+  }
+
   /// Renames the open conversation. Returns false for a blank name or a failure.
   public func rename(_ name: String) async -> Bool {
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)

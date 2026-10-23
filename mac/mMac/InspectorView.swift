@@ -1,3 +1,4 @@
+import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
@@ -31,6 +32,8 @@ struct InspectorView: View {
         Divider()
         UsagePanel(usage: usage)
       }
+      Divider()
+      footer
     }
     // As Electron: read again when the project changes and when the open conversation's status
     // does, so a turn that ends shows what it changed.
@@ -101,6 +104,46 @@ struct InspectorView: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
+  }
+
+  /// Electron's footer: the project in Finder, in Terminal, or in the full Muse Code CLI. Off with
+  /// no project.
+  private var footer: some View {
+    HStack {
+      Button {
+        revealInFinder()
+      } label: {
+        Label("Finder", systemImage: "folder")
+      }
+      .help("Open the project in Finder")
+      .accessibilityIdentifier("inspector-finder")
+      Spacer()
+      Button {
+        Task { await workspace.openProjectInTerminal() }
+      } label: {
+        Label("Terminal", systemImage: "terminal")
+      }
+      .help("Open Terminal in the project folder")
+      .accessibilityIdentifier("inspector-terminal")
+      Spacer()
+      Button("Muse Code") {
+        Task { await workspace.openProjectInMuseCode() }
+      }
+      .help("Open the full Muse Code CLI in Terminal, in the project folder")
+      .accessibilityIdentifier("inspector-muse-code")
+    }
+    .buttonStyle(.borderless)
+    .labelStyle(.titleAndIcon)
+    .font(.callout)
+    .foregroundStyle(.themeMuted)
+    .disabled(workspace.project.isEmpty)
+    .padding(.horizontal, 18)
+    .padding(.vertical, 12)
+  }
+
+  /// As Electron's `reveal-project`: opens the folder itself in Finder.
+  private func revealInFinder() {
+    workspace.revealProject { NSWorkspace.shared.open($0) }
   }
 
   /// What makes the inspector read the project again.
