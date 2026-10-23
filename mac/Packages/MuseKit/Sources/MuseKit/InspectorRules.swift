@@ -364,6 +364,41 @@ public struct TodoRow: Equatable, Sendable, Identifiable {
   }
 }
 
+/// An app that can open a file, for the path menu's Open in.
+public struct EditorApp: Equatable, Sendable, Identifiable {
+  public let name: String
+  public let bundleId: String
+  public let url: URL
+  public var id: String { bundleId }
+
+  public init(name: String, bundleId: String, url: URL) {
+    self.name = name
+    self.bundleId = bundleId
+    self.url = url
+  }
+}
+
+/// The path context menu's rules, as Desktop's "Open files in other apps".
+public enum FileMenuRules {
+  /// Finder opens folders, not text; mMac is this app.
+  public static let excludedBundleIds: Set<String> = ["com.apple.finder", "com.domalhambra.mmac"]
+
+  public static func absolute(_ path: String, in project: String) -> URL {
+    URL(fileURLWithPath: project, isDirectory: true).appending(path: path)
+  }
+
+  public static func fileName(_ path: String) -> String {
+    path.split(separator: "/").last.map(String.init) ?? path
+  }
+
+  /// The apps to list, in the order given, without the excluded ones and without a second copy
+  /// of the same app.
+  public static func editors(_ apps: [EditorApp]) -> [EditorApp] {
+    var seen = Set<String>()
+    return apps.filter { !excludedBundleIds.contains($0.bundleId) && seen.insert($0.bundleId).inserted }
+  }
+}
+
 /// One row of the Activity tab, as Electron's `activityTitle` and the detail line in `Inspector.tsx`.
 public struct ActivityEntry: Equatable, Sendable, Identifiable {
   public let id: String

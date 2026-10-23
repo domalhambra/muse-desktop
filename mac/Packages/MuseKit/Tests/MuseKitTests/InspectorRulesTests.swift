@@ -358,3 +358,20 @@ let reviewDiff = [
   #expect(TodoRow.build(nil).isEmpty)
   #expect(Inspector.Tab.allCases == [.changes, .files, .activity, .tasks])
 }
+
+@Test func relativePathsAndFilenamesFollowTheProjectRoot() {
+  #expect(FileMenuRules.absolute("src/app.swift", in: "/p").path == "/p/src/app.swift")
+  #expect(FileMenuRules.fileName("src/app.swift") == "app.swift")
+  #expect(FileMenuRules.fileName("notes.md") == "notes.md")
+}
+
+@Test func editorsDropFinderAndMMacAndKeepTheOrder() {
+  let apps = [
+    EditorApp(name: "Finder", bundleId: "com.apple.finder", url: URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app")),
+    EditorApp(name: "Visual Studio Code", bundleId: "com.microsoft.VSCode", url: URL(fileURLWithPath: "/Applications/Visual Studio Code.app")),
+    EditorApp(name: "mMac", bundleId: "com.domalhambra.mmac", url: URL(fileURLWithPath: "/Applications/mMac.app")),
+    EditorApp(name: "Zed", bundleId: "dev.zed.Zed", url: URL(fileURLWithPath: "/Applications/Zed.app")),
+    EditorApp(name: "Visual Studio Code", bundleId: "com.microsoft.VSCode", url: URL(fileURLWithPath: "/Users/x/Applications/Visual Studio Code.app")),
+  ]
+  #expect(FileMenuRules.editors(apps).map(\.name) == ["Visual Studio Code", "Zed"])
+}
