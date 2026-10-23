@@ -64,6 +64,7 @@ struct MMacApp: App {
         FileCommands(controller: delegate.controller)
       }
       CommandGroup(after: .sidebar) {
+        CommandMenuCommand(controller: delegate.controller)
         InspectorCommand()
       }
       // Edit › Find, for the find bars of the file preview and of stored output.
@@ -117,6 +118,20 @@ private struct InspectorCommand: View {
   var body: some View {
     Button(inspectorShown ? "Hide Inspector" : "Show Inspector") { inspectorShown.toggle() }
       .keyboardShortcut("i", modifiers: [.command, .option])
+  }
+}
+
+/// View → Command Menu. ⌘K only opens it, as in Electron: a second press while it shows does nothing.
+private struct CommandMenuCommand: View {
+  let controller: AppController
+
+  var body: some View {
+    Button("Command Menu") {
+      controller.showMainWindow()
+      controller.sheets.commandMenu = true
+    }
+    .keyboardShortcut("k")
+    .disabled(controller.workspace == nil)
   }
 }
 

@@ -1,3 +1,4 @@
+import MuseBackend
 import MuseKit
 import SwiftUI
 
@@ -39,8 +40,12 @@ struct MainView: View {
   @Bindable var workspace: Workspace
   /// Remembered between launches. Electron starts with its inspector closed each time.
   @AppStorage("inspectorShown") private var inspectorShown = false
+  @Environment(\.openSettings) private var openSettings
+  // The store is named here, as the sidebar and banner name it, so all of them share one value.
+  @AppStorage(SettingsView.paneKey, store: MMacApp.appStorage) private var settingsPane: SettingsView.Pane = .appearance
 
   var body: some View {
+    @Bindable var sheets = controller.sheets
     NavigationSplitView {
       SidebarView(controller: controller, workspace: workspace)
         .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 420)
@@ -69,6 +74,9 @@ struct MainView: View {
     .overlay(alignment: .top) {
       ToastView(workspace: workspace).padding(.top, 10)
     }
+    .sheet(isPresented: $sheets.commandMenu, onDismiss: runChosen) {
+      CommandMenuView(controller: controller, workspace: workspace)
+    }
     .alert(
       "Muse",
       isPresented: Binding(
@@ -77,6 +85,26 @@ struct MainView: View {
       Button("OK") { workspace.errorMessage = nil }
     } message: {
       Text(workspace.errorMessage ?? "")
+    }
+  }
+
+  /// Runs the ⌘K result once its sheet has closed, as Electron closes the menu first.
+  private func runChosen() {
+    guard let action = controller.sheets.chosen else { return }
+    controller.sheets.chosen = nil
+    switch action {
+    case .newConversation:
+      workspace.startNew()
+    case .openProject:
+      Task { await controller.openProject() }
+    case .openSettings:
+      settingsPane = .appearance
+      openSettings()
+    case .open(let id):
+      // `open` follows the conversation's folder, as Electron's `openSession` does.
+      Task { await workspace.open(id) }
+    case .theme(let theme):
+      Task { await workspace.save(PreferencesPatch(theme: theme)) }
     }
   }
 }

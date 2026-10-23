@@ -10,6 +10,11 @@ final class WindowSheets {
   var renaming = false
   /// The Rename sheet's field.
   var newName = ""
+  /// The ⌘K sheet.
+  var commandMenu = false
+  /// The result chosen in the ⌘K sheet. The window runs it once the sheet has closed, so a panel
+  /// it opens attaches to the window, not to the closing sheet.
+  var chosen: CommandMenuAction?
 
   /// Opens the Rename sheet on `session`'s name, or on its sidebar title when it has none.
   func rename(_ session: Session) {
