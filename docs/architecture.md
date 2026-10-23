@@ -71,6 +71,21 @@ The packaging hook downloads a pinned, SHA-256-verified upstream archive, compil
 
 Daily checks are opt-in, automatic installation and system profiling are disabled. GitHub hosts the feeds and release downloads. Apple notarization remains a separate release requirement. See [releasing](releasing.md).
 
+## Size
+
+Measured on 2026-10-23 on macOS 27.2 (26B5112a), Mac17,2 (arm64), with `mac/scripts/measure-size.sh` at `7095d4d`. Disk is `du -sk`. Memory is the physical footprint (`footprint`, the number Activity Monitor shows as Memory), summed over the app's processes. The RSS (`ps`) is also given, but it counts shared pages in every process that maps them, so it reads higher. The process totals do not include `muse serve`, which has its own row. 1 MiB is 1,048,576 bytes.
+
+| What                 | mMac                                                                                                                    | Muse Desktop 0.2.0 (Electron)                   |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| The app bundle       | 16.8 MiB                                                                                                                | 344.0 MiB                                       |
+| Outside the bundle   | Node 24.12.0: 226.6 MiB. The backend's part of `src/`: 0.2 MiB. The 110 packages it loads from `node_modules`: 41.6 MiB | Nothing                                         |
+| Memory: the app      | 117.5 MiB footprint, 255.0 MiB RSS, 3 processes (mMac, its Node backend and esbuild)                                    | 346.7 MiB footprint, 535.0 MiB RSS, 4 processes |
+| Memory: `muse serve` | 37.1 MiB footprint, 109.6 MiB RSS                                                                                       | 40.0 MiB footprint, 118.5 MiB RSS               |
+
+The memory numbers are not like-for-like. mMac's comes from its measurement build (the Release build compiled with `MMAC_MEASURE`, which keeps the bridge token in memory), after 60 seconds idle on an empty first screen with a temporary home. Muse Desktop's was read from the copy Dom opened himself, after 69 seconds, with his real projects and conversations. The script launched nothing for it and only read its processes.
+
+mMac's Node is the system copy that its backend runs on, and mMac does not ship it. The packages are the dependency closure of `@modelcontextprotocol/sdk`, `@muse-code/sdk`, `chokidar`, `zod` and `tsx`. The full report, with every process, is in the message of the commit that added this section.
+
 ## Module map
 
 The Test column names the unit test that covers a file. A dash means no unit test does. `tests/e2e/desktop.spec.ts`, `tests/e2e/extensions.spec.ts` and `tests/e2e/setup.spec.ts` drive the whole app on top of these, and `scripts/verify-muse.ts` (`npm run test:integration`) drives the real CLI. `scripts/verify-headless.ts` (`npm run test:headless`) drives `src/headless/server.ts` the same way. In the `src/headless/` rows, an Ask is a native alert the backend asks mMac to show, and `notYet` in the parity test lists the methods the headless backend has not ported yet. mMac's Swift code is in `mac/`: `mac/Packages/MuseBackend/` (the client), `mac/Packages/MuseKit/` (logic, under `swift test`) and `mac/mMac/` (views); the spec has its units.

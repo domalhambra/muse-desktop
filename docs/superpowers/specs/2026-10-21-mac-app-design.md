@@ -6,6 +6,8 @@ Status: approved. Designed with Dom on 2026-10-21, one section at a time; Dom ap
 
 A native SwiftUI app for macOS with the same features as this fork, the four extensions included. It must feel like a Mac app and weigh far less than the Electron build, which is 344 MB on disk and about 229 MB of memory across four processes when idle.
 
+M4a measured both apps on 2026-10-23 on macOS 27.2 (26B5112a), Mac17,2 (arm64), with `mac/scripts/measure-size.sh` at `7095d4d`. mMac's bundle is 16.8 MiB on disk, against Muse Desktop's 344.0 MiB. Outside its bundle, mMac also needs the system Node (226.6 MiB) and the checkout's backend: 0.2 MiB of `src/` and 41.6 MiB of packages in `node_modules`. mMac and its backend use 117.5 MiB of memory (physical footprint) in 3 processes, idle on an empty first screen with a temporary home. Muse Desktop uses 346.7 MiB in 4 processes, measured after 69 seconds with Dom's real projects and conversations, so the two memory numbers are not like-for-like. `muse serve` adds 37.1 MiB to mMac and 40.0 MiB to Muse Desktop; the process totals do not include it. "Size" in `docs/architecture.md` has the table and the method. The 344 MB and 229 MB above are the first figures, from 2026-10-21, with no recorded method.
+
 It does not rewrite the backend. The fork's backend modules run unchanged in one plain Node process. Only the UI is new.
 
 ## Decisions
