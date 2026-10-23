@@ -313,6 +313,57 @@ public enum GitBadge {
   }
 }
 
+/// The inspector's context gauge, from `session/contextUsage`, as Desktop's Context card header.
+public enum ContextGauge {
+  public enum Tint: Equatable, Sendable { case normal, warning, blocked }
+
+  /// Used over window, rounded, at most 100. Nil when Muse reports no window.
+  public static func percent(_ usage: ContextUsage) -> Int? {
+    guard let window = usage.window, window > 0 else { return nil }
+    return min(100, Int((Double(usage.used) / Double(window) * 100).rounded()))
+  }
+
+  /// "Context 42%", or the token count when the model has no limit.
+  public static func label(_ usage: ContextUsage) -> String {
+    if let percent = percent(usage) { return "Context \(percent)%" }
+    return "Context \(usage.used.formatted()) tokens"
+  }
+
+  public static func tint(_ usage: ContextUsage) -> Tint {
+    switch usage.pressure {
+    case "warning": .warning
+    case "blocked": .blocked
+    default: .normal
+    }
+  }
+}
+
+/// The toolbar's `+12 −1`: what the open conversation's tools changed, summed over their patch
+/// summaries, as Desktop's Changes card counts the session's edits. Nil with nothing to show.
+public enum ChangesBadge {
+  public static func text(_ items: [TranscriptItem]) -> String? {
+    ToolPresentation.groupPatch(items.filter { $0.retracted != true })
+  }
+}
+
+/// One row of the Tasks tab: the agent's todo list, as Desktop's tasks pane shows it.
+public struct TodoRow: Equatable, Sendable, Identifiable {
+  public let id: Int
+  public let text: String
+  /// `pending`, `inProgress`, `completed` or `cancelled`.
+  public let status: String
+  public let activeForm: String?
+
+  /// An in-progress row shows its present-tense form when the tool gave one.
+  public var title: String { status == "inProgress" ? (activeForm ?? text) : text }
+
+  public static func build(_ todos: [TodoItem]?) -> [TodoRow] {
+    (todos ?? []).enumerated().map { index, todo in
+      TodoRow(id: index, text: todo.text, status: todo.status, activeForm: todo.activeForm)
+    }
+  }
+}
+
 /// One row of the Activity tab, as Electron's `activityTitle` and the detail line in `Inspector.tsx`.
 public struct ActivityEntry: Equatable, Sendable, Identifiable {
   public let id: String

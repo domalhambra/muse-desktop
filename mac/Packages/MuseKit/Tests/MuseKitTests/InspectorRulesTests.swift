@@ -319,3 +319,42 @@ let reviewDiff = [
   #expect(rows.map(\.title) == ["Shell"])
   #expect(rows.map(\.detail) == ["npm test"])
 }
+
+@Test func contextPercentNeedsAWindowAndCapsAt100() {
+  #expect(ContextGauge.percent(ContextUsage(used: 4200, window: 10000, pressure: "normal")) == 42)
+  #expect(ContextGauge.percent(ContextUsage(used: 12000, window: 10000, pressure: "blocked")) == 100)
+  #expect(ContextGauge.percent(ContextUsage(used: 4200, pressure: "normal")) == nil)
+  #expect(ContextGauge.percent(ContextUsage(used: 1, window: 0, pressure: "normal")) == nil)
+  #expect(ContextGauge.label(ContextUsage(used: 4200, window: 10000, pressure: "normal")) == "Context 42%")
+  #expect(ContextGauge.label(ContextUsage(used: 4200, pressure: "normal")) == "Context 4,200 tokens")
+}
+
+@Test func pressureTintsWarningAndBlocked() {
+  #expect(ContextGauge.tint(ContextUsage(used: 1, pressure: "normal")) == .normal)
+  #expect(ContextGauge.tint(ContextUsage(used: 1, pressure: "warning")) == .warning)
+  #expect(ContextGauge.tint(ContextUsage(used: 1, pressure: "blocked")) == .blocked)
+  #expect(ContextGauge.tint(ContextUsage(used: 1, pressure: "later")) == .normal)
+}
+
+@Test func theChangesBadgeSumsPatchesAndSkipsRetractedItems() {
+  let patched = TranscriptItem(
+    itemId: "a", kind: "toolCall", status: "completed", patchSummary: .init(added: 12, removed: 1, files: 1))
+  let gone = TranscriptItem(
+    itemId: "b", kind: "toolCall", status: "completed", retracted: true,
+    patchSummary: .init(added: 5, removed: 5, files: 1))
+  let more = TranscriptItem(
+    itemId: "c", kind: "toolCall", status: "completed", patchSummary: .init(added: 0, removed: 2, files: 1))
+  #expect(ChangesBadge.text([patched, gone, more]) == "+12 \u{2212}3")
+  #expect(ChangesBadge.text([TranscriptItem(itemId: "d", kind: "agentMessage", status: "completed")]) == nil)
+}
+
+@Test func todoRowsNumberFromZeroAndShowTheActiveForm() {
+  let rows = TodoRow.build([
+    TodoItem(text: "Clean the build folder", status: "inProgress", activeForm: "Cleaning the build folder"),
+    TodoItem(text: "Run the tests", status: "pending"),
+  ])
+  #expect(rows.map(\.id) == [0, 1])
+  #expect(rows.map(\.title) == ["Cleaning the build folder", "Run the tests"])
+  #expect(TodoRow.build(nil).isEmpty)
+  #expect(Inspector.Tab.allCases == [.changes, .files, .activity, .tasks])
+}
