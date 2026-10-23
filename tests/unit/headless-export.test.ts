@@ -86,4 +86,9 @@ describe('exportTitle', () => {
     expect(exportTitle(session(), '')).toBe('Muse conversation')
     expect(exportTitle(session())).toBe('Muse conversation')
   })
+
+  it('collapses whitespace, newlines included, so the heading stays one line', () => {
+    expect(exportTitle(session({ name: '  Fix the\n\nlogin \t bug \n' }))).toBe('Fix the login bug')
+    expect(exportTitle(session(), 'First line\nsecond line')).toBe('First line second line')
+  })
 })

@@ -6,7 +6,9 @@ import type { MuseSession, SessionView, TranscriptItem } from '../shared/protoco
 
 /** The heading: the session's name, then its title, then mMac's sidebar title. */
 export function exportTitle(session: MuseSession, fallbackTitle?: string) {
-  return session.name || session.title || fallbackTitle || 'Muse conversation'
+  const title = session.name || session.title || fallbackTitle || 'Muse conversation'
+  // One line: a newline in a first prompt must not break the `# ` heading.
+  return title.replace(/\s+/g, ' ').trim() || 'Muse conversation'
 }
 
 function heading(item: TranscriptItem) {

@@ -872,8 +872,18 @@ describe('headless backend, M4a conversation actions', () => {
     await expect(call('export', 'gone', path)).rejects.toThrow(
       'Open this conversation before performing an action.',
     )
-    await expect(call('export', 's1', 'never.md')).rejects.toThrow()
+    await expect(call('export', 's1', 'never.md')).rejects.toThrow(
+      'Choose a full path for the exported file.',
+    )
     await expect(readFile(path)).rejects.toThrow('ENOENT')
+  })
+
+  it('shortens a long sidebar title instead of refusing the export', async () => {
+    const { call, start } = harness()
+    await start()
+    const path = join(dir, 'long.md')
+    await call('export', 's1', path, 'x'.repeat(1500))
+    expect(await readFile(path, 'utf8')).toBe(`# ${'x'.repeat(200)}\n\nProject: None\n`)
   })
 
   it('opens Terminal in a known project, then with the CLI', async () => {

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { chmod, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
@@ -103,9 +103,6 @@ export function createBackend({
 }: BackendDeps) {
   const id = z.string().min(1).max(200)
   const pathSchema = z.string().min(1).max(4096)
-  // A file mMac chose in its own panel or wrote itself: always a full path, never one the
-  // backend would resolve against its own working folder.
-  const absolutePath = pathSchema.refine((value) => isAbsolute(value))
   const methods = new Map<string, Method>()
   let greeted = false
   let starting = false
@@ -388,15 +385,22 @@ export function createBackend({
   // panel and sends the path; like Electron, this needs the conversation open, not trusted.
   method('export', async (session, path, fallback) => {
     const view = muse.getView(id.parse(session))
-    const file = absolutePath.parse(path)
+    const file = pathSchema.parse(path)
+    if (!isAbsolute(file)) throw new Error('Choose a full path for the exported file.')
+    // A long sidebar title is shortened, not a reason to refuse the export.
     const title = exportTitle(
       view.session,
-      z.string().max(1000).nullish().parse(fallback) ?? undefined,
+      z.string().nullish().parse(fallback)?.slice(0, 200) ?? undefined,
     )
-    await writeFile(file, exportMarkdown(view, title), { mode: 0o600 })
-    // writeFile sets the mode only on a new file. A file the person replaced would keep its old
-    // mode, as in Electron; mMac sets it every time.
-    await chmod(file, 0o600)
+    // The open call sets 0600 on a new file; a file the person replaced would keep its old mode,
+    // as in Electron, so mMac sets it on the open handle before any content lands.
+    const handle = await open(file, 'w', 0o600)
+    try {
+      await handle.chmod(0o600)
+      await handle.writeFile(exportMarkdown(view, title))
+    } finally {
+      await handle.close()
+    }
     return file
   })
 
@@ -464,8 +468,10 @@ export function createBackend({
 
   // The inspector's footer, as src/main/index.ts's `terminal` and `cli-terminal` open it. mMac
   // reveals the folder in Finder itself.
+  // Electron's unused `login` argument is left out on purpose.
   method('terminal', async (project) => openTerminal(folderCommand(await knownProject(project))))
 
+  // Opens the CLI without a trust check, as Electron does.
   method('cli-terminal', async (project) =>
     openTerminal(terminalCommand(await knownProject(project), muse.status.path || 'muse', [])),
   )
