@@ -138,7 +138,7 @@ Unit and backend tests stay in M4a. Every task writes its tests first. The M4a g
   - `terminal(project)` opens Terminal on `cd '<project>'`.
   - `cli-terminal(project)` opens it on `cd '<project>' && '<muse path>'`.
   - Both check the project first (`knownProject`) and reuse `src/headless/terminal.ts`, which gets a folder-only command helper.
-- **App:** the inspector's footer shows three buttons: Finder, Terminal and Muse Code. Finder opens the folder with `NSWorkspace`. Errors show as error toasts.
+- **App:** the inspector's footer shows three buttons: Finder, Terminal and Muse Code. Finder opens the folder with `NSWorkspace`. Errors show in the window alert, as the composer's do.
 
 ## Size measurement
 
