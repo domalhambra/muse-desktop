@@ -73,15 +73,16 @@ final class MMacUITests: XCTestCase {
       app.wait(for: .notRunning, timeout: 15), "mMac did not quit within 15 seconds", file: file, line: line)
   }
 
-  /// Launches mMac on the fake backend, which logs to `log`.
-  private func launchFake(log: URL) throws -> XCUIApplication {
+  /// Launches mMac on the fake backend, which logs to `log`. `extra` adds variables, such as the
+  /// fake's own `FAKE_BACKEND_OFFLINE`.
+  private func launchFake(log: URL, extra: [String: String] = [:]) throws -> XCUIApplication {
     fakeLog = log
     return try launch(
       cliPath: "",
       extra: [
         "MMAC_BACKEND_SCRIPT": repository.appending(path: "mac/Fixtures/fake-backend.mjs").path,
         "FAKE_BACKEND_LOG": log.path,
-      ])
+      ].merging(extra) { $1 })
   }
 
   /// Waits until the sidebar's status, a button that opens Settings, reads "Connected to Muse Code".
@@ -190,6 +191,35 @@ final class MMacUITests: XCTestCase {
   /// The composer of the conversation shown.
   private func composer(_ app: XCUIApplication) -> XCUIElement {
     app.descendants(matching: .any)["composer"]
+  }
+
+  /// Any element with this accessibility identifier, such as a chip or a popup row.
+  private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+    app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+  }
+
+  /// Opens the second fake conversation, which raises no Ask and has no cards.
+  private func openSecondConversation(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+    waitUntilConnected(app, file: file, line: line)
+    let row = app.staticTexts["Second fake conversation"].firstMatch
+    XCTAssertTrue(row.waitForExistence(timeout: 10), file: file, line: line)
+    row.click()
+    XCTAssertTrue(
+      app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10), file: file, line: line)
+  }
+
+  /// Waits for the window's error alert that reads `message`, then presses its OK button. The
+  /// alert is a sheet on the window; the Touch Bar repeats its button.
+  private func dismissAlert(
+    _ app: XCUIApplication, _ message: String, file: StaticString = #filePath, line: UInt = #line
+  ) {
+    let text = app.staticTexts
+      .matching(NSPredicate(format: "value == %@ OR label == %@", message, message)).firstMatch
+    XCTAssertTrue(
+      text.waitForExistence(timeout: 10), "No alert reads \"\(message)\": \(app.debugDescription)", file: file,
+      line: line)
+    app.windows["main"].sheets.buttons["OK"].click()
+    XCTAssertTrue(text.waitForNonExistence(timeout: 10), file: file, line: line)
   }
 
   func testAnEchoConversationEndToEnd() throws {
@@ -583,5 +613,348 @@ final class MMacUITests: XCTestCase {
     waitForValue(composer, "A draft to keep")
 
     quit(app)
+  }
+
+  // MARK: The M4a features
+
+  func testTheCommandMenuFindsAndOpensAConversation() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    let app = try launchFake(log: log)
+    waitUntilConnected(app)
+
+    app.typeKey("k", modifierFlags: .command)
+    let menu = element(app, "command-menu")
+    XCTAssertTrue(menu.waitForExistence(timeout: 10), app.debugDescription)
+    let field = app.textFields["command-search"]
+    XCTAssertTrue(field.waitForExistence(timeout: 5))
+    XCTAssertEqual(field.label, "Search commands and conversations")
+    // Every group shows before a query: the actions, the conversations and the themes.
+    XCTAssertTrue(element(app, "palette-new").waitForExistence(timeout: 5))
+    XCTAssertTrue(element(app, "palette-conversation:fake-1").exists)
+    field.click()
+    field.typeText("Second")
+    let second = element(app, "palette-conversation:fake-2")
+    XCTAssertTrue(second.waitForExistence(timeout: 5))
+    XCTAssertTrue(element(app, "palette-conversation:fake-1").waitForNonExistence(timeout: 5))
+    XCTAssertFalse(element(app, "palette-new").exists)
+    // The only row is highlighted, so Return chooses it. The sheet closes first, then it opens.
+    field.typeKey(.return, modifierFlags: [])
+    XCTAssertTrue(menu.waitForNonExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10))
+    waitUntilLogged(log, ["method": "open", "args": ["fake-2"]])
+
+    // A query with no result shows the empty state, and Escape closes the sheet.
+    app.typeKey("k", modifierFlags: .command)
+    XCTAssertTrue(menu.waitForExistence(timeout: 10))
+    XCTAssertTrue(field.waitForExistence(timeout: 5))
+    field.click()
+    field.typeText("zzz nothing")
+    let empty = element(app, "command-empty")
+    XCTAssertTrue(empty.waitForExistence(timeout: 5))
+    XCTAssertEqual(empty.label, "No matches. Try a project or conversation name.")
+    field.typeKey(.escape, modifierFlags: [])
+    XCTAssertTrue(menu.waitForNonExistence(timeout: 10))
+
+    quit(app)
+  }
+
+  func testPinsAndArchives() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    let app = try launchFake(log: log)
+    waitUntilConnected(app)
+
+    // The pin button shows while the pointer is over the row, in place of the time.
+    let second = app.staticTexts["Second fake conversation"].firstMatch
+    XCTAssertTrue(second.waitForExistence(timeout: 10))
+    second.hover()
+    let pin = app.buttons["pin-button"]
+    XCTAssertTrue(pin.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertEqual(pin.label, "Pin Second fake conversation")
+    pin.click()
+    waitUntilLogged(log, ["method": "preferences", "args": [["pinnedSessionIds": ["fake-2"]]]])
+    // The row moves to the Pinned group and shows the pin icon.
+    XCTAssertTrue(app.staticTexts["Pinned"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.images["Pinned"].waitForExistence(timeout: 5))
+    // The pin did not open the row.
+    XCTAssertTrue(try Self.requests(log, "open").isEmpty)
+    // The context menu now offers Unpin.
+    second.rightClick()
+    XCTAssertTrue(app.menuItems["Unpin conversation"].waitForExistence(timeout: 5))
+    app.typeKey(.escape, modifierFlags: [])
+    XCTAssertTrue(app.menuItems["Unpin conversation"].waitForNonExistence(timeout: 5))
+
+    // Archive from the context menu: the row leaves the list.
+    let third = app.staticTexts["Third fake conversation"].firstMatch
+    third.rightClick()
+    let archive = app.menuItems["Archive in Desktop"]
+    XCTAssertTrue(archive.waitForExistence(timeout: 5))
+    archive.click()
+    waitUntilLogged(log, ["method": "preferences", "args": [["archivedSessionIds": ["fake-3"]]]])
+    XCTAssertTrue(third.waitForNonExistence(timeout: 10))
+
+    // The Archive toggle shows the archived conversations only.
+    let toggle = app.buttons["archive-toggle"]
+    XCTAssertTrue(toggle.exists)
+    XCTAssertEqual(toggle.label, "Show archived conversations")
+    toggle.click()
+    XCTAssertTrue(app.staticTexts["ARCHIVED"].waitForExistence(timeout: 5))
+    XCTAssertTrue(toggle.wait(for: \.label, toEqual: "Show conversations", timeout: 5))
+    XCTAssertTrue(third.waitForExistence(timeout: 5))
+    XCTAssertFalse(second.exists)
+
+    // Restore from the context menu: the archived view is empty.
+    third.rightClick()
+    let restore = app.menuItems["Restore conversation"]
+    XCTAssertTrue(restore.waitForExistence(timeout: 5))
+    restore.click()
+    waitUntilLogged(log, ["method": "preferences", "args": [["archivedSessionIds": [String]()]]])
+    XCTAssertTrue(app.staticTexts["No archived conversations"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["Archived conversations appear here."].exists)
+
+    // Back to the conversations: the restored row is there again.
+    toggle.click()
+    XCTAssertTrue(app.staticTexts["CONVERSATIONS"].waitForExistence(timeout: 5))
+    XCTAssertTrue(toggle.wait(for: \.label, toEqual: "Show archived conversations", timeout: 5))
+    XCTAssertTrue(third.waitForExistence(timeout: 10))
+    XCTAssertTrue(second.exists)
+
+    quit(app)
+  }
+
+  func testExportWritesAPrivateFileAndShowsTheToast() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    // Debug builds take this path in place of the save panel.
+    let exported = temporary.appending(path: "exported.md")
+    let app = try launchFake(log: log, extra: ["MMAC_TEST_EXPORT": exported.path])
+    openSecondConversation(app)
+
+    app.descendants(matching: .any)["Conversation actions"].click()
+    let export = app.menuItems["Export as Markdown…"]
+    XCTAssertTrue(export.waitForExistence(timeout: 5))
+    export.click()
+
+    XCTAssertTrue(app.staticTexts["Conversation exported to Markdown."].waitForExistence(timeout: 10))
+    XCTAssertTrue(element(app, "toast").exists)
+    // The conversation has no first prompt, so mMac sends no fallback title.
+    waitUntilLogged(log, ["method": "export", "args": ["fake-2", exported.path]])
+    let attributes = try FileManager.default.attributesOfItem(atPath: exported.path)
+    XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    let text = try String(contentsOf: exported, encoding: .utf8)
+    XCTAssertTrue(text.hasPrefix("# Second fake conversation\n"), text)
+
+    quit(app)
+  }
+
+  func testComposerCommands() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    let app = try launchFake(log: log)
+    openSecondConversation(app)
+    let composer = self.composer(app)
+
+    // `/` shows the ten commands.
+    composer.click()
+    composer.typeText("/")
+    XCTAssertTrue(element(app, "composer-commands").waitForExistence(timeout: 5), app.debugDescription)
+    for name in ["clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help"] {
+      XCTAssertTrue(element(app, "command-\(name)").exists, "No /\(name) row")
+    }
+    // Typing filters the list, and Tab completes the highlighted command and a space.
+    composer.typeText("he")
+    XCTAssertTrue(element(app, "command-clear").waitForNonExistence(timeout: 5))
+    XCTAssertTrue(element(app, "command-help").exists)
+    composer.typeKey(.tab, modifierFlags: [])
+    waitForValue(composer, "/help ")
+    XCTAssertTrue(element(app, "composer-commands").waitForNonExistence(timeout: 5))
+
+    // /help opens the Help sheet, and the draft empties.
+    composer.typeKey(.return, modifierFlags: [])
+    let help = element(app, "help-sheet")
+    XCTAssertTrue(help.waitForExistence(timeout: 10), app.debugDescription)
+    app.windows["main"].sheets.buttons["Done"].click()
+    XCTAssertTrue(help.waitForNonExistence(timeout: 10))
+    waitForValue(composer, "")
+
+    // /rename with a name renames at once. The fake Asks before it replies.
+    composer.click()
+    composer.typeText("/rename Renamed by command")
+    composer.typeKey(.return, modifierFlags: [])
+    XCTAssertTrue(app.staticTexts["Rename needs an answer"].waitForExistence(timeout: 10))
+    app.windows["main"].sheets.buttons["Go on"].click()
+    waitUntilLogged(log, ["method": "rename", "args": ["fake-2", "Renamed by command"]])
+    XCTAssertTrue(app.staticTexts["Renamed by command"].firstMatch.waitForExistence(timeout: 10))
+    waitForValue(composer, "")
+
+    // /rename alone opens the Rename sheet with the conversation's title in its field.
+    composer.click()
+    composer.typeText("/rename")
+    composer.typeKey(.return, modifierFlags: [])
+    let name = app.textFields["Conversation name"]
+    XCTAssertTrue(name.waitForExistence(timeout: 10))
+    XCTAssertEqual(name.value as? String, "Renamed by command")
+    app.windows["main"].sheets.buttons["Cancel"].click()
+    XCTAssertTrue(name.waitForNonExistence(timeout: 10))
+    XCTAssertEqual(try Self.requests(log, "rename").count, 1)
+
+    // /plugins is refused, sends nothing, and keeps the draft.
+    composer.click()
+    composer.typeKey("a", modifierFlags: .command)
+    composer.typeText("/plugins")
+    composer.typeKey(.return, modifierFlags: [])
+    dismissAlert(
+      app,
+      "/plugins is not handled by Desktop. Use /help, or open Muse Code in the project inspector for CLI commands.")
+    waitForValue(composer, "/plugins")
+    XCTAssertTrue(try Self.requests(log, "send").isEmpty)
+
+    quit(app)
+  }
+
+  func testMentionsAndAttachments() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    // Debug builds take these files in place of the open panel. The fake reads their sizes.
+    let folder = temporary.appending(path: "attach")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let notes = folder.appending(path: "notes.txt")
+    let picture = folder.appending(path: "picture.png")
+    try Data("Some notes\n".utf8).write(to: notes)
+    try Data([0x89, 0x50, 0x4E, 0x47]).write(to: picture)
+    let app = try launchFake(log: log, extra: ["MMAC_TEST_ATTACHMENTS": "\(notes.path):\(picture.path)"])
+    openSecondConversation(app)
+    let composer = self.composer(app)
+
+    // `@` lists the project's top folder through `files`. A file inserts its path and a space.
+    composer.click()
+    composer.typeText("@")
+    XCTAssertTrue(element(app, "composer-mentions").waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(element(app, "mention-src").waitForExistence(timeout: 5))
+    XCTAssertTrue(element(app, "mention-notes.md").exists)
+    composer.typeText("no")
+    XCTAssertTrue(element(app, "mention-src").waitForNonExistence(timeout: 5))
+    composer.typeKey(.tab, modifierFlags: [])
+    waitForValue(composer, "@notes.md ")
+
+    // A folder inserts its path and `/`, and the popup lists inside it.
+    composer.typeText("@sr")
+    XCTAssertTrue(element(app, "mention-src").waitForExistence(timeout: 10))
+    composer.typeKey(.tab, modifierFlags: [])
+    waitForValue(composer, "@notes.md @src/")
+    XCTAssertTrue(element(app, "mention-src/app.swift").waitForExistence(timeout: 10))
+    composer.typeKey(.return, modifierFlags: [])
+    waitForValue(composer, "@notes.md @src/app.swift ")
+    XCTAssertTrue(element(app, "composer-mentions").waitForNonExistence(timeout: 5))
+
+    // The paperclip adds both files as chips.
+    let attach = app.buttons["attach-button"]
+    XCTAssertEqual(attach.label, "Attach images or text files")
+    attach.click()
+    waitUntilLogged(log, ["method": "attachments", "args": [[notes.path, picture.path]]])
+    let notesChip = element(app, "attachment-chip-att-1")
+    let pictureChip = element(app, "attachment-chip-att-2")
+    XCTAssertTrue(notesChip.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(pictureChip.exists)
+    // A chip's remove button removes that chip only.
+    let remove = app.buttons["attachment-remove-att-1"]
+    XCTAssertEqual(remove.label, "Remove notes.txt")
+    remove.click()
+    XCTAssertTrue(notesChip.waitForNonExistence(timeout: 10))
+    waitUntilLogged(log, ["method": "remove-attachment", "args": ["att-1"]])
+    XCTAssertTrue(pictureChip.exists)
+
+    // A message sends the chip left, and the chip goes.
+    composer.click()
+    composer.typeKey("a", modifierFlags: .command)
+    composer.typeText("With a file")
+    composer.typeKey(.return, modifierFlags: [])
+    let sent: NSDictionary = [
+      "sessionId": "fake-2", "text": "With a file", "attachments": ["att-2"], "effort": "high", "mode": "queue",
+    ]
+    waitUntilLogged(log, ["method": "send", "args": [sent]])
+    XCTAssertTrue(pictureChip.waitForNonExistence(timeout: 10))
+
+    quit(app)
+  }
+
+  /// The microphone cannot run in a test: a click on an enabled mic button, or ⌥V while connected,
+  /// would ask for it. So this test reaches only the states a disconnected backend allows, then
+  /// checks that the button turns on once the backend connects, without clicking it.
+  func testVoiceInputWithoutTheMicrophone() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    let app = try launchFake(log: log, extra: ["FAKE_BACKEND_OFFLINE": "1"])
+    let status = app.buttons["Muse Code settings"]
+    XCTAssertTrue(status.waitForExistence(timeout: 30), "The fake's requests: \(fakeRequests())")
+    waitForValue(status, "Muse Code disconnected", timeout: 30)
+
+    // Disconnected: the button is off.
+    let button = app.buttons["voice-button"]
+    XCTAssertTrue(button.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertEqual(button.label, "Voice input (⌥V)")
+    XCTAssertFalse(button.isEnabled)
+
+    // ⌥V types no character and starts nothing.
+    let composer = self.composer(app)
+    composer.click()
+    composer.typeText("Draft")
+    app.typeKey("v", modifierFlags: .option)
+    XCTAssertEqual(composer.value as? String, "Draft")
+    XCTAssertFalse(element(app, "voice-status").exists)
+
+    // /voice runs as a command while disconnected, and starts nothing either.
+    composer.typeKey("a", modifierFlags: .command)
+    composer.typeText("/voice")
+    composer.typeKey(.return, modifierFlags: [])
+    waitForValue(composer, "")
+    XCTAssertFalse(element(app, "voice-status").waitForExistence(timeout: 2))
+    XCTAssertTrue(try Self.requests(log, "voice").isEmpty)
+
+    // Connected: the button turns on. It is not clicked.
+    app.buttons["Reconnect"].click()
+    waitUntilConnected(app)
+    waitUntilEnabled(button)
+    XCTAssertEqual(button.label, "Voice input (⌥V)")
+    XCTAssertFalse(element(app, "voice-status").exists)
+
+    quit(app)
+    XCTAssertTrue(try Self.requests(log, "voice").isEmpty)
+    XCTAssertTrue(try Self.requests(log, "cancel-voice").isEmpty)
+  }
+
+  func testTheInspectorFooterFollowsTheProject() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    // No recent project, so mMac starts on All projects.
+    let app = try launchFake(log: log, extra: ["FAKE_BACKEND_NO_PROJECT": "1"])
+    waitUntilConnected(app)
+
+    let toggle = app.buttons["Toggle project inspector"]
+    waitForValue(toggle, "Hidden")
+    toggle.click()
+    waitForValue(toggle, "Shown")
+    // Window › Zoom fills the screen, so the footer is inside the window whatever size SwiftUI
+    // opened it at.
+    app.menuBars.menuBarItems["Window"].click()
+    app.menuBars.menuItems["Zoom"].click()
+
+    // No project: the three buttons show, and are off. None is clicked in this test.
+    let finder = app.buttons["inspector-finder"]
+    let terminal = app.buttons["inspector-terminal"]
+    let museCode = app.buttons["inspector-muse-code"]
+    XCTAssertTrue(finder.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(terminal.exists)
+    XCTAssertTrue(museCode.exists)
+    XCTAssertTrue(app.staticTexts["No project selected"].exists)
+    for button in [finder, terminal, museCode] { XCTAssertFalse(button.isEnabled, "\(button) is enabled") }
+
+    // A conversation in the project selects it: the three buttons turn on.
+    let row = app.staticTexts["Second fake conversation"].firstMatch
+    XCTAssertTrue(row.waitForExistence(timeout: 10))
+    row.click()
+    XCTAssertTrue(app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10))
+    for button in [finder, terminal, museCode] { waitUntilEnabled(button) }
+
+    app.typeKey("i", modifierFlags: [.command, .option])
+    waitForValue(toggle, "Hidden")
+
+    quit(app)
+    XCTAssertTrue(try Self.requests(log, "terminal").isEmpty)
+    XCTAssertTrue(try Self.requests(log, "cli-terminal").isEmpty)
   }
 }
