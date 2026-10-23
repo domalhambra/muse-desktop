@@ -89,6 +89,9 @@ public enum SidebarSections {
   /// The group pinned conversations form, in the normal view and in the archived view.
   public static let pinnedTitle = "Pinned"
 
+  /// Session kinds that never show in the sidebar or in ⌘K.
+  public static let hiddenKinds: Set<String> = ["subagent", "reminder", "sideChat"]
+
   /// Keeps a conversation when it matches the project filter, is not a subagent or reminder, and
   /// is archived exactly when `showArchived` is on. Pinned conversations come first, then the rest
   /// by last activity, newest first.
@@ -100,7 +103,7 @@ public enum SidebarSections {
     let pinned = Set(pinned)
     let archived = Set(archived)
     let shown = sessions
-      .filter { $0.kind != "subagent" && $0.kind != "reminder" }
+      .filter { !hiddenKinds.contains($0.kind ?? "") }
       .filter { archived.contains($0.sessionId) == showArchived }
       .filter { session in
         guard let root else { return true }
@@ -123,6 +126,16 @@ public enum SidebarSections {
       }
     }
     return sections
+  }
+
+  /// The row after or before `sessionId` in the visible order, across sections, as ⌘⇧] and ⌘⇧[
+  /// move. Nil at either end, or with no rows. The first row when `sessionId` is nil or not shown.
+  public static func neighbor(of sessionId: String?, in sections: [SidebarSection], forward: Bool) -> String? {
+    let ids = sections.flatMap { $0.sessions.map(\.sessionId) }
+    guard !ids.isEmpty else { return nil }
+    guard let sessionId, let index = ids.firstIndex(of: sessionId) else { return ids.first }
+    let next = forward ? index + 1 : index - 1
+    return ids.indices.contains(next) ? ids[next] : nil
   }
 
   /// `lastActivityAt || updatedAt`: the time a row sorts, groups and shows by.

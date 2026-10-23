@@ -63,6 +63,8 @@ Unit coverage checks file containment, symlink rejection, binary and size limits
 
 These checks do not replace testing authenticated model tool execution.
 
+M5a (2026-10-23): the backend speaks protocol 2 and has 47 methods (`set-approval-mode`, `side-chat` and `shell` joined in M5a); each has a Swift call. The unit tests pin them. M5a's UI test drives `!echo hi` through the composer's `!` escape, a real file:// preview, a pasteboard round trip, and a subagent session opened in a sheet, then restores the pasteboard. The inspector is six tabs: Changes, Files, Activity, Tasks, Agents and Preview. The Preview tab holds scripts and bot checks, local pages, and input forms in its `WKWebView`; the side chat and child sheets are read-only.
+
 ## Size
 
 Measured on 2026-10-23 on macOS 27.2 (26B5112a), Mac17,2 (arm64), with `mac/scripts/measure-size.sh` at `7095d4d`. Disk is `du -sk`. Memory is the physical footprint (`footprint`, the number Activity Monitor shows as Memory), summed over the app's processes. The RSS (`ps`) is also given, but it counts shared pages in every process that maps them, so it reads higher. The process totals do not include `muse serve`, which has its own row. 1 MiB is 1,048,576 bytes.
@@ -108,9 +110,18 @@ The Test column names the unit test that covers a file. A dash means no unit tes
 | `src/headless/revert-hunk.ts` | Reverting the exact hunk mMac showed, or refusing when the file changed                                                                                                           | `tests/unit/headless-revert-hunk.test.ts`, `tests/unit/headless-backend.test.ts` |
 | `src/headless/login-env.ts`   | The path of `src/headless/login-env.sh`, checked to exist and to be executable                                                                                                    | `tests/unit/headless-login-env.test.ts`                                          |
 | `src/headless/login-env.sh`   | Answers `discoverCli`'s login-shell read from the environment mMac passed                                                                                                         | `tests/unit/headless-login-env.test.ts`                                          |
-| `src/shared/protocol.ts`      | Event, session and preference schemas                                                                                                                                             | `tests/unit/files.test.ts`                                                       |
-| `src/shared/voice.ts`         | WAV encoding limits and the encoder                                                                                                                                               | `tests/unit/voice.test.ts`                                                       |
-| `src/shared/worktree.ts`      | Mapping a worktree path to its project                                                                                                                                            | `tests/unit/worktrees.test.ts`                                                   |
+
+M5a added these files. The Test column names the unit test, or says that M4b adds the UI test for a view.
+
+| File                           | Owns                                                                                                    | Test                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `mac/mMac/SideChatSheet.swift` | The side chat sheet (⌘;), its question field, and the read-only child session sheet                     | — (M4b adds its UI test)            |
+| `mac/mMac/FilePathMenu.swift`  | The right-click menu on a project path: attach, Open in an editor, Show in Finder, Copy                 | — (M4b adds its UI test)            |
+| `mac/mMac/PreviewView.swift`   | The Preview tab: an address field, Back and Reload, the page title, Open in Safari, and one `WKWebView` | — (M4b adds its UI test)            |
+| `mac/Fixtures/preview.html`    | The page the M5a UI test loads in the Preview tab                                                       | `mac/mMacUITests/MMacUITests.swift` |
+| `src/shared/protocol.ts`       | Event, session and preference schemas                                                                   | `tests/unit/files.test.ts`          |
+| `src/shared/voice.ts`          | WAV encoding limits and the encoder                                                                     | `tests/unit/voice.test.ts`          |
+| `src/shared/worktree.ts`       | Mapping a worktree path to its project                                                                  | `tests/unit/worktrees.test.ts`      |
 
 ### mMac's Settings files
 

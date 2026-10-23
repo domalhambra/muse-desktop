@@ -116,9 +116,9 @@ public enum SlashKeyAction: Equatable, Sendable {
   case submit
 }
 
-/// The ten composer commands, in Electron's menu order (src/renderer/src/commands.ts).
+/// The eleven composer commands, in Electron's menu order (src/renderer/src/commands.ts).
 public enum ComposerCommand: String, CaseIterable, Sendable, Identifiable {
-  case clear, new, voice, model, effort, compact, rename, stop, settings, help
+  case clear, new, voice, model, effort, compact, rename, stop, settings, help, btw
 
   public var id: String { rawValue }
   public var name: String { rawValue }
@@ -135,6 +135,7 @@ public enum ComposerCommand: String, CaseIterable, Sendable, Identifiable {
     case .stop: "Stop Muse\u{2019}s active turn"
     case .settings: "Open desktop settings"
     case .help: "Open the guide and CLI compatibility information"
+    case .btw: "Ask a side question that leaves this conversation untouched"
     }
   }
 
@@ -194,6 +195,40 @@ public enum ComposerCommand: String, CaseIterable, Sendable, Identifiable {
     case "a"..."z", "A"..."Z", "-": true
     default: false
     }
+  }
+}
+
+/// Muse's four approval modes, in the SDK's order (`ApprovalMode` in msp.d.ts). Closed: a client
+/// selects one; it never defines one. The labels are Muse's own names as words, by Dom's decision.
+public enum ApprovalMode: String, CaseIterable, Sendable, Identifiable {
+  case allowAll, promptUnmatched, onRequest, denyUnmatched
+
+  public var id: String { rawValue }
+
+  public var label: String {
+    switch self {
+    case .allowAll: "Allow all"
+    case .promptUnmatched: "Prompt unmatched"
+    case .onRequest: "On request"
+    case .denyUnmatched: "Deny unmatched"
+    }
+  }
+
+  /// The label for a raw mode name. A mode this list does not know shows as its name.
+  public static func label(for rawValue: String) -> String {
+    ApprovalMode(rawValue: rawValue)?.label ?? rawValue
+  }
+}
+
+/// The composer's `!` escape, as the Muse TUI's: a draft whose first non-whitespace character is
+/// `!` runs the rest as a shell command in the conversation's folder, through `session/userShell`.
+public enum ShellRule {
+  /// The command, trimmed, or nil when the draft is not a shell command or the command is empty.
+  public static func command(in draft: String) -> String? {
+    let text = JSWhitespace.trim(draft)
+    guard text.first == "!" else { return nil }
+    let command = JSWhitespace.trim(String(text.dropFirst()))
+    return command.isEmpty ? nil : command
   }
 }
 

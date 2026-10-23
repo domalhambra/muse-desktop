@@ -311,3 +311,101 @@ let reviewDiff = [
   #expect(ChangeLabel.counted("Changes", 0) == "Changes")
   #expect(ChangeLabel.counted("Changes", 3) == "Changes 3")
 }
+
+@Test func activityNamesAShellByItsCommand() {
+  let rows = ActivityEntry.build([
+    TranscriptItem(itemId: "sh", kind: "userShell", status: "completed", commandText: "npm test")
+  ])
+  #expect(rows.map(\.title) == ["Shell"])
+  #expect(rows.map(\.detail) == ["npm test"])
+}
+
+@Test func contextPercentNeedsAWindowAndCapsAt100() {
+  #expect(ContextGauge.percent(ContextUsage(used: 4200, window: 10000, pressure: "normal")) == 42)
+  #expect(ContextGauge.percent(ContextUsage(used: 12000, window: 10000, pressure: "blocked")) == 100)
+  #expect(ContextGauge.percent(ContextUsage(used: 4200, pressure: "normal")) == nil)
+  #expect(ContextGauge.percent(ContextUsage(used: 1, window: 0, pressure: "normal")) == nil)
+  #expect(ContextGauge.label(ContextUsage(used: 4200, window: 10000, pressure: "normal")) == "Context 42%")
+  #expect(ContextGauge.label(ContextUsage(used: 4200, pressure: "normal")) == "Context 4,200 tokens")
+}
+
+@Test func pressureTintsWarningAndBlocked() {
+  #expect(ContextGauge.tint(ContextUsage(used: 1, pressure: "normal")) == .normal)
+  #expect(ContextGauge.tint(ContextUsage(used: 1, pressure: "warning")) == .warning)
+  #expect(ContextGauge.tint(ContextUsage(used: 1, pressure: "blocked")) == .blocked)
+  #expect(ContextGauge.tint(ContextUsage(used: 1, pressure: "later")) == .normal)
+}
+
+@Test func theChangesBadgeSumsPatchesAndSkipsRetractedItems() {
+  let patched = TranscriptItem(
+    itemId: "a", kind: "toolCall", status: "completed", patchSummary: .init(added: 12, removed: 1, files: 1))
+  let gone = TranscriptItem(
+    itemId: "b", kind: "toolCall", status: "completed", retracted: true,
+    patchSummary: .init(added: 5, removed: 5, files: 1))
+  let more = TranscriptItem(
+    itemId: "c", kind: "toolCall", status: "completed", patchSummary: .init(added: 0, removed: 2, files: 1))
+  #expect(ChangesBadge.text([patched, gone, more]) == "+12 \u{2212}3")
+  #expect(ChangesBadge.text([TranscriptItem(itemId: "d", kind: "agentMessage", status: "completed")]) == nil)
+}
+
+@Test func todoRowsNumberFromZeroAndShowTheActiveForm() {
+  let rows = TodoRow.build([
+    TodoItem(text: "Clean the build folder", status: "inProgress", activeForm: "Cleaning the build folder"),
+    TodoItem(text: "Run the tests", status: "pending"),
+  ])
+  #expect(rows.map(\.id) == [0, 1])
+  #expect(rows.map(\.title) == ["Cleaning the build folder", "Run the tests"])
+  #expect(TodoRow.build(nil).isEmpty)
+}
+
+@Test func relativePathsAndFilenamesFollowTheProjectRoot() {
+  #expect(FileMenuRules.absolute("src/app.swift", in: "/p").path == "/p/src/app.swift")
+  #expect(FileMenuRules.fileName("src/app.swift") == "app.swift")
+  #expect(FileMenuRules.fileName("notes.md") == "notes.md")
+}
+
+@Test func editorsDropFinderAndMMacAndKeepTheOrder() {
+  let apps = [
+    EditorApp(name: "Finder", bundleId: "com.apple.finder", url: URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app")),
+    EditorApp(name: "Visual Studio Code", bundleId: "com.microsoft.VSCode", url: URL(fileURLWithPath: "/Applications/Visual Studio Code.app")),
+    EditorApp(name: "mMac", bundleId: "com.domalhambra.mmac", url: URL(fileURLWithPath: "/Applications/mMac.app")),
+    EditorApp(name: "Zed", bundleId: "dev.zed.Zed", url: URL(fileURLWithPath: "/Applications/Zed.app")),
+    EditorApp(name: "Visual Studio Code", bundleId: "com.microsoft.VSCode", url: URL(fileURLWithPath: "/Users/x/Applications/Visual Studio Code.app")),
+  ]
+  #expect(FileMenuRules.editors(apps).map(\.name) == ["Visual Studio Code", "Zed"])
+}
+
+@Test func agentRowsTakeSubagentItemsWithStatusDurationAndTokens() {
+  let items = [
+    TranscriptItem(
+      itemId: "sub", kind: "subagent", status: "completed", objective: "Count the files", durationMs: 1500,
+      controlStatus: "closed", usage: .init(inputTokens: 100, outputTokens: 20)),
+    TranscriptItem(itemId: "sub2", kind: "subagent", status: "inProgress", label: "Explorer"),
+    TranscriptItem(itemId: "gone", kind: "subagent", status: "completed", retracted: true),
+    TranscriptItem(itemId: "tool", kind: "toolCall", status: "completed", tool: "shell"),
+  ]
+  let rows = AgentRow.build(items)
+  #expect(rows.map(\.id) == ["sub", "sub2"])
+  #expect(rows[0].title == "Count the files")
+  #expect(rows[0].status == "closed")
+  #expect(rows[0].detail == "1.5s · 120 tokens")
+  #expect(rows[1].title == "Explorer")
+  #expect(rows[1].status == "inProgress")
+  #expect(rows[1].detail == "")
+}
+
+@Test func previewURLsGetASchemeAndKeepTheirPort() {
+  #expect(PreviewRules.url(from: "localhost:4321")?.absoluteString == "http://localhost:4321")
+  #expect(PreviewRules.url(from: " 127.0.0.1:8080/docs ")?.absoluteString == "http://127.0.0.1:8080/docs")
+  #expect(PreviewRules.url(from: "https://www.plateworks.org/")?.absoluteString == "https://www.plateworks.org/")
+  #expect(PreviewRules.url(from: "file:///tmp/page.html")?.absoluteString == "file:///tmp/page.html")
+  #expect(PreviewRules.url(from: "") == nil)
+  #expect(PreviewRules.url(from: "ftp://x.test") == nil)
+  #expect(PreviewRules.url(from: "http://") == nil)
+}
+
+@Test func theLastURLIsKeptPerProject() {
+  #expect(PreviewRules.key(for: "/p") == "preview-url:/p")
+  #expect(PreviewRules.key(for: "/p") != PreviewRules.key(for: "/q"))
+  #expect(Inspector.Tab.allCases.last == .preview)
+}

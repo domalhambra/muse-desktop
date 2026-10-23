@@ -58,6 +58,7 @@ const session = {
   modelId: 'fake-one',
   name: 'Fake conversation',
   turnCount: 1,
+  approvalMode: { mode: 'promptUnmatched' },
 }
 // Two more conversations, with no cards, for the restart test.
 const others = [
@@ -69,6 +70,19 @@ const others = [
     { itemId: `${sessionId}-a1`, kind: 'agentMessage', revision: 1, status: 'completed', text },
   ],
 }))
+// The side session a side chat opens. Never in the sessions list.
+const side = {
+  session: { ...session, sessionId: 'fake-side', kind: 'sideChat', name: 'Side of fake' },
+  items: [
+    {
+      itemId: 'side-a1',
+      kind: 'agentMessage',
+      revision: 1,
+      status: 'completed',
+      text: 'The side says hello.',
+    },
+  ],
+}
 const preferences = {
   theme: 'muse',
   cliPath: '',
@@ -179,6 +193,26 @@ const items = [
     label: 'Format on save',
     statusLine: 'Ran prettier',
   },
+  {
+    itemId: 't1',
+    kind: 'toolCall',
+    revision: 1,
+    status: 'completed',
+    tool: 'edit',
+    statusLine: 'Edited app.swift',
+    patchSummary: { added: 12, removed: 1, files: 1 },
+  },
+  {
+    itemId: 'sub1',
+    kind: 'subagent',
+    revision: 1,
+    status: 'completed',
+    objective: 'Count the files',
+    childSessionId: 'fake-2',
+    durationMs: 1500,
+    controlStatus: 'closed',
+    usage: { inputTokens: 100, outputTokens: 20, cachedTokens: 0 },
+  },
 ]
 // The inspector's fixtures: one modified file with one hunk, one untracked file, one Muse worktree.
 const changes = [
@@ -237,10 +271,25 @@ let questions = [
   },
 ]
 const view = (sessionId = 'fake-1') => {
+  if (sessionId === 'fake-side') return { ...side, approvals: [], questions: [] }
   const other = others.find((entry) => entry.session.sessionId === sessionId)
   return other
     ? { ...other, approvals: [], questions: [] }
-    : { session, items, approvals, questions }
+    : {
+        session,
+        items,
+        approvals,
+        questions,
+        context: { used: 4200, window: 10000, pressure: 'normal' },
+        todos: [
+          {
+            text: 'Clean the build folder',
+            status: 'inProgress',
+            activeForm: 'Cleaning the build folder',
+          },
+          { text: 'Run the tests', status: 'pending' },
+        ],
+      }
 }
 // Sends the changed first conversation shortly after a reply, as MuseHost does.
 const update = () => setTimeout(() => write({ event: { type: 'session', view: view() } }), 50)
@@ -323,9 +372,9 @@ const m4aMethods = {
 const methods = {
   // As backend.ts does: a client that speaks another protocol gets an error reply.
   hello: (theirs) => {
-    if (theirs !== 1)
-      throw new Error(`mMac speaks backend protocol ${theirs}, but the fake speaks 1.`)
-    return { protocol: 1, version: 'fake' }
+    if (theirs !== 2)
+      throw new Error(`mMac speaks backend protocol ${theirs}, but the fake speaks 2.`)
+    return { protocol: 2, version: 'fake' }
   },
   start: (options) => {
     bridgeToken = options?.bridgeToken ?? ''
@@ -360,6 +409,26 @@ const methods = {
   'set-model': (_, modelId) => {
     session.modelId = modelId
     update()
+  },
+  'set-approval-mode': (_, mode) => {
+    session.approvalMode = { mode }
+    update()
+    return mode
+  },
+  'side-chat': () => view('fake-side'),
+  shell: (_, command) => {
+    items.push({
+      itemId: `sh-${items.length}`,
+      kind: 'userShell',
+      revision: 1,
+      status: 'completed',
+      commandText: command,
+      visibleOutput: 'hi\n',
+      exitCode: 0,
+      durationMs: 12,
+    })
+    update()
+    return null
   },
   approve: (_, approvalId) => {
     approvals = approvals.filter((entry) => entry.approvalId !== approvalId)

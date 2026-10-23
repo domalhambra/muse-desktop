@@ -31,6 +31,14 @@ export const itemSchema = z.object({
   finalSummary: z.string().optional(),
   outputRef: z.object({ id: z.string(), byteLen: z.number().optional() }).passthrough().optional(),
   patchSummary: z.object({ added: z.number(), removed: z.number(), files: z.number() }).optional(),
+  /** `userShell`: the process exit code, when it exited by code. */
+  exitCode: z.number().optional(),
+  /** `sideChat`: the side session this row stands for. */
+  sideSessionId: z.string().optional(),
+  /** `subagent`: `accepted`, `starting`, `running`, `resultReady`, `closing`, `closed` or more. */
+  controlStatus: z.string().optional(),
+  /** `subagent`: the child's observed usage, updated in place. */
+  usage: z.object({ inputTokens: z.number(), outputTokens: z.number() }).passthrough().optional(),
   result: z
     .object({ text: z.string().optional(), summary: z.string().optional() })
     .passthrough()
@@ -128,6 +136,15 @@ export const effortSchema = z.enum([
 ])
 export type ReasoningEffort = z.infer<typeof effortSchema>
 
+/** Muse's approval modes. Closed: a client selects one, it never defines one (msp.d.ts, `ApprovalMode`). */
+export const approvalModeSchema = z.enum([
+  'allowAll',
+  'promptUnmatched',
+  'onRequest',
+  'denyUnmatched',
+])
+export type ApprovalMode = z.infer<typeof approvalModeSchema>
+
 const preferenceFields = {
   theme: z.enum(['muse', 'daylight', 'moonlight', 'grove', 'plush', 'system']),
   backgroundIntensity: z.number().min(0).max(100),
@@ -170,12 +187,24 @@ export const preferencesPatchSchema = z
 export type Preferences = z.infer<typeof preferencesSchema>
 export type Theme = Exclude<Preferences['theme'], 'system'>
 
+/** `session/contextUsage`: counted-once occupancy and the host's pressure level. `window` is absent when the model has no limit. */
+export type ContextUsage = { used: number; window?: number; pressure: string }
+/** One todo of the agent's list, as `session/todoListChanged` carries it. */
+export const todoItemSchema = z.object({
+  text: z.string(),
+  status: z.string(),
+  activeForm: z.string().optional(),
+})
+export type TodoItem = z.infer<typeof todoItemSchema>
+
 export type SessionView = {
   session: MuseSession
   items: TranscriptItem[]
   approvals: Approval[]
   questions: UserQuestion[]
   usage?: { input: number; output: number; total: number }
+  context?: ContextUsage
+  todos?: TodoItem[]
   error?: string
   historyNotice?: string
 }

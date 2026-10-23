@@ -130,6 +130,29 @@ extension Workspace {
     await run { try await self.client.cancel(sessionId) }
   }
 
+  /// Runs the draft's `!` command in the open conversation's folder. Muse answers with a
+  /// `userShell` item. Success clears the draft the command was typed in; a failure keeps it.
+  public func runShell(_ command: String) async {
+    guard !submitting else { return }
+    guard let sessionId = view?.session.sessionId else {
+      errorMessage = Self.needsConversation
+      return
+    }
+    submitting = true
+    defer { submitting = false }
+    let key = draftKey
+    await run {
+      try await self.client.shell(sessionId: sessionId, command: command)
+      self.drafts[key] = nil
+    }
+  }
+
+  /// Opens the next or previous visible conversation. Nothing at either end.
+  public func openNeighbor(forward: Bool) async {
+    guard let next = SidebarSections.neighbor(of: view?.session.sessionId, in: sections, forward: forward) else { return }
+    await open(next)
+  }
+
   /// The inspector footer's Terminal: Terminal opens in the current project's folder.
   public func openProjectInTerminal() async {
     guard !project.isEmpty else { return }
@@ -177,6 +200,23 @@ extension Workspace {
     await run {
       try await self.client.setModel(sessionId: sessionId, modelId: id)
       if sequence == self.openSequence, self.view?.session.sessionId == sessionId { self.modelId = id }
+    }
+  }
+
+  /// The open conversation's approval mode, or empty with none open. Muse owns it per session.
+  public var approvalMode: String { view?.session.approvalMode?.mode ?? "" }
+
+  /// Picks an approval mode for the open conversation. Muse applies it to its next action. The
+  /// reply's effective mode shows at once, unless the person opened another conversation
+  /// meanwhile; `approvalModeChanged` events keep it current after that.
+  public func chooseApprovalMode(_ mode: String) async {
+    guard let sessionId = view?.session.sessionId else { return }
+    let sequence = openSequence
+    await run {
+      let effective = try await self.client.setApprovalMode(sessionId: sessionId, mode: mode)
+      if sequence == self.openSequence, self.view?.session.sessionId == sessionId {
+        self.view?.session.approvalMode = ApprovalModeState(mode: effective)
+      }
     }
   }
 

@@ -7,7 +7,7 @@ import Observation
 /// page in `WorkspacePages.tsx`. The Workspace owns one and points it at its current project.
 @MainActor @Observable
 public final class Inspector {
-  public enum Tab: String, CaseIterable, Sendable { case changes, files, activity }
+  public enum Tab: String, CaseIterable, Sendable { case changes, files, activity, tasks, agents, preview }
 
   /// Something that loads after a click: a diff or a file preview.
   public enum Loadable<Value: Equatable & Sendable>: Equatable, Sendable {

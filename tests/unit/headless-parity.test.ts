@@ -33,6 +33,9 @@ const expected = [
   'export',
   'models',
   'set-model',
+  'set-approval-mode',
+  'side-chat',
+  'shell',
   'preferences',
   // Approvals, questions and stored output
   'approve',
@@ -85,7 +88,7 @@ describe('the backend method list', () => {
       [...methods].sort(),
       'Register a method with a literal method(…) call, and list it in expected here',
     ).toEqual([...expected].sort())
-    expect(expected).toHaveLength(44)
+    expect(expected).toHaveLength(47)
   })
 
   it('gives every method a call in MuseBackend', () => {

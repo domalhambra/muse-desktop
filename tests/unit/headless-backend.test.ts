@@ -87,6 +87,11 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     cancelQuestion: vi.fn(async () => {}),
     readOutput: vi.fn(async () => 'stored output'),
     listWorktrees: vi.fn(async () => []),
+    setApprovalMode: vi.fn(async (_sessionId: string, mode: string) => mode),
+    sideChat: vi.fn(async (sessionId: string) =>
+      view(session({ sessionId: `${sessionId}-side`, kind: 'sideChat' })),
+    ),
+    runShell: vi.fn(async () => {}),
     configDir: () => join(dir, 'muse-config'),
     ...overrides,
   } satisfies Muse
@@ -373,6 +378,30 @@ describe('headless backend, M1 methods', () => {
     expect(asks).toHaveLength(1)
   })
 
+  it('sets the approval mode after the trust check and refuses an unknown mode', async () => {
+    const { call, muse, asks } = await trustedSession()
+    await expect(call('set-approval-mode', 's1', 'onRequest')).resolves.toBe('onRequest')
+    expect(muse.setApprovalMode).toHaveBeenCalledWith('s1', 'onRequest')
+    expect(asks).toHaveLength(1)
+    await expect(call('set-approval-mode', 's1', 'yolo')).rejects.toThrow()
+    expect(muse.setApprovalMode).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens a side chat after the trust check', async () => {
+    const { call, muse } = await trustedSession()
+    const side = (await call('side-chat', 's1')) as SessionView
+    expect(side.session.sessionId).toBe('s1-side')
+    expect(muse.sideChat).toHaveBeenCalledWith('s1')
+  })
+
+  it('runs a shell command after the trust check and refuses an empty one', async () => {
+    const { call, muse } = await trustedSession()
+    await call('shell', 's1', 'echo hi')
+    expect(muse.runShell).toHaveBeenCalledWith('s1', 'echo hi')
+    await expect(call('shell', 's1', '')).rejects.toThrow()
+    await expect(call('shell', 's1', 'x'.repeat(10001))).rejects.toThrow()
+  })
+
   it('passes an approval choice through after the trust check', async () => {
     const { call, muse } = await trustedSession()
     await call('approve', 's1', 'a1', 'c1')
@@ -398,6 +427,9 @@ describe('headless backend, M1 methods', () => {
   it.each([
     ['rename', 'rename', ['s1', 'New name']],
     ['set-model', 'setModel', ['s1', 'm1']],
+    ['set-approval-mode', 'setApprovalMode', ['s1', 'onRequest']],
+    ['side-chat', 'sideChat', ['s1']],
+    ['shell', 'runShell', ['s1', 'echo hi']],
     ['approve', 'approve', ['s1', 'a1', 'c1']],
     ['answer', 'answer', ['s1', 'u1', [{ questionId: 'q', selectedLabel: 'Yes' }]]],
     ['cancel-question', 'cancelQuestion', ['s1', 'u1']],

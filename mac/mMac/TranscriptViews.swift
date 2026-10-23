@@ -5,6 +5,7 @@ import SwiftUI
 
 /// The open conversation, as Electron's `Transcript.tsx`.
 struct TranscriptView: View {
+  let controller: AppController
   let workspace: Workspace
   let view: SessionView
   /// True while Dom is near the bottom, so new output scrolls into view.
@@ -33,7 +34,7 @@ struct TranscriptView: View {
               "Start a conversation", systemImage: "bubble.left.and.bubble.right",
               description: Text("Ask a question or describe what you want to build.").foregroundStyle(.themeSecondary))
           }
-          ForEach(entries) { entry in EntryView(entry: entry, workspace: workspace) }
+          ForEach(entries) { entry in EntryView(entry: entry, controller: controller, workspace: workspace) }
           ForEach(view.approvals) { approval in ApprovalCard(approval: approval, workspace: workspace) }
           ForEach(view.questions) { question in QuestionCard(question: question, workspace: workspace) }
           if let error = view.error { TurnErrorView(message: error) }
@@ -100,6 +101,7 @@ private struct ScrollPlace: Equatable {
 
 struct EntryView: View {
   let entry: TranscriptEntry
+  let controller: AppController
   let workspace: Workspace
 
   var body: some View {
@@ -108,6 +110,8 @@ struct EntryView: View {
     case .agent(let item): AgentMessageView(item: item)
     case .reasoning(let item): ReasoningView(item: item)
     case .tool(let item): ToolView(item: item, workspace: workspace)
+    case .shell(let item): ShellView(item: item, workspace: workspace)
+    case .sideChat(let item): SideChatRow(item: item, controller: controller, workspace: workspace)
     case .toolGroup(let items): ToolGroupView(items: items, workspace: workspace)
     }
   }
@@ -382,6 +386,64 @@ struct ToolView: View {
         Text(ToolPresentation.footer(item)).font(.caption).foregroundStyle(.themeSecondary)
       }
     }
+  }
+}
+
+/// A `!` command and its result, as the Muse TUI shows its escape hatch. Open by default: the
+/// person asked for this output.
+struct ShellView: View {
+  let item: TranscriptItem
+  let workspace: Workspace
+  @State private var expanded = true
+
+  var body: some View {
+    ExpandableRow(expanded: $expanded) {
+      HStack(spacing: 6) {
+        StatusIcon(status: item.status)
+        Image(systemName: "terminal").foregroundStyle(.themeSecondary).accessibilityHidden(true)
+        Text("$ \(item.commandText ?? "")").font(.callout.monospaced()).bold().lineLimit(1)
+      }
+    } content: {
+      VStack(alignment: .leading, spacing: 8) {
+        if let output = ToolPresentation.output(item, stored: workspace.storedOutput[item.itemId]) {
+          MonospacedBox(text: output, label: "Command output")
+        }
+        if item.outputRef != nil, workspace.storedOutput[item.itemId] == nil {
+          let loading = workspace.loadingOutput.contains(item.itemId)
+          Button(loading ? "Loading…" : "Read stored output") { Task { await workspace.readOutput(item) } }
+            .disabled(loading)
+        }
+        Text(ToolPresentation.shellFooter(item)).font(.caption).foregroundStyle(.themeSecondary)
+      }
+    }
+    .accessibilityIdentifier("shell-\(item.itemId)")
+  }
+}
+
+/// A side chat Muse recorded in the main transcript. Reopen shows it again.
+struct SideChatRow: View {
+  let item: TranscriptItem
+  let controller: AppController
+  let workspace: Workspace
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.themeSecondary).accessibilityHidden(true)
+      Text("Side chat").bold()
+      Text(ToolPresentation.summary(item) ?? "A question asked beside this conversation").foregroundStyle(.themeSecondary).lineLimit(1)
+      Spacer()
+      if let side = item.sideSessionId {
+        Button("Reopen") {
+          Task {
+            await workspace.reopenSideChat(side)
+            controller.sheets.sideChat = true
+          }
+        }
+        .controlSize(.small)
+      }
+    }
+    .font(.callout)
+    .padding(.vertical, 2)
   }
 }
 

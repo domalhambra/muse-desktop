@@ -74,6 +74,7 @@ struct FilesView: View {
             .accessibilityHint(file.directory ? "Opens this folder" : "Shows this file's preview")
             .accessibilityAddTraits(selected ? .isSelected : [])
             .listRowBackground(selected ? appearance.colors.accent.opacity(0.15) : nil)
+            .filePathMenu(file.path, directory: file.directory, workspace: workspace)
           }
           if inspector.filesError == nil, inspector.visibleFiles.isEmpty {
             Text(inspector.query.isEmpty ? "This folder is empty." : "No matching files.")
@@ -128,6 +129,7 @@ struct FilesView: View {
             .foregroundStyle(.themeSecondary)
             .accessibilityHidden(true)
           Text(path).lineLimit(1).truncationMode(.head).help(path)
+            .filePathMenu(path, workspace: workspace)
           if case .loaded(let text) = inspector.preview, !text.isEmpty {
             Text("\(FilePreview.lineCount(text)) lines").font(.caption).foregroundStyle(.themeSecondary)
           }

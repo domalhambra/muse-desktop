@@ -9,14 +9,14 @@ private let viewJSON = #"""
 
 @Test func helloSendsTheProtocolNumber() async throws {
   let backend = ScriptedBackend { message in
-    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#] : []
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#] : []
   }
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
   let hello = try await client.hello()
-  #expect(hello.protocolVersion == 1)
+  #expect(hello.protocolVersion == 2)
   #expect(hello.version == "0.2.0")
-  #expect(backend.messages == [["id": 1, "method": "hello", "args": [1]]])
+  #expect(backend.messages == [["id": 1, "method": "hello", "args": [2]]])
 }
 
 @Test func aFailedReplyThrowsTheBackendMessage() async throws {
@@ -342,7 +342,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
     guard case .number(let number)? = message["id"] else { return [] }
     let id = Int(number)
     switch message["method"] {
-    case "hello": return [#"{"id":\#(id),"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#]
+    case "hello": return [#"{"id":\#(id),"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#]
     case "start": return [#"{"id":\#(id),"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#]
     default: return []
     }
@@ -354,7 +354,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
     startTimeout: .seconds(10))
   #expect(started.status.state == "ready")
   let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
-  #expect(sent == [["hello", [1]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
+  #expect(sent == [["hello", [2]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
 }
 
 @Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersHelloFailsTheHandshake() async throws {
@@ -372,7 +372,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
 
 @Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersStartFailsTheHandshake() async throws {
   let backend = ScriptedBackend { message in
-    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#] : []
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#] : []
   }
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
@@ -395,7 +395,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
 @Test(.timeLimit(.minutes(1))) func startHasItsOwnLimitAfterHello() async throws {
   // hello answers at once; start answers after hello's limit has passed but within its own.
   let backend = ScriptedBackend { message in
-    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":1,"version":"0.2.0"}}"#] : []
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#] : []
   }
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
@@ -425,4 +425,19 @@ private func waitFor(_ condition: () -> Bool) async throws {
   backend.push(#"{"id":1,"ok":true,"value":"stale"}"#)
   #expect(try await client.request("sessions") == "fresh")
   #expect(backend.messages.map { $0["method"] } == ["hello", "sessions"])
+}
+
+@Test func theM5aFieldsDecodeAndStayOptional() throws {
+  let json = #"""
+    {"session":{"sessionId":"s1","workspaceRoot":"/p","status":"idle","updatedAt":"2026-10-23T00:00:00Z","createdAt":"2026-10-23T00:00:00Z","activeTurnId":null,"modelId":null,"turnCount":1,"approvalMode":{"mode":"onRequest","source":"startup"}},"items":[{"itemId":"sh","kind":"userShell","revision":1,"status":"completed","commandText":"echo hi","visibleOutput":"hi\n","exitCode":0,"durationMs":12},{"itemId":"sub","kind":"subagent","revision":1,"status":"completed","objective":"Count","controlStatus":"closed","usage":{"inputTokens":100,"outputTokens":20,"cachedTokens":0}},{"itemId":"side","kind":"sideChat","revision":1,"status":"completed","sideSessionId":"side-1"}],"approvals":[],"questions":[],"context":{"used":4200,"window":10000,"pressure":"normal"},"todos":[{"text":"Run the tests","status":"pending"}]}
+    """#
+  let view = try JSONDecoder().decode(SessionView.self, from: Data(json.utf8))
+  #expect(view.session.approvalMode?.mode == "onRequest")
+  #expect(view.items[0].exitCode == 0)
+  #expect(view.items[1].usage == TranscriptItem.ItemUsage(inputTokens: 100, outputTokens: 20))
+  #expect(view.items[2].sideSessionId == "side-1")
+  #expect(view.context == ContextUsage(used: 4200, window: 10000, pressure: "normal"))
+  #expect(view.todos == [TodoItem(text: "Run the tests", status: "pending")])
+  let old = try JSONDecoder().decode(SessionView.self, from: Data(viewJSON.utf8))
+  #expect(old.context == nil && old.todos == nil && old.session.approvalMode == nil)
 }
