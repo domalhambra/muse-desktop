@@ -4,7 +4,7 @@ Chartered 2026-10-20.
 
 ## What it is
 
-Dom's fork of robzilla1738's Muse Desktop, the unofficial Electron app for Meta's Muse Code CLI. The fork adds four things upstream lacks: diff review in the inspector, conversations in Muse-created worktrees, an MCP servers tab, and two bridges that let another agent, such as the Muse app, ask Muse Code to work. It also holds mMac, a native SwiftUI app in `mac/` over the same core. mMac's M0 and M1 were built on 2026-10-21. It sits in `40-49 Outside Work` and is not a Plateworks property.
+Dom's fork of robzilla1738's Muse Desktop, the unofficial Electron app for Meta's Muse Code CLI. The fork adds four things upstream lacks: diff review in the inspector, conversations in Muse-created worktrees, an MCP servers tab, and two bridges that let another agent, such as the Muse app, ask Muse Code to work. Its app is now mMac, a native SwiftUI app in `mac/` over the same core. mMac's M0 to M4a were built between 2026-10-21 and 2026-10-23, and M4a removed Electron's shell. `main` still mirrors upstream. It sits in `40-49 Outside Work` and is not a Plateworks property.
 
 ## Why
 
@@ -15,9 +15,9 @@ Dom wants to run Muse Desktop on his Mac and keep adding features to it. The ext
 - **v1, for Dom:** the four extensions run on his Mac against a real model, from the checkout. Every gate command passes on macOS. Dom has seen each feature work.
 - **Later, only if it earns it:** a packaged build with its own app ID, signing identity and update feed. Or PRs upstream, one feature at a time, if robzilla1738 wants them.
 
-## Status (2026-10-21)
+## Status (2026-10-23)
 
-The extensions are on `extensions`, draft PR 1. Every gate command in `docs/changing-things.md` ("Prove a change") passes on macOS 27.2 with Muse Code 1.4.11 and the echo provider. mMac M0, the headless backend and a bare window, is on `mac-app`. mMac M1, the core loop, is built on `mac-m1`, with its PR into `extensions` pending. A real model, approvals and the Muse app's reach to the MCP bridge are not verified yet.
+mMac M0 to M3 are merged into `extensions`. M4a, the last features, is built on `mac-m4a`, with its PR into `extensions` for Dom to merge. Every parity item has passing automated tests, and Electron's shell is removed. M4b, the UI tests and the live isolated run, is next. A real model, approvals and the Muse app's reach to the MCP bridge are not verified yet.
 
 ## Boundaries
 

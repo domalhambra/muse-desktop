@@ -1,6 +1,6 @@
 # mMac M4a: design
 
-Status: approved. Designed with Dom on 2026-10-22, one section at a time. Dom approved each section. It extends `docs/superpowers/specs/2026-10-21-mac-app-design.md`, which stays the source for the architecture, the messages and the parity checklist.
+Status: approved. Designed with Dom on 2026-10-22, one section at a time. Dom approved each section. It extends `docs/superpowers/specs/2026-10-21-mac-app-design.md`, which stays the source for the architecture, the messages and the parity checklist. Built on 2026-10-23 on the `mac-m4a` branch: see the Status in `docs/superpowers/plans/2026-10-22-mmac-m4a.md`.
 
 ## Goal
 
