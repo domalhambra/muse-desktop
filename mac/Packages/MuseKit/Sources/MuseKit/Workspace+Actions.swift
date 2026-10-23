@@ -147,6 +147,12 @@ extension Workspace {
     }
   }
 
+  /// Opens the next or previous visible conversation. Nothing at either end.
+  public func openNeighbor(forward: Bool) async {
+    guard let next = SidebarSections.neighbor(of: view?.session.sessionId, in: sections, forward: forward) else { return }
+    await open(next)
+  }
+
   /// The inspector footer's Terminal: Terminal opens in the current project's folder.
   public func openProjectInTerminal() async {
     guard !project.isEmpty else { return }

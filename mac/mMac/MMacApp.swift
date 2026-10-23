@@ -74,6 +74,11 @@ struct MMacApp: App {
         CommandMenuCommand(controller: delegate.controller)
         InspectorCommand()
         SideChatCommand(controller: delegate.controller)
+        ConversationCommands(controller: delegate.controller)
+        PickerCommands(controller: delegate.controller)
+      }
+      CommandGroup(replacing: .help) {
+        HelpCommand(controller: delegate.controller)
       }
       // Edit › Voice Input, then Edit › Find, for the find bars of the file preview and of stored output.
       CommandGroup(after: .textEditing) {
@@ -247,5 +252,51 @@ private struct SideChatCommand: View {
     }
     .keyboardShortcut(";")
     .disabled(controller.workspace?.view == nil || controller.sheets.anyShown)
+  }
+}
+
+/// View › Next and Previous Conversation (⌘⇧] and ⌘⇧[), as Desktop's session cycling. One shortcut
+/// per item: Ctrl+Tab is left to the system.
+private struct ConversationCommands: View {
+  let controller: AppController
+
+  var body: some View {
+    Button("Next Conversation") { Task { await controller.workspace?.openNeighbor(forward: true) } }
+      .keyboardShortcut("]", modifiers: [.command, .shift])
+      .disabled(controller.workspace == nil)
+    Button("Previous Conversation") { Task { await controller.workspace?.openNeighbor(forward: false) } }
+      .keyboardShortcut("[", modifiers: [.command, .shift])
+      .disabled(controller.workspace == nil)
+  }
+}
+
+/// View › Model…, Reasoning Effort… and Mode… (⌘⇧I, ⌘⇧E, ⌘⇧M): open the composer's pickers.
+private struct PickerCommands: View {
+  let controller: AppController
+
+  var body: some View {
+    Button("Model…") { PickerOpener.open("model-picker") }
+      .keyboardShortcut("i", modifiers: [.command, .shift])
+      .disabled(controller.workspace == nil)
+    Button("Reasoning Effort…") { PickerOpener.open("effort-picker") }
+      .keyboardShortcut("e", modifiers: [.command, .shift])
+      .disabled(controller.workspace == nil)
+    Button("Mode…") { PickerOpener.open("mode-picker") }
+      .keyboardShortcut("m", modifiers: [.command, .shift])
+      .disabled(controller.workspace?.view == nil)
+  }
+}
+
+/// Help › Keyboard Shortcuts (⌘/): the Help sheet, which /help opens too.
+private struct HelpCommand: View {
+  let controller: AppController
+
+  var body: some View {
+    Button("Keyboard Shortcuts") {
+      controller.showMainWindow()
+      controller.sheets.help = true
+    }
+    .keyboardShortcut("/")
+    .disabled(controller.workspace == nil || controller.sheets.anyShown)
   }
 }

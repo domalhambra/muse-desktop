@@ -624,3 +624,25 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(workspace.errorMessage == "Muse is not connected. Reconnect in Settings.")
   #expect(workspace.draft == "!false")
 }
+
+@MainActor @Test func openNeighborOpensTheNextVisibleRow() async throws {
+  let (workspace, _) = await makeWorkspace { method, args, id in
+    switch method {
+    case "sessions":
+      return [reply(id, #"{"sessions":[\#(sessionJSON("s1", updatedAt: "2026-10-23T11:00:00Z")),\#(sessionJSON("s2", updatedAt: "2026-10-23T10:00:00Z"))],"nextCursor":null}"#)]
+    case "open":
+      guard case .string(let sessionId)? = args.first else { return [] }
+      return [reply(id, viewJSON(sessionJSON(sessionId)))]
+    default: return []
+    }
+  }
+  await workspace.refreshSessions()
+  await workspace.openNeighbor(forward: true)
+  #expect(workspace.view?.session.sessionId == "s1")
+  await workspace.openNeighbor(forward: true)
+  #expect(workspace.view?.session.sessionId == "s2")
+  await workspace.openNeighbor(forward: true)
+  #expect(workspace.view?.session.sessionId == "s2")
+  await workspace.openNeighbor(forward: false)
+  #expect(workspace.view?.session.sessionId == "s1")
+}

@@ -139,3 +139,22 @@ private func session(_ id: String, root: String? = "/p", hoursAgo: Double, kind:
   #expect(sections.flatMap(\.sessions).map(\.sessionId) == ["m"])
   #expect(SidebarSections.hiddenKinds == ["subagent", "reminder", "sideChat"])
 }
+
+@Test func nextAndPreviousFollowTheVisibleOrderAndStopAtTheEnds() {
+  let sections = [
+    SidebarSection(title: "Pinned", sessions: [Session(sessionId: "p", updatedAt: "2026-10-23T12:00:00Z")]),
+    SidebarSection(
+      title: "Today",
+      sessions: [
+        Session(sessionId: "a", updatedAt: "2026-10-23T11:00:00Z"), Session(sessionId: "b", updatedAt: "2026-10-23T10:00:00Z"),
+      ]),
+  ]
+  #expect(SidebarSections.neighbor(of: "p", in: sections, forward: true) == "a")
+  #expect(SidebarSections.neighbor(of: "a", in: sections, forward: true) == "b")
+  #expect(SidebarSections.neighbor(of: "b", in: sections, forward: true) == nil)
+  #expect(SidebarSections.neighbor(of: "a", in: sections, forward: false) == "p")
+  #expect(SidebarSections.neighbor(of: "p", in: sections, forward: false) == nil)
+  #expect(SidebarSections.neighbor(of: nil, in: sections, forward: true) == "p")
+  #expect(SidebarSections.neighbor(of: "gone", in: sections, forward: false) == "p")
+  #expect(SidebarSections.neighbor(of: "a", in: [], forward: true) == nil)
+}

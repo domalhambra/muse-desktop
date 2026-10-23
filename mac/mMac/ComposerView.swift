@@ -223,6 +223,13 @@ struct ComposerView: View {
   private func popupKey(_ key: SlashKey) -> Bool {
     guard showsPopups else { return false }
     let draft = workspace.draft
+    // Escape with no popup open stops a running turn, as Desktop's Esc does.
+    if key == .escape, ComposerCommand.menu(for: draft).isEmpty, (mentionMenu?.rows(for: draft) ?? []).isEmpty,
+      workspace.isRunning
+    {
+      Task { await workspace.stop() }
+      return true
+    }
     if !ComposerCommand.menu(for: draft).isEmpty {
       switch ComposerCommand.slashKeyAction(key, draft: draft, index: commandIndex) {
       case .pass, .submit: return false

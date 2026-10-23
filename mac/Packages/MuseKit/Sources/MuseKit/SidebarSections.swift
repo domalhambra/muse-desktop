@@ -128,6 +128,16 @@ public enum SidebarSections {
     return sections
   }
 
+  /// The row after or before `sessionId` in the visible order, across sections, as ⌘⇧] and ⌘⇧[
+  /// move. Nil at either end, or with no rows. The first row when `sessionId` is nil or not shown.
+  public static func neighbor(of sessionId: String?, in sections: [SidebarSection], forward: Bool) -> String? {
+    let ids = sections.flatMap { $0.sessions.map(\.sessionId) }
+    guard !ids.isEmpty else { return nil }
+    guard let sessionId, let index = ids.firstIndex(of: sessionId) else { return ids.first }
+    let next = forward ? index + 1 : index - 1
+    return ids.indices.contains(next) ? ids[next] : nil
+  }
+
   /// `lastActivityAt || updatedAt`: the time a row sorts, groups and shows by.
   public static func activity(_ session: Session) -> String {
     ToolPresentation.first(session.lastActivityAt) ?? session.updatedAt
