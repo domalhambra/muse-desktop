@@ -235,6 +235,35 @@ private let viewJSON = #"""
   ])
 }
 
+@Test(.timeLimit(.minutes(1))) func attachmentCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "attachments":
+      return [#"{"id":\#(id),"ok":true,"value":[{"id":"a1","name":"shot.png","kind":"image","size":2048}]}"#]
+    default:
+      return [#"{"id":\#(id),"ok":true,"value":null}"#]
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let chosen = try await client.attachments([
+    URL(fileURLWithPath: "/p/shot.png"), URL(fileURLWithPath: "/p/notes.md"),
+  ])
+  #expect(chosen == [Attachment(id: "a1", name: "shot.png", kind: "image", size: 2048)])
+  try await client.removeAttachment("a1")
+  try await client.send(sessionId: "s1", text: "", effort: "low", mode: .steer, attachments: ["a1", "a2"])
+  try await client.send(sessionId: "s1", text: "hi")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [
+    ["attachments", [["/p/shot.png", "/p/notes.md"]]],
+    ["remove-attachment", ["a1"]],
+    ["send", [["sessionId": "s1", "text": "", "attachments": ["a1", "a2"], "effort": "low", "mode": "steer"]]],
+    ["send", [["sessionId": "s1", "text": "hi", "attachments": [], "effort": "high", "mode": "queue"]]],
+  ])
+}
+
 /// Polls `condition` until it holds. The test's time limit ends a wait that never does.
 private func waitFor(_ condition: () -> Bool) async throws {
   while !condition() { try await Task.sleep(for: .milliseconds(5)) }

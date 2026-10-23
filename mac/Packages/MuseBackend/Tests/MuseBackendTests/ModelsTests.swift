@@ -265,3 +265,10 @@ let fullViewJSON = #"""
   let result = try JSONDecoder().decode(CompactResult.self, from: Data(#"{"status":"noop"}"#.utf8))
   #expect(result == CompactResult(status: "noop"))
 }
+
+@Test func attachmentRoundTrips() throws {
+  let json = #"{"id":"a1","name":"shot.png","kind":"image","size":2048}"#
+  let attachment = try JSONDecoder().decode(Attachment.self, from: Data(json.utf8))
+  #expect(attachment == Attachment(id: "a1", name: "shot.png", kind: "image", size: 2048))
+  #expect(try JSONDecoder().decode(Attachment.self, from: JSONEncoder().encode(attachment)) == attachment)
+}

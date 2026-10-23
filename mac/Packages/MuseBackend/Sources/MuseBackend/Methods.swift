@@ -58,15 +58,30 @@ extension BackendClient {
     try await call("open", [.string(sessionId)])
   }
 
+  /// Sends a message. `attachments` holds up to five ids from `attachments(_:)`; the backend
+  /// forgets them only when Muse accepts the message, so a failed send can be tried again.
   public func send(
-    sessionId: String, text: String, effort: String = "high", mode: SendMode = .queue
+    sessionId: String, text: String, effort: String = "high", mode: SendMode = .queue,
+    attachments: [String] = []
   ) async throws {
     _ = try await request("send", [
       [
-        "sessionId": .string(sessionId), "text": .string(text), "attachments": [],
+        "sessionId": .string(sessionId), "text": .string(text),
+        "attachments": .array(attachments.map { .string($0) }),
         "effort": .string(effort), "mode": .string(mode.rawValue),
       ]
     ])
+  }
+
+  /// Registers files chosen in mMac's panel, at most five. The backend checks each one and
+  /// keeps its path.
+  public func attachments(_ urls: [URL]) async throws -> [Attachment] {
+    try await call("attachments", [.array(urls.map { .string($0.path) })])
+  }
+
+  /// Forgets an attachment mMac no longer shows.
+  public func removeAttachment(_ id: String) async throws {
+    _ = try await request("remove-attachment", [.string(id)])
   }
 
   public func cancel(_ sessionId: String) async throws {

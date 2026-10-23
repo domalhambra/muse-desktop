@@ -614,6 +614,23 @@ public struct CompactResult: Codable, Equatable, Sendable {
   }
 }
 
+/// A file chosen for the next message. The backend keeps its path; mMac sends the id with `send`.
+public struct Attachment: Codable, Equatable, Sendable, Identifiable {
+  public let id: String
+  public let name: String
+  /// `image` or `text`, from the file's extension.
+  public let kind: String
+  /// In bytes.
+  public let size: Int
+
+  public init(id: String, name: String, kind: String, size: Int) {
+    self.id = id
+    self.name = name
+    self.kind = kind
+    self.size = size
+  }
+}
+
 // Settings: MCP servers and the bridges, from src/shared/protocol.ts.
 
 /// An MCP server from Muse's settings.json. Secret values never leave the backend.
