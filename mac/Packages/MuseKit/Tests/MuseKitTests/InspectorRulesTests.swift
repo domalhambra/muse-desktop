@@ -356,7 +356,6 @@ let reviewDiff = [
   #expect(rows.map(\.id) == [0, 1])
   #expect(rows.map(\.title) == ["Cleaning the build folder", "Run the tests"])
   #expect(TodoRow.build(nil).isEmpty)
-  #expect(Inspector.Tab.allCases == [.changes, .files, .activity, .tasks])
 }
 
 @Test func relativePathsAndFilenamesFollowTheProjectRoot() {
@@ -374,4 +373,24 @@ let reviewDiff = [
     EditorApp(name: "Visual Studio Code", bundleId: "com.microsoft.VSCode", url: URL(fileURLWithPath: "/Users/x/Applications/Visual Studio Code.app")),
   ]
   #expect(FileMenuRules.editors(apps).map(\.name) == ["Visual Studio Code", "Zed"])
+}
+
+@Test func agentRowsTakeSubagentItemsWithStatusDurationAndTokens() {
+  let items = [
+    TranscriptItem(
+      itemId: "sub", kind: "subagent", status: "completed", objective: "Count the files", durationMs: 1500,
+      controlStatus: "closed", usage: .init(inputTokens: 100, outputTokens: 20)),
+    TranscriptItem(itemId: "sub2", kind: "subagent", status: "inProgress", label: "Explorer"),
+    TranscriptItem(itemId: "gone", kind: "subagent", status: "completed", retracted: true),
+    TranscriptItem(itemId: "tool", kind: "toolCall", status: "completed", tool: "shell"),
+  ]
+  let rows = AgentRow.build(items)
+  #expect(rows.map(\.id) == ["sub", "sub2"])
+  #expect(rows[0].title == "Count the files")
+  #expect(rows[0].status == "closed")
+  #expect(rows[0].detail == "1.5s · 120 tokens")
+  #expect(rows[1].title == "Explorer")
+  #expect(rows[1].status == "inProgress")
+  #expect(rows[1].detail == "")
+  #expect(Inspector.Tab.allCases == [.changes, .files, .activity, .tasks, .agents])
 }

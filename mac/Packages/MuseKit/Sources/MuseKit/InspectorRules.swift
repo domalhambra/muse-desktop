@@ -399,6 +399,43 @@ public enum FileMenuRules {
   }
 }
 
+/// One row of the Agents tab: a subagent the open conversation ran, as Desktop's tasks pane lists them.
+public struct AgentRow: Equatable, Sendable, Identifiable {
+  public let id: String
+  public let title: String
+  /// `controlStatus` when Muse gives one (`accepted`, `starting`, `running`, `resultReady`,
+  /// `closing`, `closed`), else the item's status.
+  public let status: String
+  /// Duration and tokens, joined with " · ". Empty when the item has neither.
+  public let detail: String
+  public let childSessionId: String?
+
+  public static func build(_ items: [TranscriptItem]) -> [AgentRow] {
+    items.filter { $0.kind == "subagent" && $0.retracted != true }.map { item in
+      var parts: [String] = []
+      if let duration = item.durationMs { parts.append("\(ToolPresentation.fixed1(duration / 1000))s") }
+      if let usage = item.usage { parts.append("\((usage.inputTokens + usage.outputTokens).formatted()) tokens") }
+      return AgentRow(
+        id: item.itemId,
+        title: ToolPresentation.first(item.objective, item.label, item.role) ?? "Subagent",
+        status: ToolPresentation.first(item.controlStatus) ?? item.status,
+        detail: parts.joined(separator: " · "),
+        childSessionId: item.childSessionId)
+    }
+  }
+
+  /// Whether the row's status means running, done, or neither, for the icon.
+  public var phase: Phase {
+    switch status {
+    case "accepted", "starting", "running", "inProgress": .running
+    case "closed", "resultReady", "completed": .done
+    default: .other
+    }
+  }
+
+  public enum Phase: Equatable, Sendable { case running, done, other }
+}
+
 /// One row of the Activity tab, as Electron's `activityTitle` and the detail line in `Inspector.tsx`.
 public struct ActivityEntry: Equatable, Sendable, Identifiable {
   public let id: String

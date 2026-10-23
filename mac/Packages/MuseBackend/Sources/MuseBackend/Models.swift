@@ -158,6 +158,7 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
   public let sideSessionId: String?
   public let controlStatus: String?
   public let usage: ItemUsage?
+  public let childSessionId: String?
   public var id: String { itemId }
 
   public init(
@@ -170,7 +171,7 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     durationMs: Double? = nil, truncated: Bool? = nil, retracted: Bool? = nil,
     blocking: Bool? = nil, outputRef: OutputRef? = nil, patchSummary: PatchSummary? = nil,
     result: ToolResult? = nil, exitCode: Int? = nil, sideSessionId: String? = nil,
-    controlStatus: String? = nil, usage: ItemUsage? = nil
+    controlStatus: String? = nil, usage: ItemUsage? = nil, childSessionId: String? = nil
   ) {
     self.itemId = itemId
     self.kind = kind
@@ -203,6 +204,7 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     self.sideSessionId = sideSessionId
     self.controlStatus = controlStatus
     self.usage = usage
+    self.childSessionId = childSessionId
   }
 }
 
@@ -242,6 +244,7 @@ extension TranscriptItem {
     sideSessionId = try c.decodeIfPresent(String.self, forKey: .sideSessionId)
     controlStatus = try c.decodeIfPresent(String.self, forKey: .controlStatus)
     usage = try c.decodeIfPresent(ItemUsage.self, forKey: .usage)
+    childSessionId = try c.decodeIfPresent(String.self, forKey: .childSessionId)
   }
 }
 

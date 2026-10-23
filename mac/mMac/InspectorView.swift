@@ -26,6 +26,7 @@ struct InspectorView: View {
         case .files: FilesView(controller: controller, workspace: workspace, inspector: inspector)
         case .activity: ActivityView(entries: entries)
         case .tasks: TasksView(rows: TodoRow.build(workspace.view?.todos))
+        case .agents: AgentsView(rows: AgentRow.build(workspace.view?.items ?? []), controller: controller, workspace: workspace)
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -91,6 +92,7 @@ struct InspectorView: View {
         Text("Files").tag(Inspector.Tab.files)
         Text(ChangeLabel.counted("Activity", activityCount)).tag(Inspector.Tab.activity)
         Text(ChangeLabel.counted("Tasks", todosCount)).tag(Inspector.Tab.tasks)
+        Text(ChangeLabel.counted("Agents", AgentRow.build(workspace.view?.items ?? []).count)).tag(Inspector.Tab.agents)
       }
       .pickerStyle(.segmented)
       .labelsHidden()
@@ -241,6 +243,59 @@ struct TodoStatusIcon: View {
     case "completed": Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Completed")
     case "cancelled": Image(systemName: "xmark.circle").foregroundStyle(.themeSecondary).accessibilityLabel("Cancelled")
     default: Image(systemName: "circle").foregroundStyle(.themeSecondary).accessibilityLabel("Pending")
+    }
+  }
+}
+
+/// The Agents tab: the subagents this conversation ran. A row opens its session read-only.
+struct AgentsView: View {
+  let rows: [AgentRow]
+  let controller: AppController
+  let workspace: Workspace
+
+  var body: some View {
+    if rows.isEmpty {
+      ContentUnavailableView(
+        "No subagents yet", systemImage: "person.2",
+        description: Text("Subagents Muse starts in this conversation appear here.").foregroundStyle(.themeSecondary))
+    } else {
+      List(rows) { row in
+        Button {
+          guard let child = row.childSessionId else { return }
+          Task {
+            await workspace.openChild(child)
+            controller.sheets.child = true
+          }
+        } label: {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            AgentPhaseIcon(phase: row.phase, status: row.status)
+            VStack(alignment: .leading, spacing: 2) {
+              Text(row.title).bold().lineLimit(1)
+              Text(row.detail.isEmpty ? row.status : "\(row.status) · \(row.detail)")
+                .font(.caption).foregroundStyle(.themeSecondary).lineLimit(1)
+            }
+          }
+          .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(row.childSessionId == nil)
+        .accessibilityElement(children: .combine)
+      }
+      .listStyle(.inset)
+      .accessibilityIdentifier("agents-list")
+    }
+  }
+}
+
+struct AgentPhaseIcon: View {
+  let phase: AgentRow.Phase
+  let status: String
+
+  var body: some View {
+    switch phase {
+    case .running: ProgressView().controlSize(.mini).accessibilityLabel("Running")
+    case .done: Image(systemName: "checkmark").foregroundStyle(.green).accessibilityLabel("Completed")
+    case .other: Image(systemName: "xmark").foregroundStyle(.red).accessibilityLabel(StatusIcon.spoken(status))
     }
   }
 }
