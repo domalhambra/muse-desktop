@@ -1,20 +1,29 @@
 #!/bin/zsh
-# Measures mMac and the installed Electron app, Muse Desktop, on disk and in memory, and writes
-# each number beside the method that made it.
+# Measures mMac on disk and in memory, and Muse Desktop (the installed Electron app) on disk, and
+# writes each number beside the method that made it. Muse Desktop's memory is read, never launched.
 #
-#   mac/scripts/measure-size.sh                Builds, launches each app once, measures, reports.
-#   mac/scripts/measure-size.sh --builds-only  Builds mMac twice and checks the measurement marker.
-#                                              Launches nothing.
+#   mac/scripts/measure-size.sh                   Builds mMac, launches its measurement build once,
+#                                                 measures, reports. Never launches Muse Desktop.
+#   mac/scripts/measure-size.sh --builds-only     Builds mMac twice and checks the measurement
+#                                                 marker. Launches nothing.
+#   mac/scripts/measure-size.sh --electron-running
+#                                                 Reads the memory of the Muse Desktop that Dom
+#                                                 opened himself, and appends it to the report.
+#                                                 Launches nothing, quits nothing, signals nothing.
 #
 # Disk: `du -sk`, in KiB, of a clean Release mMac.app, /Applications/Muse Desktop.app, the Node
 # binary mMac's backend runs on, the checkout's src/ and the node_modules packages the backend
 # loads. mMac's bundle and its runtime dependencies get separate lines.
 #
-# Memory: each app is launched once with a temporary home and no project, left on its first screen
-# for 60 seconds, then measured: `footprint` (physical footprint, the number Activity Monitor shows
-# as Memory) and RSS from `ps`, each summed over the app's process tree. `muse serve` and its
-# children get their own line. Then the script quits the app with SIGTERM and checks that no
-# process is left.
+# Memory: `footprint` (physical footprint, the number Activity Monitor shows as Memory) and RSS
+# from `ps`, each summed over the app's process tree. `muse serve` and its children get their own
+# line, and every process its own line.
+# - mMac: the script launches the measurement build once with a temporary home and no project,
+#   leaves it on its first screen for 60 seconds, measures, quits it with SIGTERM and checks that
+#   no process is left.
+# - Muse Desktop (--electron-running): Dom opens /Applications/Muse Desktop.app himself, with his
+#   own data, and leaves it at least 60 seconds. The script finds its process tree by the exact
+#   executable path and only reads it. The number includes his real projects and conversations.
 #
 # Safety:
 # - mMac's memory run uses a second Release build, compiled with MMAC_MEASURE. That build keeps
@@ -23,25 +32,18 @@
 #   com.domalhambra.mmac.measure, which the script deletes at the end, and it runs the checkout it
 #   was built from. Before the launch, the script finds the build's marker text in its binary, and
 #   checks that the plain Release build does not carry it.
-# - Both apps run with HOME, CFFIXED_USER_HOME, MUSE_HOME, XDG_CONFIG_HOME, XDG_DATA_HOME,
-#   XDG_STATE_HOME and ZDOTDIR in a temporary folder, MUSE_DESKTOP_TEST_PROVIDER=echo and
-#   MUSE_NO_AUTO_UPDATE=1. HOME alone does not move ~/Library for a Cocoa or Electron app.
-#   CFFIXED_USER_HOME does, and the script proves it on two probes before any launch: Application
-#   Support moves, and a preferences write (the throwaway domain com.domalhambra.mmac.probe) lands
-#   in the temporary Library/Preferences, not the real one.
-# - The script reads mMac's real defaults (com.domalhambra.mmac) and Muse Desktop's
-#   (org.musedesktop.app) before and after, and only reads them. mMac's isolation checks run
-#   before Muse Desktop launches; if one fails, Muse Desktop is not launched.
+# - mMac runs with HOME, CFFIXED_USER_HOME, MUSE_HOME, XDG_CONFIG_HOME, XDG_DATA_HOME,
+#   XDG_STATE_HOME and ZDOTDIR in a temporary folder, MMAC_DATA_FOLDER inside it,
+#   MUSE_DESKTOP_TEST_PROVIDER=echo and MUSE_NO_AUTO_UPDATE=1. CFFIXED_USER_HOME does not move
+#   preferences (cfprefsd writes the real ~/Library/Preferences), so the build's own suite is what
+#   keeps mMac's defaults out of Dom's.
+# - The script reads mMac's real defaults (com.domalhambra.mmac) before and after, and only reads
+#   them. The Isolation section checks them, ~/Library/Application Support/mMac and `muse serve`.
 # - Whatever the script launched is stopped, and the temporary home removed, on any exit.
-# - /Applications/Muse Desktop.app is only read and run. The script launches it only when its
-#   Info.plist sets SUAllowsAutomaticUpdates to false, so Sparkle cannot install an update without
-#   a click, and it compares the bundle's dates and build number before and after.
-# - A packaged Muse Desktop drops MUSE_DESKTOP_TEST_PROVIDER, so its `muse serve`, if it starts,
-#   runs without the echo provider. The script sends no message, so no model is called.
-# - The script refuses to run while mMac or Muse Desktop is running.
+# - The default run refuses to start while mMac or Muse Desktop is running.
 #
-# Output: .cache/size/report.txt at the repository root, with the build logs and each app's
-# stderr beside it.
+# Output: .cache/size/report.txt at the repository root, with the build logs and mMac's stderr
+# beside it.
 set -u
 
 readonly electron_app="/Applications/Muse Desktop.app"
@@ -49,8 +51,6 @@ readonly electron_bin="$electron_app/Contents/MacOS/Muse Desktop"
 readonly marker="mMac measurement build: the bridge token stays in memory."
 readonly suite=com.domalhambra.mmac.measure
 readonly domain=com.domalhambra.mmac
-readonly electron_domain=org.musedesktop.app
-readonly probe_domain=com.domalhambra.mmac.probe
 readonly idle=60
 readonly settle=20
 # The packages that src/headless, src/shared and src/main import. tsx joins them: mMac starts the
@@ -64,11 +64,13 @@ out=$repository/.cache/size
 report=$out/report.txt
 release_app=$repository/.cache/mmac-rel/Build/Products/Release/mMac.app
 measure_app=$repository/.cache/mmac-measure/Build/Products/Release/mMac.app
-builds_only=0
+mode=full
 if (( $# == 1 )) && [[ $1 == --builds-only ]]; then
-  builds_only=1
+  mode=builds
+elif (( $# == 1 )) && [[ $1 == --electron-running ]]; then
+  mode=electron
 elif (( $# != 0 )); then
-  print -u2 "Usage: $0 [--builds-only]"
+  print -u2 "Usage: $0 [--builds-only | --electron-running]"
   exit 2
 fi
 launched=()
@@ -95,6 +97,88 @@ tree_of() {
   print -- $1
   for child in $(pgrep -P $1); do tree_of $child; done
 }
+
+# --- Memory, read only --------------------------------------------------------------------------
+
+mib() { awk -v b=$1 'BEGIN { printf "%.1f", b / 1048576 }' }
+
+# Summed physical footprint in bytes, and how many processes footprint could read.
+footprint_of() {
+  (( $# )) || { print 0 0; return }
+  local p args=()
+  for p in $@; do args+=(-p $p); done
+  footprint -f bytes --noCategories $args 2>/dev/null \
+    | awk '/phys_footprint:/ { s += $2; n++ } END { print s + 0, n + 0 }'
+}
+
+# Summed RSS in bytes.
+rss_of() {
+  (( $# )) || { print 0; return }
+  ps -o rss= -p ${(j:,:)@} | awk '{ s += $1 } END { print s * 1024 }'
+}
+
+memory_line() { # label, PIDs...
+  local label=$1
+  shift
+  if (( $# == 0 )); then
+    printf '  %-44s none running\n' "$label" >> "$memory"
+    return
+  fi
+  local fp=($(footprint_of $@)) note=""
+  (( fp[2] != $# )) && note="  (footprint read $fp[2] of $# processes)"
+  printf '  %-44s %2d processes  footprint %7s MiB  RSS %7s MiB%s\n' "$label" $# \
+    $(mib $fp[1]) $(mib $(rss_of $@)) "$note" >> "$memory"
+}
+
+# Measures the tree under the PID $2 and writes it to $memory under the name $1. Sets tree.
+measure_tree() {
+  local name=$1 root=$2 p serve=()
+  tree=(${(u)$(tree_of $root)})
+  for p in $tree; do
+    [[ $(ps -o args= -p $p) == *" serve --trust-workspace"* ]] && serve+=($(tree_of $p))
+  done
+  serve=(${(u)serve})
+  memory_line "$name" ${tree:|serve}
+  memory_line "$name: muse serve" $serve
+  for p in $tree; do
+    local fp=($(footprint_of $p))
+    printf '      %-36s pid %-6s footprint %7s MiB  RSS %7s MiB\n' "${$(ps -o comm= -p $p):t}" $p \
+      $(mib $fp[1]) $(mib $(rss_of $p)) >> "$memory"
+  done
+}
+
+# --- Muse Desktop, opened by Dom: read only -----------------------------------------------------
+
+if [[ $mode == electron ]]; then
+  # The main process: its command is exactly the app's executable, with or without arguments.
+  # Helpers run other executables inside the bundle, so they do not match.
+  roots=(${(f)"$(ps -axo pid=,args= | awk -v bin="$electron_bin" '{
+    pid = $1; sub(/^ *[0-9]+ /, "")
+    if ($0 == bin || index($0, bin " ") == 1) print pid
+  }')"})
+  (( ${#roots} == 1 )) || fail "Found ${#roots} Muse Desktop main processes running $electron_bin. Open it once (from /Applications), then run this again."
+  root=$roots[1]
+  # ps prints the elapsed time as [[dd-]hh:]mm:ss.
+  up=$(ps -o etime= -p $root | tr -d ' ' | awk -F'[-:]' '{
+    if (NF == 4) print $1 * 86400 + $2 * 3600 + $3 * 60 + $4
+    else if (NF == 3) print $1 * 3600 + $2 * 60 + $3
+    else print $1 * 60 + $2 }')
+  (( up >= idle )) || fail "Muse Desktop has run $up seconds. Wait $(( idle - up )) more seconds, then run this again."
+  memory=$out/electron-memory.txt
+  : > "$memory"
+  measure_tree "Muse Desktop: app and helpers" $root
+  [[ -f $report ]] || print "mMac and Muse Desktop: size (no default run yet; run the script without arguments)" > "$report"
+  {
+    print
+    print "Muse Desktop (opened by Dom, his real data)"
+    print "  Measured $(date '+%Y-%m-%d %H:%M %Z'), $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$electron_app/Contents/Info.plist" 2>/dev/null), up $up seconds, read only."
+    print "  This number includes Dom's real projects and conversations, so it is not idle on an empty"
+    print "  first screen as mMac's is."
+    cat "$memory"
+  } >> "$report"
+  cat "$report"
+  exit 0
+fi
 
 # Stops whatever the script launched and is still running, and removes the temporary home.
 # Runs on every exit; safe to run twice.
@@ -138,14 +222,12 @@ if LC_ALL=C grep -qaF -- "$marker" "$release_app/Contents/MacOS/mMac"; then
   fail "The Release build carries the measurement marker. Nothing was launched."
 fi
 print "Markers: the measurement build has its marker. The Release build has none."
-(( builds_only )) && exit 0
+[[ $mode == builds ]] && exit 0
 
-# --- Checks before any launch -------------------------------------------------------------------
+# --- Checks before the launch -------------------------------------------------------------------
 
-muse_bin=$(command -v muse) || fail "muse is not on PATH. The runs need the installed Muse Code CLI."
-[[ -x $electron_bin ]] || fail "$electron_app is not installed."
-[[ $(/usr/libexec/PlistBuddy -c 'Print :SUAllowsAutomaticUpdates' "$electron_app/Contents/Info.plist" 2>/dev/null) == false ]] \
-  || fail "$electron_app does not set SUAllowsAutomaticUpdates to false. Nothing was launched."
+muse_bin=$(command -v muse) || fail "muse is not on PATH. The run needs the installed Muse Code CLI."
+[[ -d $electron_app ]] || fail "$electron_app is not installed. Its disk number needs it."
 pgrep -x mMac > /dev/null && fail "mMac is running. Quit it, then run the script again."
 pgrep -f "$electron_bin" > /dev/null && fail "Muse Desktop is running. Quit it, then run the script again."
 
@@ -160,103 +242,22 @@ export_defaults() { # domain
   defaults export $1 -
 }
 
-bundle_state() {
-  stat -f '%m %N' "$electron_app" "$electron_app/Contents" "$electron_app/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$electron_app/Contents/Info.plist"
-}
-
 export_defaults $domain > "$out/defaults-before.plist" || fail "mMac's defaults could not be read. Nothing was launched."
-export_defaults $electron_domain > "$out/electron-defaults-before.plist" \
-  || fail "Muse Desktop's defaults could not be read. Nothing was launched."
-bundle_state > "$out/electron-bundle-before.txt"
 pgrep -f 'serve --trust-workspace' | LC_ALL=C sort > "$out/serve-before.txt"
-pgrep -f 'Sparkle|Autoupdate' | LC_ALL=C sort > "$out/sparkle-before.txt"
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/mmac-size.XXXXXX") || fail "mktemp failed."
 T=${T:A}
 touch "$T/start"
 
-# The probe: under CFFIXED_USER_HOME, Cocoa's Application Support folder must be the temporary one.
-mkdir -p "$T/probe/Library/Application Support"
-probe=$(CFFIXED_USER_HOME="$T/probe" HOME="$T/probe" /usr/bin/osascript -l JavaScript -e \
-  'ObjC.import("Foundation"); $.NSSearchPathForDirectoriesInDomains($.NSApplicationSupportDirectory, $.NSUserDomainMask, true).objectAtIndex(0).js')
-[[ -n $probe && ${probe:A} == "$T/probe/Library/Application Support" ]] \
-  || fail "CFFIXED_USER_HOME did not move Application Support (got '$probe'). Nothing was launched."
-
-# The second probe: under CFFIXED_USER_HOME, a preferences write must land in the temporary
-# Library/Preferences, and nothing may appear in the real one.
-real_probe_plist=$HOME/Library/Preferences/$probe_domain.plist
-[[ -e $real_probe_plist ]] && fail "$real_probe_plist exists before the probe. Nothing was launched."
-mkdir -p "$T/probe/Library/Preferences"
-CFFIXED_USER_HOME="$T/probe" HOME="$T/probe" defaults write $probe_domain probe -string yes \
-  || fail "The preferences probe could not write. Nothing was launched."
-probe_value=$(CFFIXED_USER_HOME="$T/probe" HOME="$T/probe" defaults read $probe_domain probe 2>/dev/null)
-sleep 2
-if [[ -e $real_probe_plist ]]; then
-  defaults delete $probe_domain 2>/dev/null
-  fail "A preferences write under CFFIXED_USER_HOME reached $real_probe_plist (deleted again). Nothing was launched."
-fi
-[[ $probe_value == yes && -e $T/probe/Library/Preferences/$probe_domain.plist ]] \
-  || fail "A preferences write under CFFIXED_USER_HOME did not land in $T/probe/Library/Preferences. Nothing was launched."
-
-# One app's environment, one assignment per line.
+# The app's environment, one assignment per line.
 home_env() { # home folder
   print -l -- "HOME=$1" "CFFIXED_USER_HOME=$1" "ZDOTDIR=$1" "MUSE_HOME=$1/muse" \
     "XDG_CONFIG_HOME=$1/config" "XDG_DATA_HOME=$1/data" "XDG_STATE_HOME=$1/state" \
     MUSE_DESKTOP_TEST_PROVIDER=echo MUSE_NO_AUTO_UPDATE=1
 }
 
-# --- Memory -------------------------------------------------------------------------------------
-
-mib() { awk -v b=$1 'BEGIN { printf "%.1f", b / 1048576 }' }
-
-# Summed physical footprint in bytes, and how many processes footprint could read.
-footprint_of() {
-  (( $# )) || { print 0 0; return }
-  local p args=()
-  for p in $@; do args+=(-p $p); done
-  footprint -f bytes --noCategories $args 2>/dev/null \
-    | awk '/phys_footprint:/ { s += $2; n++ } END { print s + 0, n + 0 }'
-}
-
-# Summed RSS in bytes.
-rss_of() {
-  (( $# )) || { print 0; return }
-  ps -o rss= -p ${(j:,:)@} | awk '{ s += $1 } END { print s * 1024 }'
-}
-
 memory=$out/memory.txt
 : > "$memory"
-
-memory_line() { # label, PIDs...
-  local label=$1
-  shift
-  if (( $# == 0 )); then
-    printf '  %-44s none running\n' "$label" >> "$memory"
-    return
-  fi
-  local fp=($(footprint_of $@)) note=""
-  (( fp[2] != $# )) && note="  (footprint read $fp[2] of $# processes)"
-  printf '  %-44s %2d processes  footprint %7s MiB  RSS %7s MiB%s\n' "$label" $# \
-    $(mib $fp[1]) $(mib $(rss_of $@)) "$note" >> "$memory"
-}
-
-# Measures the tree under the PID $2 and writes it to the report under the name $1. Sets tree.
-measure_tree() {
-  local name=$1 root=$2 p serve=()
-  tree=(${(u)$(tree_of $root)})
-  for p in $tree; do
-    [[ $(ps -o args= -p $p) == *" serve --trust-workspace"* ]] && serve+=($(tree_of $p))
-  done
-  serve=(${(u)serve})
-  memory_line "$name" ${tree:|serve}
-  memory_line "$name: muse serve" $serve
-  for p in $tree; do
-    local fp=($(footprint_of $p))
-    printf '      %-36s pid %-6s footprint %7s MiB  RSS %7s MiB\n' "${$(ps -o comm= -p $p):t}" $p \
-      $(mib $fp[1]) $(mib $(rss_of $p)) >> "$memory"
-  done
-}
 
 # Quits the app at PID $2 with SIGTERM and waits up to $settle seconds for every PID in tree.
 quit_tree() {
@@ -303,7 +304,7 @@ fi
 measure_tree "mMac: app and backend" $mmac_pid
 quit_tree mMac $mmac_pid
 
-# --- mMac's isolation, before Muse Desktop launches ---------------------------------------------
+# --- Isolation ----------------------------------------------------------------------------------
 
 isolation=$out/isolation.txt
 : > "$isolation"
@@ -319,50 +320,16 @@ check() { # description, then a command that succeeds when the check passes
 }
 # A folder that is absent, or holds nothing changed since the script started.
 no_newer_files() { [[ ! -e $1 || -z $(find "$1" -newer "$T/start" -print -quit 2>/dev/null) ]] }
-# A folder that holds something changed since the marker file $2.
-some_newer_files() { [[ -n $(find "$1" -newer "$2" -print -quit 2>/dev/null) ]] }
 same_file() { cmp -s "$1" "$2" }
 no_new_pids() { # pattern, file of PIDs from before
   local now=$(pgrep -f "$1" | LC_ALL=C sort)
   [[ -z $(LC_ALL=C comm -13 "$2" <(print -r -- $now) | grep -v '^$') ]]
 }
 
-export_defaults $domain > "$out/defaults-after-mmac.plist"
-check "after mMac: nothing new in ~/Library/Application Support/mMac" no_newer_files "$HOME/Library/Application Support/mMac"
-check "after mMac: mMac's real defaults ($domain) are unchanged" same_file "$out/defaults-before.plist" "$out/defaults-after-mmac.plist"
-check "after mMac: no muse serve process is left" no_new_pids 'serve --trust-workspace' "$out/serve-before.txt"
-if (( failed )); then
-  cat "$isolation" >&2
-  fail "mMac's isolation checks failed. Muse Desktop was not launched."
-fi
-
-print "== Muse Desktop: /Applications, $idle seconds idle"
-electron_home=$T/electron
-user_data="$electron_home/Library/Application Support/muse-desktop"
-mkdir -p "$user_data"
-printf '{"cliPath":"%s"}\n' "$muse_bin" > "$user_data/preferences.json"
-touch "$T/electron-launch"
-env "${(f)$(home_env $electron_home)}" "$electron_bin" > "$out/electron.log" 2>&1 &
-electron_pid=$!
-launched+=($electron_pid)
-sleep $idle
-alive $electron_pid || fail "Muse Desktop ended before the measurement. See $out/electron.log."
-measure_tree "Muse Desktop: app and helpers" $electron_pid
-quit_tree "Muse Desktop" $electron_pid
-
-# --- Checks after the launches ------------------------------------------------------------------
-
 export_defaults $domain > "$out/defaults-after.plist"
-export_defaults $electron_domain > "$out/electron-defaults-after.plist"
-bundle_state > "$out/electron-bundle-after.txt"
-check "Muse Desktop wrote to its temporary data folder" some_newer_files "$user_data" "$T/electron-launch"
 check "nothing new in ~/Library/Application Support/mMac" no_newer_files "$HOME/Library/Application Support/mMac"
-check "nothing new in ~/Library/Application Support/muse-desktop" no_newer_files "$HOME/Library/Application Support/muse-desktop"
 check "mMac's real defaults ($domain) are unchanged" same_file "$out/defaults-before.plist" "$out/defaults-after.plist"
-check "Muse Desktop's real defaults ($electron_domain) are unchanged" same_file "$out/electron-defaults-before.plist" "$out/electron-defaults-after.plist"
-check "Muse Desktop.app has the same dates and build number" same_file "$out/electron-bundle-before.txt" "$out/electron-bundle-after.txt"
 check "no muse serve process is left" no_new_pids 'serve --trust-workspace' "$out/serve-before.txt"
-check "no Sparkle process started" no_new_pids 'Sparkle|Autoupdate' "$out/sparkle-before.txt"
 
 # --- Disk ---------------------------------------------------------------------------------------
 
@@ -445,9 +412,9 @@ production_kib=$(print -r -- $production | packages_kib)
   print "mMac and Muse Desktop: size, measured $(date '+%Y-%m-%d %H:%M %Z')"
   print "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion)), $(sysctl -n hw.model), $(uname -m). mMac at $(git rev-parse --short HEAD)."
   print "Disk: du -sk, in KiB (1 KiB = 1,024 bytes). Memory: footprint (physical footprint, as Activity"
-  print "Monitor's Memory column) and ps RSS, summed per process, after $idle s idle on the first screen,"
-  print "with no project open and a temporary home. RSS counts shared pages in every process that maps"
-  print "them, so it reads higher than footprint."
+  print "Monitor's Memory column) and ps RSS, summed per process. mMac: after $idle s idle on the first"
+  print "screen, with no project open and a temporary home. RSS counts shared pages in every process"
+  print "that maps them, so it reads higher than footprint."
   print
   print "Disk"
   printf '  %-62s %9s KiB\n' "mMac.app (Release, clean build)" $mmac_kib
@@ -463,10 +430,12 @@ production_kib=$(print -r -- $production | packages_kib)
   print "      npm ls --omit=dev --all. While Electron's shell is in the repo, this set holds its renderer"
   print "      packages and leaves out tsx, so the line above is mMac's number."
   print
-  print "Memory"
+  print "Memory: mMac"
   cat "$memory"
+  print "  Muse Desktop's memory: open /Applications/Muse Desktop.app, wait 60 s, then run"
+  print "  mac/scripts/measure-size.sh --electron-running. It appends its own section below."
   print
-  print "Isolation"
+  print "Isolation (mMac)"
   cat "$isolation"
 } > "$report"
 
