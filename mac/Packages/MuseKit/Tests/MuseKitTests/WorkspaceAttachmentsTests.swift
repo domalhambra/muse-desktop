@@ -271,3 +271,25 @@ private func files(_ names: String...) -> [URL] { names.map { URL(fileURLWithPat
   await workspace.drop([file, outside])
   #expect(workspace.errorMessage == "big.bin must be a file smaller than 2 MB.\nDrop files, or a folder inside this project.")
 }
+
+@MainActor @Test func aDropDoesNotJoinAnEarlierError() async throws {
+  let (workspace, _) = await makeWorkspace(script: attachmentScript())
+  workspace.errorMessage = "An older error."
+  await workspace.drop([])
+  #expect(workspace.errorMessage == "An older error.")
+  await workspace.drop([FileManager.default.temporaryDirectory])
+  #expect(workspace.errorMessage == DropPlan.folderError)
+}
+
+@MainActor @Test func sendEmptinessFollowsJavaScriptsTrim() async throws {
+  let (workspace, backend) = await makeWorkspace(script: attachmentScript())
+  await workspace.open("s1")
+  // U+FEFF is whitespace to JavaScript's trim, not to Swift's: the backend sees an empty message.
+  workspace.draft = "\u{FEFF}"
+  #expect(await workspace.send() == .notSent)
+  #expect(!backend.messages.contains { $0["method"] == "send" })
+  // U+0085 is whitespace to Swift, not to JavaScript: the backend sends it.
+  workspace.draft = "\u{0085}"
+  #expect(await workspace.send() == .sent)
+  #expect(backend.messages.contains { $0["method"] == "send" })
+}

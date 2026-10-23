@@ -53,11 +53,12 @@ extension Workspace {
       draft = plan.appendingMentions(to: draft)
       composerFocusRequest += 1
     }
+    // An earlier error is set aside, so only this drop's own errors are shown, one per line.
+    let earlier = errorMessage
+    errorMessage = nil
     if !plan.files.isEmpty { await attach(plan.files) }
-    // After the attach, so its error does not replace this one. Both show, one per line.
-    if let error = plan.error {
-      errorMessage = [errorMessage, error].compactMap { $0 }.joined(separator: "\n")
-    }
+    let own = [errorMessage, plan.error].compactMap { $0 }
+    errorMessage = own.isEmpty ? earlier : own.joined(separator: "\n")
   }
 
   /// The extension the backend reads as an image (`png`, `jpg`, `gif`, `webp`), or nil.
