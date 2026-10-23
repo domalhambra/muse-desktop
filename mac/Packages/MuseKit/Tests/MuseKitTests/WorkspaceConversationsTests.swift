@@ -187,7 +187,7 @@ private func exportArgs(_ backend: ScriptedBackend) -> [JSONValue]? {
 @Test func theDefaultFileNameKeepsLettersDigitsSpacesUnderscoresAndHyphens() {
   // The survey's worked example.
   let example = Session(sessionId: "s", updatedAt: "x", name: #"Fix: the "bug" / ok 🎉"#)
-  #expect(ExportName.defaultFileName(for: example) == "Fix the bug  ok.md")
+  #expect(ExportName.defaultFileName(for: example) == "Fix the bug  ok .md")
   #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", title: "A.b/c_d-e")) == "Abc_d-e.md")
   // Name wins over title.
   #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "N", title: "T")) == "N.md")
@@ -197,8 +197,8 @@ private func exportArgs(_ backend: ScriptedBackend) -> [JSONValue]? {
   #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "🎉!!")) == "Muse conversation.md")
   #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "   ")) == "Muse conversation.md")
   #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: " 🎉 ")) == "Muse conversation.md")
-  // Edge spaces are trimmed.
-  #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "!! Hi !!")) == "Hi.md")
+  // Any other stem keeps its edge spaces, as Electron does.
+  #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "!! Hi !!")) == " Hi .md")
 }
 
 @Test func theTitleFallsBackToTheFirstPromptThenMuseConversation() {

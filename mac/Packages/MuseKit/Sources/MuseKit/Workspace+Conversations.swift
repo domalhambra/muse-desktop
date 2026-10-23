@@ -85,7 +85,7 @@ public enum ExportName {
 
   /// Electron's `title.replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 80) + '.md'`, except that the cut
   /// never splits a surrogate pair. A stem left empty or blank after the cleanup becomes "Muse
-  /// conversation", and the stem is trimmed (Electron would give ".md" or a name with edge spaces).
+  /// conversation" (Electron would give ".md" or a blank name); any other stem keeps its edge spaces, as Electron does.
   public static func defaultFileName(for session: Session) -> String {
     var kept = String.UnicodeScalarView()
     var units = 0
@@ -95,8 +95,8 @@ public enum ExportName {
       kept.append(scalar)
       units += width
     }
-    let stem = String(kept).trimmingCharacters(in: .whitespacesAndNewlines)
-    return (stem.isEmpty ? "Muse conversation" : stem) + ".md"
+    let stem = String(kept)
+    return (stem.trimmingCharacters(in: .whitespaces).isEmpty ? "Muse conversation" : stem) + ".md"
   }
 
   /// Letters (`\p{L}`), numbers (`\p{N}`), space, `_` and `-`.
