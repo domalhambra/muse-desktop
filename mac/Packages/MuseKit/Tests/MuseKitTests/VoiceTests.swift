@@ -92,6 +92,8 @@ private final class FakeCapture: VoiceCapture {
   var granted = true
   /// When set, `requestPermission` waits until the test calls `allow(_:)`.
   var holdsPermission = false
+  /// When set, `stop` waits until the test calls `finishStop()`.
+  var holdsStop = false
   var startError: (any Error)?
   var stopError: (any Error)?
   var recording = VoiceRecording(samples: [[Float](repeating: 0.25, count: 16000)], sampleRate: 16000)
@@ -100,6 +102,8 @@ private final class FakeCapture: VoiceCapture {
   private var levels: (@MainActor ([Double]) -> Void)?
   private var failed: (@MainActor () -> Void)?
   private var permission: CheckedContinuation<Bool, Never>?
+  private var stopping: CheckedContinuation<Void, Never>?
+  var stopIsPending: Bool { stopping != nil }
 
   func requestPermission() async -> Bool {
     guard holdsPermission else { return granted }
@@ -119,8 +123,14 @@ private final class FakeCapture: VoiceCapture {
   }
 
   func stop() async throws -> VoiceRecording {
+    if holdsStop { await withCheckedContinuation { stopping = $0 } }
     if let stopError { throw stopError }
     return recording
+  }
+
+  func finishStop() {
+    stopping?.resume()
+    stopping = nil
   }
 
   func cancel() { cancels += 1 }
@@ -408,4 +418,52 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   backend.push(reply(id, #""done""#))
   await stopping.value
   #expect(voice.phase == .idle)
+}
+
+/// A folder of the test's own, where the session makes its clip folder.
+private func clipBase() throws -> URL {
+  let base = FileManager.default.temporaryDirectory.appending(
+    path: "mMac-voice-test-\(UUID().uuidString)", directoryHint: .isDirectory)
+  try FileManager.default.createDirectory(at: base, withIntermediateDirectories: false)
+  return base
+}
+
+@MainActor @Test func aCancelWhileTheRecorderStopsSendsNothing() async throws {
+  let capture = FakeCapture()
+  capture.holdsStop = true
+  let (voice, workspace, backend, _, _) = await makeVoice(draft: "Keep me.", capture: capture)
+  let base = try clipBase()
+  defer { try? FileManager.default.removeItem(at: base) }
+  voice.temporaryFolder = base
+  await voice.toggle()
+  let stopping = Task { await voice.toggle() }
+  try await eventually { capture.stopIsPending }
+  voice.cancel()
+  capture.finishStop()
+  await stopping.value
+  try await eventually { backend.messages.contains { $0["method"] == "cancel-voice" } }
+  #expect(!backend.messages.contains { $0["method"] == "voice" })
+  #expect(try FileManager.default.contentsOfDirectory(atPath: base.path).isEmpty)
+  #expect(workspace.draft == "Keep me.")
+  #expect(workspace.errorMessage == nil)
+}
+
+@MainActor @Test func aCancelDuringTheEncodeSendsNothingAndDeletesTheClip() async throws {
+  let (voice, workspace, backend, _, _) = await makeVoice(draft: "Keep me.")
+  let base = try clipBase()
+  defer { try? FileManager.default.removeItem(at: base) }
+  voice.temporaryFolder = base
+  await voice.toggle()
+  let stopping = Task { await voice.toggle() }
+  // The stop runs up to the encode, which goes off the main actor. The test keeps the main actor
+  // from here to the cancel, so the cancel always comes before the encode's result is read.
+  await Task.yield()
+  #expect(voice.phase == .transcribing)
+  voice.cancel()
+  await stopping.value
+  try await eventually { backend.messages.contains { $0["method"] == "cancel-voice" } }
+  #expect(!backend.messages.contains { $0["method"] == "voice" })
+  #expect(try FileManager.default.contentsOfDirectory(atPath: base.path).isEmpty)
+  #expect(workspace.draft == "Keep me.")
+  #expect(workspace.errorMessage == nil)
 }

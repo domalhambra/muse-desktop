@@ -137,6 +137,8 @@ public final class VoiceSession {
   /// Bumped by every start and cancel, so a result for a recording the person dropped is ignored.
   @ObservationIgnored private var generation = 0
   @ObservationIgnored private var timer: Task<Void, Never>?
+  /// Where the clip's private folder is made. Tests point it at a folder of their own.
+  @ObservationIgnored var temporaryFolder = FileManager.default.temporaryDirectory
 
   /// `tick` is Electron's 120 ms timer. `uptime` is the clock the time is read from; tests pass
   /// their own.
@@ -215,15 +217,23 @@ public final class VoiceSession {
     do {
       let recording = try await capture.stop()
       guard generation == self.generation else { return }
-      let client = workspace.client
+      let base = temporaryFolder
       // Off the main actor: a two-minute clip at 48 kHz is almost six million samples.
-      let text = try await Task.detached {
+      let (folder, file) = try await Task.detached { () throws -> (URL, URL) in
         let wav = try VoiceWAV.encode(samples: recording.samples, sampleRate: recording.sampleRate)
-        let folder = try PrivateTemp.makeFolder("voice")
-        // The backend deletes the file once read; the folder goes in every case.
-        defer { try? FileManager.default.removeItem(at: folder) }
-        return try await client.voice(try PrivateTemp.write(wav, named: "recording.wav", in: folder))
+        let folder = try PrivateTemp.makeFolder("voice", in: base)
+        do {
+          return (folder, try PrivateTemp.write(wav, named: "recording.wav", in: folder))
+        } catch {
+          try? FileManager.default.removeItem(at: folder)
+          throw error
+        }
       }.value
+      // The backend deletes the file once read; the folder goes in every case.
+      defer { try? FileManager.default.removeItem(at: folder) }
+      // A cancel during the encode or the write: the clip never leaves mMac.
+      guard generation == self.generation else { return }
+      let text = try await workspace.client.voice(file)
       guard generation == self.generation else { return }
       workspace.draft = Self.appending(text, to: workspace.draft)
       workspace.composerFocusRequest += 1
@@ -235,8 +245,9 @@ public final class VoiceSession {
   }
 
   /// Esc, the pill's cancel button, `/voice cancel`, and a hidden window: drop the recording or
-  /// the transcription, with no message, as Electron's cancel. A cancel does not cancel the
-  /// detached request: the folder (already emptied by the backend) goes when its reply comes.
+  /// the transcription, with no message, as Electron's cancel. A cancel during the encode sends
+  /// nothing. A cancel during the transcription does not cancel the request: the folder (already
+  /// emptied by the backend) goes when its reply comes.
   public func cancel() {
     guard phase != .idle else { return }
     generation += 1

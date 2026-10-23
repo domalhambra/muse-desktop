@@ -133,8 +133,8 @@ final class PastedFiles {
 /// data that crosses to the backend as a path: pasted images and voice clips. The spec keeps large
 /// data off the JSON wire.
 enum PrivateTemp {
-  static func makeFolder(_ purpose: String) throws -> URL {
-    let folder = FileManager.default.temporaryDirectory
+  static func makeFolder(_ purpose: String, in base: URL = FileManager.default.temporaryDirectory) throws -> URL {
+    let folder = base
       .appending(path: "mMac-\(purpose)-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(
       at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
