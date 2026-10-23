@@ -9,7 +9,7 @@
 # passed and the defaults are unchanged. It only reads the real domain, with `defaults export`.
 # Logs and the two exports go to .cache/ui-tests/ at the repository root: run-N.log is xcodebuild's
 # output for run N. The folder run-N/ holds that run's activity: each test's fake-backend requests
-# (<testName>-requests.jsonl, which the tests copy there through TEST_RUNNER_MMAC_UI_LOG_DIR),
+# (<testName>-requests.jsonl, which the fake backend copies there),
 # mMac's own log lines at debug level (app.log, from `log stream`) and the result bundle
 # (result.xcresult). A new run replaces the folder's bundle and log.
 #
@@ -112,6 +112,14 @@ if ! export_defaults > $out/defaults-before.plist; then
 fi
 
 failed=0
+# Moves the tests' request logs from the temporary folder into this run's folder.
+collect_requests() {
+  [[ -n ${requests:-} && -d $requests ]] || return 0
+  mv $requests/*-requests.jsonl $activity/ 2>/dev/null
+  rm -rf $requests
+  requests=""
+}
+
 for (( run = 1; run <= runs; run++ )); do
   log=$out/run-$run.log
   activity=$out/run-$run
@@ -123,7 +131,10 @@ for (( run = 1; run <= runs; run++ )); do
   /usr/bin/log stream --style compact --level debug --predicate 'subsystem == "com.domalhambra.mmac"' \
     > $activity/app.log 2>&1 &
   log_pid=$!
-  TEST_RUNNER_MMAC_UI_LOG_DIR=$activity \
+  # The test runner is sandboxed, so the fake backend writes a copy of each test's request log to
+  # a fixed folder in /private/tmp, and this script moves them in.
+  requests=/private/tmp/mmac-ui-requests
+  rm -rf $requests && mkdir -p $requests
     caffeinate -d xcodebuild test -project mac/mMac.xcodeproj -scheme mMac -derivedDataPath .cache/mmac \
     -destination 'platform=macOS' -resultBundlePath $activity/result.xcresult "$@" > $log 2>&1 &
   pid=$!
@@ -133,6 +144,7 @@ for (( run = 1; run <= runs; run++ )); do
       print "Run $run passed $WATCHDOG seconds. Stopping it." | tee -a $log
       stop_run
       stop_log_stream
+      collect_requests
       break
     fi
     sleep 5
@@ -141,6 +153,7 @@ for (( run = 1; run <= runs; run++ )); do
   code=$?
   pid=""
   stop_log_stream
+  collect_requests
   grep -E "Test Case .*(passed|failed)|Executed [0-9]+ tests?," $log | grep -v "Executed 0 tests" | sort -u
   if (( code != 0 )) || ! grep -q '\*\* TEST SUCCEEDED \*\*' $log; then
     print "Run $run failed (xcodebuild exit $code). Stopping."

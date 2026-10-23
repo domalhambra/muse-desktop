@@ -23,22 +23,7 @@ final class MMacUITests: XCTestCase {
   }
 
   override func tearDown() async throws {
-    keepRequestLog()
     try? FileManager.default.removeItem(at: temporary)
-  }
-
-  /// Copies the fake backend's request log, passed or failed, to `MMAC_UI_LOG_DIR` as
-  /// `<testName>-requests.jsonl`. `mac/scripts/ui-tests.sh` sets the folder through
-  /// `TEST_RUNNER_MMAC_UI_LOG_DIR`. The teardown blocks have stopped the app by now.
-  private func keepRequestLog() {
-    guard let folder = ProcessInfo.processInfo.environment["MMAC_UI_LOG_DIR"], !folder.isEmpty,
-      let log = fakeLog, FileManager.default.fileExists(atPath: log.path)
-    else { return }
-    // `name` reads "-[MMacUITests testName]".
-    let test = name.split(separator: " ").last.map { String($0.dropLast()) } ?? "test"
-    let target = URL(fileURLWithPath: folder).appending(path: "\(test)-requests.jsonl")
-    try? FileManager.default.removeItem(at: target)
-    try? FileManager.default.copyItem(at: log, to: target)
   }
 
   private func launch(cliPath: String, extra: [String: String] = [:]) throws -> XCUIApplication {
@@ -97,7 +82,15 @@ final class MMacUITests: XCTestCase {
       extra: [
         "MMAC_BACKEND_SCRIPT": repository.appending(path: "mac/Fixtures/fake-backend.mjs").path,
         "FAKE_BACKEND_LOG": log.path,
+        // A second copy that outlives the temporary folder, for mac/scripts/ui-tests.sh to keep.
+        // The test runner is sandboxed, so the fake writes it.
+        "FAKE_BACKEND_COPY": "/private/tmp/mmac-ui-requests/\(testName)-requests.jsonl",
       ].merging(extra) { $1 })
+  }
+
+  /// The running test's method name: `name` reads "-[MMacUITests testName]".
+  private var testName: String {
+    name.split(separator: " ").last.map { String($0.dropLast()) } ?? "test"
   }
 
   /// Waits until the sidebar's status, a button that opens Settings, reads "Connected to Muse Code".
@@ -666,7 +659,8 @@ final class MMacUITests: XCTestCase {
     field.typeText("zzz nothing")
     let empty = element(app, "command-empty")
     XCTAssertTrue(empty.waitForExistence(timeout: 5))
-    XCTAssertEqual(empty.label, "No matches. Try a project or conversation name.")
+    // A SwiftUI Text reports its string as the value on macOS, and its label stays empty.
+    XCTAssertEqual(empty.value as? String, "No matches. Try a project or conversation name.")
     field.typeKey(.escape, modifierFlags: [])
     XCTAssertTrue(menu.waitForNonExistence(timeout: 10))
 

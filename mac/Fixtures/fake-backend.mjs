@@ -24,7 +24,20 @@ import { basename, isAbsolute } from 'node:path'
 import { createInterface } from 'node:readline'
 
 const logFile = process.env.FAKE_BACKEND_LOG
-const record = (entry) => logFile && appendFileSync(logFile, `${JSON.stringify(entry)}\n`)
+// FAKE_BACKEND_COPY names a second file, outside the test's temporary folder, that
+// mac/scripts/ui-tests.sh keeps after the run. Its folder may not exist when no script set it up.
+const copyFile = process.env.FAKE_BACKEND_COPY
+const record = (entry) => {
+  const line = `${JSON.stringify(entry)}\n`
+  if (logFile) appendFileSync(logFile, line)
+  if (copyFile) {
+    try {
+      appendFileSync(copyFile, line)
+    } catch {
+      // No folder: the run is not the script's, so there is nothing to keep.
+    }
+  }
+}
 const write = (message) => {
   if ('id' in message) {
     record({ reply: message.id, ok: message.ok, ...(message.ok ? {} : { error: message.error }) })
