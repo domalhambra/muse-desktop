@@ -108,19 +108,3 @@ describe('revert operations', () => {
     await expect(getRawDiff(repo, '../escape.txt')).rejects.toThrow()
   })
 })
-
-describe('inspector hunk numbering', () => {
-  it('numbers only working-tree hunks, starting at zero', async () => {
-    const { parseDiffLines } = await import('../../src/renderer/src/components/Inspector')
-    const labeled = `Staged changes\n${sample}Working changes\n${sample}`
-    const indexes = parseDiffLines(labeled)
-      .filter((row) => row.kind === 'hunk')
-      .map((row) => ('hunkIndex' in row ? row.hunkIndex : undefined))
-    expect(indexes).toEqual([undefined, undefined, 0, 1])
-  })
-  it('gives untracked-file previews no hunk buttons', async () => {
-    const { parseDiffLines } = await import('../../src/renderer/src/components/Inspector')
-    const rows = parseDiffLines('--- /dev/null\n+++ b/new.txt\n+hello')
-    expect(rows.some((row) => 'hunkIndex' in row)).toBe(false)
-  })
-})

@@ -47,9 +47,9 @@ import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
 // mMac's backend methods and the state they share. src/headless/server.ts owns
 // stdin, stdout and the quit path, so unit tests can drive these methods with a
-// fake MuseHost (tests/unit/headless-backend.test.ts). This repeats the wiring of
-// src/main/index.ts instead of sharing it, so upstream syncs of index.ts stay
-// clean; tests/unit/headless-parity.test.ts catches drift between the two.
+// fake MuseHost (tests/unit/headless-backend.test.ts). The wiring began as a copy
+// of Electron's src/main/index.ts, which M4a removed; docs/decisions.md names the
+// last commit that has it. tests/unit/headless-parity.test.ts pins the method list.
 
 /** The parts of MuseHost the methods use. */
 export type Muse = Pick<
