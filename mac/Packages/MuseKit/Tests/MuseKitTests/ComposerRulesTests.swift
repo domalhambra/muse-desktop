@@ -78,3 +78,131 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
   #expect(plan.mentions == ["@src/"])
   #expect(plan.error == DropPlan.folderError)
 }
+
+// Composer commands (src/renderer/src/commands.ts and Composer.tsx).
+
+@Test func theTenCommandsKeepElectronsOrderAndDescriptions() {
+  #expect(ComposerCommand.allCases.map(\.name) == [
+    "clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help",
+  ])
+  #expect(ComposerCommand.allCases.map(\.description) == [
+    "Start a new conversation; keep saved history",
+    "Start a new conversation",
+    "Start voice input",
+    "Choose a model, or /model <model-id>",
+    "Choose reasoning effort, or /effort <level>",
+    "Compact this conversation with Muse Code",
+    "/rename <conversation name>",
+    "Stop Muse\u{2019}s active turn",
+    "Open desktop settings",
+    "Open the guide and CLI compatibility information",
+  ])
+}
+
+@Test func theMenuOpensOnlyForASlashAndLettersOnTheWholeDraft() {
+  #expect(ComposerCommand.menu(for: "/").count == 10)
+  #expect(ComposerCommand.menu(for: "/mo") == [.model])
+  #expect(ComposerCommand.menu(for: "/Model") == [.model])
+  #expect(ComposerCommand.menu(for: "/MO") == [.model])
+  #expect(ComposerCommand.menu(for: "/c") == [.clear, .compact])
+  #expect(ComposerCommand.menu(for: "/n") == [.new])
+  #expect(ComposerCommand.menu(for: "/vo") == [.voice])
+  #expect(ComposerCommand.menu(for: "/x").isEmpty)
+  #expect(ComposerCommand.menu(for: "/model ").isEmpty)
+  #expect(ComposerCommand.menu(for: "/model x").isEmpty)
+  #expect(ComposerCommand.menu(for: " /mo").isEmpty)
+  #expect(ComposerCommand.menu(for: "hi /mo").isEmpty)
+  // Shift-Return adds a newline, and the menu closes: JavaScript's `$` does not match before it.
+  #expect(ComposerCommand.menu(for: "/mo\n").isEmpty)
+  #expect(ComposerCommand.menu(for: "/m\u{00E9}").isEmpty)
+  #expect(ComposerCommand.menu(for: "").isEmpty)
+}
+
+@Test func parsingTrimsTheDraftLowercasesTheNameAndTrimsTheArgument() {
+  #expect(ComposerCommand.parse("/effort medium") == ParsedCommand(name: "effort", argument: "medium"))
+  #expect(ComposerCommand.parse("  /Rename   a\nb  ") == ParsedCommand(name: "rename", argument: "a\nb"))
+  #expect(ComposerCommand.parse("/model\tm1") == ParsedCommand(name: "model", argument: "m1"))
+  #expect(ComposerCommand.parse("/clear") == ParsedCommand(name: "clear", argument: ""))
+  #expect(ComposerCommand.parse("/a-b") == ParsedCommand(name: "a-b", argument: ""))
+  // Any /word parses, so a CLI command never reaches Muse as a message.
+  #expect(ComposerCommand.parse("/tmp") == ParsedCommand(name: "tmp", argument: ""))
+  #expect(ComposerCommand.parse("/etc is broken") == ParsedCommand(name: "etc", argument: "is broken"))
+  #expect(ComposerCommand.parse("\u{00A0}/stop\u{FEFF}") == ParsedCommand(name: "stop", argument: ""))
+  #expect(ComposerCommand.parse("/etc/hosts is odd") == nil)
+  #expect(ComposerCommand.parse("/") == nil)
+  #expect(ComposerCommand.parse("hello /stop") == nil)
+  #expect(ComposerCommand.parse("/stop!") == nil)
+  #expect(ComposerCommand.parse("") == nil)
+}
+
+@Test func theArrowsWrapAndTabFillsTheHighlightedCommand() {
+  // "/c" lists clear and compact.
+  #expect(ComposerCommand.slashKeyAction(.down, draft: "/c", index: 0) == .select(1))
+  #expect(ComposerCommand.slashKeyAction(.down, draft: "/c", index: 1) == .select(0))
+  #expect(ComposerCommand.slashKeyAction(.up, draft: "/c", index: 0) == .select(1))
+  #expect(ComposerCommand.slashKeyAction(.up, draft: "/c", index: 1) == .select(0))
+  #expect(ComposerCommand.slashKeyAction(.tab, draft: "/c", index: 1) == .setDraft("/compact "))
+  #expect(ComposerCommand.slashKeyAction(.tab, draft: "/vo", index: 0) == .setDraft("/voice "))
+}
+
+@Test func enterFillsAPrefixButRunsAWholeName() {
+  #expect(ComposerCommand.slashKeyAction(.enter, draft: "/m", index: 0) == .setDraft("/model "))
+  #expect(ComposerCommand.slashKeyAction(.enter, draft: "/n", index: 0) == .setDraft("/new "))
+  #expect(ComposerCommand.slashKeyAction(.enter, draft: "/model", index: 0) == .submit)
+  #expect(ComposerCommand.slashKeyAction(.enter, draft: "/MODEL", index: 0) == .submit)
+  #expect(ComposerCommand.slashKeyAction(.enter, draft: "/clear", index: 0) == .submit)
+}
+
+@Test func escapeAddsASpaceAndAClosedMenuPassesKeysOn() {
+  #expect(ComposerCommand.slashKeyAction(.escape, draft: "/mo", index: 0) == .setDraft("/mo "))
+  #expect(ComposerCommand.slashKeyAction(.enter, draft: "/model ", index: 0) == .pass)
+  #expect(ComposerCommand.slashKeyAction(.tab, draft: "hello", index: 0) == .pass)
+  #expect(ComposerCommand.slashKeyAction(.down, draft: "/x", index: 0) == .pass)
+}
+
+// The `@` rule (Composer.tsx).
+
+@Test func aMentionIsAnAtSignThatStartsTheDraftOrFollowsWhitespace() {
+  #expect(MentionRule.match("@") == Mention(prefix: "", token: "", directory: "", filter: ""))
+  #expect(MentionRule.match("see @src/ma") == Mention(prefix: "see ", token: "src/ma", directory: "src", filter: "ma"))
+  #expect(MentionRule.match("x @a/b/c") == Mention(prefix: "x ", token: "a/b/c", directory: "a/b", filter: "c"))
+  #expect(MentionRule.match("x @src/") == Mention(prefix: "x ", token: "src/", directory: "src", filter: ""))
+  #expect(MentionRule.match("line\n@Fi") == Mention(prefix: "line\n", token: "Fi", directory: "", filter: "Fi"))
+  #expect(MentionRule.match("a\u{00A0}@x")?.token == "x")
+  #expect(MentionRule.match("a@b") == nil)
+  #expect(MentionRule.match("@a b") == nil)
+  #expect(MentionRule.match("@a@b") == nil)
+  #expect(MentionRule.match("@@") == nil)
+  #expect(MentionRule.match("no mention") == nil)
+}
+
+@Test func rowsMatchTheNameAnyCaseAndStopAt12() {
+  let entries = (1...20).map { ProjectFile(name: "File\($0).swift", path: "src/File\($0).swift", directory: false) }
+    + [ProjectFile(name: "README.md", path: "README.md", directory: false)]
+  #expect(MentionRule.rows(entries, filter: "").count == 12)
+  #expect(MentionRule.rows(entries, filter: "readme").map(\.path) == ["README.md"])
+  #expect(MentionRule.rows(entries, filter: "FILE1").map(\.name) == [
+    "File1.swift", "File10.swift", "File11.swift", "File12.swift", "File13.swift", "File14.swift",
+    "File15.swift", "File16.swift", "File17.swift", "File18.swift", "File19.swift",
+  ])
+  // The path is not searched, only the name.
+  #expect(MentionRule.rows(entries, filter: "src").isEmpty)
+}
+
+@Test func aFileInsertsItsPathAndASpaceAndAFolderItsPathAndASlash() {
+  let file = ProjectFile(name: "main.swift", path: "src/main.swift", directory: false)
+  let folder = ProjectFile(name: "lib", path: "src/lib", directory: true)
+  #expect(MentionRule.insert(file, into: "see @src/ma") == "see @src/main.swift ")
+  #expect(MentionRule.insert(folder, into: "see @src/") == "see @src/lib/")
+  #expect(MentionRule.insert(file, into: "@") == "@src/main.swift ")
+  #expect(MentionRule.insert(file, into: "no mention") == "no mention")
+}
+
+@Test func mentionKeysWrapChooseAndDismiss() {
+  #expect(MentionRule.keyAction(.down, index: 2, count: 3) == .select(0))
+  #expect(MentionRule.keyAction(.up, index: 0, count: 3) == .select(2))
+  #expect(MentionRule.keyAction(.tab, index: 1, count: 3) == .choose(1))
+  #expect(MentionRule.keyAction(.enter, index: 2, count: 3) == .choose(2))
+  #expect(MentionRule.keyAction(.escape, index: 0, count: 3) == .dismiss)
+  #expect(MentionRule.keyAction(.enter, index: 0, count: 0) == .pass)
+}
