@@ -122,7 +122,7 @@ private struct InspectorCommand: View {
 }
 
 /// View → Command Menu. ⌘K only opens it, as in Electron: a second press while it shows does nothing.
-/// It waits while another sheet is up on the main window: the Rename sheet disables the item, and
+/// It waits while another sheet is up on the main window: the Rename and Help sheets disable the item, and
 /// AppKit's panels and alerts (an export or open panel, an Ask), which SwiftUI cannot observe, make
 /// the press do nothing.
 private struct CommandMenuCommand: View {
@@ -138,7 +138,7 @@ private struct CommandMenuCommand: View {
       controller.sheets.commandMenu = true
     }
     .keyboardShortcut("k")
-    .disabled(controller.workspace == nil || controller.sheets.renaming)
+    .disabled(controller.workspace == nil || controller.sheets.renaming || controller.sheets.help)
   }
 }
 

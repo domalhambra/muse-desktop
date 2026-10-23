@@ -3,30 +3,53 @@ import MuseBackend
 import MuseKit
 import SwiftUI
 
-/// The composer, as Electron's `Composer.tsx`, without attachments, voice and slash commands (M4).
+/// The composer, as Electron's `Composer.tsx`.
 struct ComposerView: View {
   let controller: AppController
   @Bindable var workspace: Workspace
   @Environment(\.appearance) private var appearance
+  @Environment(\.openSettings) private var openSettings
+  // The store is named here, as the sidebar and banner name it, so all of them share one value.
+  @AppStorage(SettingsView.paneKey, store: MMacApp.appStorage) private var settingsPane: SettingsView.Pane = .appearance
   /// The text area's height, which it measures itself.
   @State private var inputHeight: CGFloat = 17
   /// A choice still being saved. The picker shows it until the Workspace answers, then shows the
   /// real value again, so a failed change does not leave the popup showing it.
   @State private var pendingModel: String?
   @State private var pendingEffort: String?
+  /// The highlighted row of the slash popup and of the @ popup. Both go back to the first row when
+  /// the draft changes, as in Electron.
+  @State private var commandIndex = 0
+  @State private var mentionIndex = 0
+  /// The folder listing behind the @ popup, and the Workspace it lists for. A restarted backend
+  /// brings a new Workspace, and with it a new menu.
+  @State private var mentionMenu: MentionMenu?
+  @State private var mentionOwner: ObjectIdentifier?
+  /// Bumped after a popup rewrites the draft, so the text area takes focus with the cursor at the end.
+  @State private var cursorRequest = 0
 
   var body: some View {
+    @Bindable var sheets = controller.sheets
+    // Read once per render: the popups use the same lists the keys do.
+    let commands = showsPopups ? ComposerCommand.menu(for: workspace.draft) : []
+    let mention = draftMention
+    let mentionRows = showsPopups && commands.isEmpty ? (mentionMenu?.rows(for: workspace.draft) ?? []) : []
     VStack(alignment: .leading, spacing: 8) {
       if workspace.isRunning { runningBar }
       ComposerTextView(
         text: $workspace.draft, height: $inputHeight, placeholder: placeholder,
         placeholderColor: NSColor(appearance.colors.muted),
         isEnabled: workspace.openingSessionId == nil, focusRequest: workspace.composerFocusRequest,
-        onSubmit: submit
+        cursorRequest: cursorRequest, onSubmit: submit, onPopupKey: popupKey
       )
       .frame(height: inputHeight)
       .padding(10)
       .background(appearance.colors.input, in: RoundedRectangle(cornerRadius: 8))
+      .overlay(alignment: .top) {
+        popup(commands: commands, mentionRows: mentionRows)
+          // Above the field, 10 points clear, as Electron's `.slash-menu`.
+          .alignmentGuide(.top) { $0[.bottom] + 10 }
+      }
       HStack(spacing: 10) {
         Picker("Model", selection: modelSelection) {
           if !workspace.models.contains(where: { $0.modelId == workspace.modelId }) {
@@ -52,6 +75,7 @@ struct ComposerView: View {
         }
         .fixedSize()
         .tint(nil)
+        .accessibilityIdentifier("effort-picker")
         if workspace.canStartInWorktree {
           let label =
             workspace.startInWorktree
@@ -88,6 +112,91 @@ struct ComposerView: View {
       }
     }
     .padding(12)
+    .onChange(of: workspace.draft) {
+      commandIndex = 0
+      mentionIndex = 0
+    }
+    // As Electron's mention effect: the folder is read when the project, the mention's folder or
+    // whether a mention is typed changes. Typing within the folder filters what was read. Not on
+    // every keystroke: a task keyed on the draft would cancel a listing still in flight.
+    .task(
+      id: MentionFolder(
+        workspace: ObjectIdentifier(workspace), project: workspace.project, directory: mention?.directory)
+    ) {
+      if mentionOwner != ObjectIdentifier(workspace) {
+        mentionMenu = MentionMenu(workspace: workspace)
+        mentionOwner = ObjectIdentifier(workspace)
+      }
+      await mentionMenu?.update(draft: workspace.draft)
+    }
+    .sheet(isPresented: $sheets.help) {
+      HelpSheet { controller.sheets.help = false }
+    }
+  }
+
+  /// What the mention task is keyed on. A nil folder means no mention is typed.
+  private struct MentionFolder: Equatable {
+    let workspace: ObjectIdentifier
+    let project: String
+    let directory: String?
+  }
+
+  @ViewBuilder private func popup(commands: [ComposerCommand], mentionRows: [ProjectFile]) -> some View {
+    if !commands.isEmpty {
+      SlashCommandMenu(commands: commands, selected: commandIndex) { index in
+        // A click does what Tab does on that row.
+        if case .setDraft(let text) = ComposerCommand.slashKeyAction(.tab, draft: workspace.draft, index: index) {
+          setDraft(text)
+        }
+      }
+    } else if !mentionRows.isEmpty {
+      MentionList(files: mentionRows, selected: min(mentionIndex, mentionRows.count - 1)) { index in
+        chooseMention(mentionRows[index])
+      }
+    }
+  }
+
+  /// No popup while a window sheet shows: the composer has no keys then, and the ⌘K sheet's
+  /// `command-new` and `command-settings` rows would share an identifier with the slash popup's.
+  private var showsPopups: Bool { !controller.sheets.anyShown }
+
+  /// The @ mention at the end of the draft. Only with a project, as in Electron.
+  private var draftMention: Mention? {
+    workspace.project.isEmpty ? nil : MentionRule.match(workspace.draft)
+  }
+
+  /// Up, Down, Tab, Return and Escape while a popup shows, as Electron's composer handles them.
+  /// False leaves the key to the text area: Return on a complete command name sends it.
+  private func popupKey(_ key: SlashKey) -> Bool {
+    guard showsPopups else { return false }
+    let draft = workspace.draft
+    if !ComposerCommand.menu(for: draft).isEmpty {
+      switch ComposerCommand.slashKeyAction(key, draft: draft, index: commandIndex) {
+      case .pass, .submit: return false
+      case .select(let index): commandIndex = index
+      case .setDraft(let text): setDraft(text)
+      }
+      return true
+    }
+    let rows = mentionMenu?.rows(for: draft) ?? []
+    // `keyAction` clamps the index: the rows can shrink under the highlight when a listing arrives.
+    switch MentionRule.keyAction(key, index: mentionIndex, count: rows.count) {
+    case .pass: return false
+    case .select(let index): mentionIndex = index
+    case .choose(let index): chooseMention(rows[index])
+    case .dismiss: mentionMenu?.dismiss()
+    }
+    return true
+  }
+
+  private func chooseMention(_ file: ProjectFile) {
+    setDraft(MentionRule.insert(file, into: workspace.draft))
+  }
+
+  /// A popup's new draft, with the cursor after it and the composer focused, as Electron does.
+  private func setDraft(_ text: String) {
+    workspace.draft = text
+    cursorRequest += 1
   }
 
   private var runningBar: some View {
@@ -125,14 +234,44 @@ struct ComposerView: View {
     return nil
   }
 
+  /// A command runs while disconnected, as in Electron; a message needs the connection.
   private var canSend: Bool {
-    !workspace.submitting && workspace.isConnected && workspace.openingSessionId == nil
-      && !workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    guard !workspace.submitting, workspace.openingSessionId == nil else { return false }
+    if ComposerCommand.parse(workspace.draft) != nil { return true }
+    // As `Workspace.send`: a message can be attachment chips alone.
+    return workspace.isConnected
+      && (!workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !workspace.attachments.isEmpty)
   }
 
+  /// Sends the draft, or runs it as a command when it parses as one, so `/word` never reaches the
+  /// model as a message.
   private func submit() {
     guard canSend else { return }
-    Task { await controller.send() }
+    if let command = ComposerCommand.parse(workspace.draft) {
+      Task { if let effect = await workspace.run(command) { apply(effect) } }
+    } else {
+      Task { await controller.send() }
+    }
+  }
+
+  /// What a command asks of the window, after `Workspace.run` has done its part.
+  private func apply(_ effect: CommandEffect) {
+    switch effect {
+    case .renameSheet(let title):
+      controller.sheets.rename(title: title)
+    case .settings:
+      settingsPane = .appearance
+      openSettings()
+    case .help:
+      controller.sheets.help = true
+    case .toggleVoice, .cancelVoice:
+      // The voice controls do not exist yet. Task 13 connects these two.
+      break
+    case .modelPicker:
+      PickerOpener.open("model-picker")
+    case .effortPicker:
+      PickerOpener.open("effort-picker")
+    }
   }
 
   private var modelSelection: Binding<String> {
