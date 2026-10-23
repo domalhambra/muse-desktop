@@ -266,6 +266,46 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('folds context usage into the view, with and without a window', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/contextUsage', { usedTokens: 4200, windowTokens: 10000, pressure: 'normal' })
+    expect(host.getView('s1').context).toEqual({ used: 4200, window: 10000, pressure: 'normal' })
+    notify('session/contextUsage', { usedTokens: 9900, pressure: 'blocked' })
+    expect(host.getView('s1').context).toEqual({
+      used: 9900,
+      window: undefined,
+      pressure: 'blocked',
+    })
+    await host.close()
+  })
+
+  it('replaces the todo list wholesale and clears it on an empty list', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/todoListChanged', {
+      items: [
+        {
+          text: 'Clean the build folder',
+          status: 'inProgress',
+          activeForm: 'Cleaning the build folder',
+        },
+        { text: 'Run the tests', status: 'pending' },
+      ],
+      revision: 1,
+      sourceTool: 'TodoWrite',
+    })
+    expect(host.getView('s1').todos?.map((todo) => todo.text)).toEqual([
+      'Clean the build folder',
+      'Run the tests',
+    ])
+    notify('session/todoListChanged', { items: [], revision: 2, sourceTool: 'TodoWrite' })
+    expect(host.getView('s1').todos).toEqual([])
+    await host.close()
+  })
+
   it('dispatches compaction through the CLI without rewriting the conversation', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')

@@ -179,12 +179,24 @@ export const preferencesPatchSchema = z
 export type Preferences = z.infer<typeof preferencesSchema>
 export type Theme = Exclude<Preferences['theme'], 'system'>
 
+/** `session/contextUsage`: counted-once occupancy and the host's pressure level. `window` is absent when the model has no limit. */
+export type ContextUsage = { used: number; window?: number; pressure: string }
+/** One todo of the agent's list, as `session/todoListChanged` carries it. */
+export const todoItemSchema = z.object({
+  text: z.string(),
+  status: z.string(),
+  activeForm: z.string().optional(),
+})
+export type TodoItem = z.infer<typeof todoItemSchema>
+
 export type SessionView = {
   session: MuseSession
   items: TranscriptItem[]
   approvals: Approval[]
   questions: UserQuestion[]
   usage?: { input: number; output: number; total: number }
+  context?: ContextUsage
+  todos?: TodoItem[]
   error?: string
   historyNotice?: string
 }

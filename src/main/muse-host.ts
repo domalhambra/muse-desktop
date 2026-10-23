@@ -6,6 +6,7 @@ import {
   modelSchema,
   questionSchema,
   sessionSchema,
+  todoItemSchema,
   worktreeEntrySchema,
   type AppEvent,
   type ApprovalMode,
@@ -600,6 +601,21 @@ export class MuseHost {
         output: usage.outputTokens,
         total: usage.totalTokens,
       }
+    } else if (method === 'session/contextUsage') {
+      const usage = z
+        .object({
+          usedTokens: z.number(),
+          windowTokens: z.number().optional(),
+          pressure: z.string(),
+        })
+        .parse(params)
+      live.view.context = {
+        used: usage.usedTokens,
+        window: usage.windowTokens,
+        pressure: usage.pressure,
+      }
+    } else if (method === 'session/todoListChanged') {
+      live.view.todos = z.array(todoItemSchema).parse(params.items)
     } else if (method === 'session/approvalModeChanged') {
       live.view.session.approvalMode = {
         ...(live.view.session.approvalMode ?? {}),
