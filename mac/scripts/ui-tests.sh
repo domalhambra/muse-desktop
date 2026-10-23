@@ -115,7 +115,7 @@ failed=0
 # Moves the tests' request logs from the temporary folder into this run's folder.
 collect_requests() {
   [[ -n ${requests:-} && -d $requests ]] || return 0
-  mv $requests/*-requests.jsonl $activity/ 2>/dev/null
+  files=($requests/*-requests.jsonl(N)); (( ${#files} )) && mv $files $activity/
   rm -rf $requests
   requests=""
 }
@@ -127,7 +127,7 @@ for (( run = 1; run <= runs; run++ )); do
   mkdir -p $activity
   # xcodebuild refuses to write over an existing result bundle.
   rm -rf $activity/result.xcresult
-  rm -f $activity/*-requests.jsonl
+  rm -f $activity/*-requests.jsonl(N)
   /usr/bin/log stream --style compact --level debug --predicate 'subsystem == "com.domalhambra.mmac"' \
     > $activity/app.log 2>&1 &
   log_pid=$!
