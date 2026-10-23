@@ -18,6 +18,7 @@ struct ComposerView: View {
   /// real value again, so a failed change does not leave the popup showing it.
   @State private var pendingModel: String?
   @State private var pendingEffort: String?
+  @State private var pendingMode: String?
   /// The highlighted row of the slash popup and of the @ popup. Both go back to the first row when
   /// the draft changes, as in Electron.
   @State private var commandIndex = 0
@@ -94,6 +95,19 @@ struct ComposerView: View {
         .fixedSize()
         .tint(nil)
         .accessibilityIdentifier("effort-picker")
+        Picker("Mode", selection: modeSelection) {
+          ForEach(ApprovalMode.allCases) { mode in Text(mode.label).tag(mode.rawValue) }
+          // A newer CLI's mode, or none yet (a new conversation), still has a row.
+          let shown = pendingMode ?? workspace.approvalMode
+          if ApprovalMode(rawValue: shown) == nil {
+            Text(shown.isEmpty ? "Mode" : ApprovalMode.label(for: shown)).tag(shown)
+          }
+        }
+        .fixedSize()
+        .tint(nil)
+        .disabled(workspace.view == nil || workspace.submitting)
+        .help("How much Muse may do without asking. A change applies to Muse\u{2019}s next action.")
+        .accessibilityIdentifier("mode-picker")
         if workspace.canStartInWorktree {
           let label =
             workspace.startInWorktree
@@ -328,6 +342,18 @@ struct ComposerView: View {
           await workspace.chooseModel(id)
           // A later choice may still be saving; it clears its own.
           if pendingModel == id { pendingModel = nil }
+        }
+      })
+  }
+
+  private var modeSelection: Binding<String> {
+    Binding(
+      get: { pendingMode ?? workspace.approvalMode },
+      set: { mode in
+        pendingMode = mode
+        Task {
+          await workspace.chooseApprovalMode(mode)
+          if pendingMode == mode { pendingMode = nil }
         }
       })
   }
