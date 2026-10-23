@@ -63,7 +63,9 @@ struct CommandMenuView: View {
                   .padding(.bottom, 4)
                   .accessibilityAddTraits(.isHeader)
               }
-              row(entry, index: index, entries: entries).id(index)
+              // The row's scroll id is the entry's, as the ForEach's: an index id would let the
+              // lazy stack keep the old row at that index when the filter changes.
+              row(entry, index: index, entries: entries).id(entry.id)
             }
           }
           .padding(.vertical, 6)
@@ -71,7 +73,9 @@ struct CommandMenuView: View {
         // As tall as the rows, up to Electron's 360 points.
         .frame(maxHeight: 360)
         .fixedSize(horizontal: false, vertical: true)
-        .onChange(of: selected) { proxy.scrollTo(selected) }
+        .onChange(of: selected) {
+          if entries.indices.contains(selected) { proxy.scrollTo(entries[selected].id) }
+        }
       }
     }
   }
