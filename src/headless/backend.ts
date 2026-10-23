@@ -35,6 +35,7 @@ import type { MuseHost } from '../main/muse-host'
 import { readPreferences, writePreferences } from '../main/preferences'
 import { mergeWorktree, removeWorktree } from '../main/worktrees'
 import { projectRoot, worktreeParent } from '../shared/worktree'
+import { Attachments } from './attachments'
 import { Bridges, type BridgeFactories } from './bridges'
 import { exportMarkdown, exportTitle } from './export'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
@@ -110,6 +111,8 @@ export function createBackend({
   let preferencePath = ''
   let preferenceWrites: Promise<void> = Promise.resolve()
   let bridges: Bridges | undefined
+  // Files chosen for the next message. Memory only, as in Electron.
+  const attachments = new Attachments()
 
   // Register every method with a literal call to method, name in quotes as the first argument:
   // tests/unit/headless-parity.test.ts finds them by that pattern.
@@ -316,25 +319,35 @@ export function createBackend({
   })
 
   method('send', async (value) => {
-    // Text only. Attachments come with the attachment methods in M4.
     const input = z
       .object({
         sessionId: id,
         text: z.string().max(200000),
-        attachments: z.array(id).max(0),
+        attachments: z.array(id).max(5),
         effort: effortSchema,
         mode: z.enum(['queue', 'steer']),
       })
       .parse(value)
-    if (!input.text.trim()) throw new Error('Write a message first.')
+    if (!input.text.trim() && !input.attachments.length)
+      throw new Error('Write a message or attach a file first.')
     await sessionProject(input.sessionId)
-    await muse.send(
-      input.sessionId,
-      [{ type: 'text', text: input.text }],
-      input.effort,
-      input.mode,
-      input.text,
-    )
+    const { parts, display } = await attachments.build(input.text, input.attachments)
+    await muse.send(input.sessionId, parts, input.effort, input.mode, display)
+    // Only now: after any failure the ids stay valid, so mMac can send them again.
+    attachments.forget(input.attachments)
+  })
+
+  // Attachments, as src/main/index.ts registers them. mMac shows the panel and sends the paths.
+  method('attachments', (value) => {
+    const paths = z.array(pathSchema).parse(value)
+    if (paths.length > 5) throw new Error('Select up to five files at a time.')
+    if (paths.some((path) => !isAbsolute(path)))
+      throw new Error('Choose files by their full paths.')
+    return attachments.register(paths)
+  })
+
+  method('remove-attachment', (value) => {
+    attachments.remove(id.parse(value))
   })
 
   method('cancel', (value) => muse.cancel(id.parse(value)))

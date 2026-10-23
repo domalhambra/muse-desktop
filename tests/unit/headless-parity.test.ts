@@ -38,7 +38,7 @@ const headlessOnly: Record<string, string> = {
   shutdown: 'the quit path that Electron runs on before-quit',
 }
 
-const notYet = ['voice', 'cancel-voice', 'attachments', 'remove-attachment']
+const notYet = ['voice', 'cancel-voice']
 
 function duplicates(list: string[]) {
   return list.filter((name, index) => list.indexOf(name) !== index)
@@ -47,7 +47,7 @@ function duplicates(list: string[]) {
 describe('headless method parity', () => {
   it('finds both front doors', () => {
     expect(electron).toHaveLength(53)
-    expect(headless).toHaveLength(40)
+    expect(headless).toHaveLength(42)
   })
 
   it('finds every Electron channel the preload calls', () => {

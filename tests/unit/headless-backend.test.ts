@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AppEvent,
+  Attachment,
   ConnectionStatus,
   MuseSession,
   SessionView,
@@ -243,17 +244,17 @@ describe('headless backend', () => {
     expect(muse.create).toHaveBeenCalledWith(project, undefined, { worktree: undefined })
   })
 
-  it('sends text only, after the trust check', async () => {
+  it('sends a text message after the trust check, and refuses an empty one first', async () => {
     const project = await folder('project')
     const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
     const { call, start, asks } = harness(muse, [0])
     await start()
     const message = { sessionId: 's1', text: 'hi', attachments: [], effort: 'high', mode: 'steer' }
-    await expect(call('send', { ...message, attachments: ['a1'] })).rejects.toThrow(/attachments/)
-    expect(muse.send).not.toHaveBeenCalled()
     await expect(call('send', { ...message, text: '   ' })).rejects.toThrow(
-      'Write a message first.',
+      'Write a message or attach a file first.',
     )
+    expect(asks).toHaveLength(0)
+    expect(muse.send).not.toHaveBeenCalled()
     await call('send', message)
     expect(muse.send).toHaveBeenCalledWith(
       's1',
@@ -921,6 +922,182 @@ describe('headless backend, M4a conversation actions', () => {
     await call('add-project', project)
     await call('cli-terminal', project)
     expect(terminal).toEqual([`cd '${project}' && 'muse'`])
+  })
+})
+
+describe('headless backend, M4a attachments', () => {
+  const MB = 1024 * 1024
+  const message = {
+    sessionId: 's1',
+    text: 'Look',
+    attachments: [] as string[],
+    effort: 'high',
+    mode: 'queue',
+  }
+
+  async function trusted() {
+    const project = await folder('project')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const h = harness(muse, [0])
+    await h.start()
+    return { ...h, muse }
+  }
+
+  async function writeTemp(name: string, content: string | Buffer) {
+    const path = join(dir, name)
+    await writeFile(path, content)
+    return path
+  }
+
+  it('registers up to five regular files, with Electron’s kind rule', async () => {
+    const { call } = await trusted()
+    const paths = [
+      await writeTemp('shot.PNG', 'png'),
+      await writeTemp('photo.jpeg', 'jpg'),
+      await writeTemp('notes.md', '# Notes\n'),
+      await writeTemp('doc.pdf', '%PDF'),
+      await writeTemp('pic.heic', 'heic'),
+    ]
+    const chosen = (await call('attachments', paths)) as Attachment[]
+    expect(chosen.map(({ name, kind, size }) => ({ name, kind, size }))).toEqual([
+      { name: 'shot.PNG', kind: 'image', size: 3 },
+      { name: 'photo.jpeg', kind: 'image', size: 3 },
+      { name: 'notes.md', kind: 'text', size: 8 },
+      { name: 'doc.pdf', kind: 'text', size: 4 },
+      { name: 'pic.heic', kind: 'text', size: 4 },
+    ])
+    expect(new Set(chosen.map((attachment) => attachment.id)).size).toBe(5)
+  })
+
+  it('refuses six paths, a folder, a file over 2 MB and a relative path', async () => {
+    const { call } = await trusted()
+    const small = await writeTemp('a.txt', 'a')
+    await expect(call('attachments', Array(6).fill(small))).rejects.toThrow(
+      'Select up to five files at a time.',
+    )
+    await expect(call('attachments', [await folder('notes')])).rejects.toThrow(
+      'notes must be a file smaller than 2 MB.',
+    )
+    await expect(
+      call('attachments', [await writeTemp('big.txt', Buffer.alloc(2 * MB + 1, 'a'))]),
+    ).rejects.toThrow('big.txt must be a file smaller than 2 MB.')
+    await expect(call('attachments', ['a.txt'])).rejects.toThrow(
+      'Choose files by their full paths.',
+    )
+    // Exactly 2 MB passes, as in Electron.
+    expect(
+      await call('attachments', [await writeTemp('edge.txt', Buffer.alloc(2 * MB, 'a'))]),
+    ).toHaveLength(1)
+  })
+
+  it('sends Electron’s parts and display text, then forgets the ids', async () => {
+    const { call, muse } = await trusted()
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47])
+    const [image, text] = (await call('attachments', [
+      await writeTemp('shot.png', png),
+      await writeTemp('notes.md', 'Line one\n'),
+    ])) as Attachment[]
+    await call('send', { ...message, attachments: [image.id, text.id] })
+    expect(muse.send).toHaveBeenCalledWith(
+      's1',
+      [
+        { type: 'text', text: 'Look' },
+        { type: 'image', mediaType: 'image/png', base64Data: png.toString('base64') },
+        { type: 'text', text: 'Attached file: notes.md\n\nLine one\n' },
+      ],
+      'high',
+      'queue',
+      'Look\n[Attached: shot.png]\n[Attached: notes.md]',
+    )
+    await expect(call('send', { ...message, attachments: [image.id] })).rejects.toThrow(
+      'An attachment expired. Select it again.',
+    )
+  })
+
+  it('sends files with no text, with each image extension’s media type', async () => {
+    const { call, muse } = await trusted()
+    const chosen = (await call('attachments', [
+      await writeTemp('a.JPG', 'a'),
+      await writeTemp('b.jpeg', 'b'),
+      await writeTemp('c.webp', 'c'),
+      await writeTemp('d.gif', 'd'),
+    ])) as Attachment[]
+    await call('send', { ...message, text: '', attachments: chosen.map((entry) => entry.id) })
+    expect(muse.send).toHaveBeenCalledWith(
+      's1',
+      [
+        { type: 'text', text: '' },
+        { type: 'image', mediaType: 'image/jpeg', base64Data: Buffer.from('a').toString('base64') },
+        { type: 'image', mediaType: 'image/jpeg', base64Data: Buffer.from('b').toString('base64') },
+        { type: 'image', mediaType: 'image/webp', base64Data: Buffer.from('c').toString('base64') },
+        { type: 'image', mediaType: 'image/gif', base64Data: Buffer.from('d').toString('base64') },
+      ],
+      'high',
+      'queue',
+      '\n[Attached: a.JPG]\n[Attached: b.jpeg]\n[Attached: c.webp]\n[Attached: d.gif]',
+    )
+  })
+
+  it('refuses more than five ids', async () => {
+    const { call, muse } = await trusted()
+    await expect(
+      call('send', { ...message, attachments: ['1', '2', '3', '4', '5', '6'] }),
+    ).rejects.toThrow()
+    expect(muse.send).not.toHaveBeenCalled()
+  })
+
+  it('keeps every limit and string, and keeps the ids after each failure', async () => {
+    const { call, muse } = await trusted()
+    const one = async (name: string, content: string | Buffer) =>
+      ((await call('attachments', [await writeTemp(name, content)])) as Attachment[])[0]
+    await expect(call('send', { ...message, attachments: ['gone'] })).rejects.toThrow(
+      'An attachment expired. Select it again.',
+    )
+    // A file that grew past 2 MB after it was chosen.
+    const grown = await one('grown.txt', 'small')
+    await writeFile(join(dir, 'grown.txt'), Buffer.alloc(2 * MB + 1, 'a'))
+    await expect(call('send', { ...message, attachments: [grown.id] })).rejects.toThrow(
+      'Attachments must be 2 MB or smaller.',
+    )
+    // Two 1.5 MB images: 1.4 times their bytes passes 4 MB.
+    const a = await one('a.png', Buffer.alloc(1.5 * MB))
+    const b = await one('b.png', Buffer.alloc(1.5 * MB))
+    await expect(call('send', { ...message, attachments: [a.id, b.id] })).rejects.toThrow(
+      'This message exceeds the 4 MB attachment limit.',
+    )
+    const binary = await one('data.bin', Buffer.from([0x61, 0x00, 0x62]))
+    await expect(call('send', { ...message, attachments: [binary.id] })).rejects.toThrow(
+      'data.bin is a binary file. Attach an image or a text file.',
+    )
+    const long = await one('long.txt', 'a'.repeat(200 * 1024 + 1))
+    await expect(call('send', { ...message, attachments: [long.id] })).rejects.toThrow(
+      'Text attachments must be 200 KB or smaller.',
+    )
+    expect(muse.send).not.toHaveBeenCalled()
+    // Nothing was forgotten: the first image still sends.
+    await call('send', { ...message, attachments: [a.id] })
+    expect(muse.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the ids when Muse refuses the message', async () => {
+    const { call, muse } = await trusted()
+    const [chosen] = (await call('attachments', [await writeTemp('a.txt', 'a')])) as Attachment[]
+    vi.mocked(muse.send).mockRejectedValueOnce(new Error('Muse is not connected.'))
+    await expect(call('send', { ...message, attachments: [chosen.id] })).rejects.toThrow(
+      'Muse is not connected.',
+    )
+    await call('send', { ...message, attachments: [chosen.id] })
+    expect(muse.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('forgets a removed attachment', async () => {
+    const { call } = await trusted()
+    const [chosen] = (await call('attachments', [await writeTemp('a.txt', 'a')])) as Attachment[]
+    await call('remove-attachment', chosen.id)
+    await expect(call('send', { ...message, attachments: [chosen.id] })).rejects.toThrow(
+      'An attachment expired. Select it again.',
+    )
+    await expect(call('remove-attachment', '')).rejects.toThrow()
   })
 })
 
