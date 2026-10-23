@@ -603,6 +603,17 @@ public struct Usage: Codable, Equatable, Sendable {
   }
 }
 
+// M4a's replies, from src/shared/protocol.ts.
+
+/// `compact`'s reply. `noop` means the conversation had no history to compact.
+public struct CompactResult: Codable, Equatable, Sendable {
+  public let status: String
+
+  public init(status: String) {
+    self.status = status
+  }
+}
+
 // Settings: MCP servers and the bridges, from src/shared/protocol.ts.
 
 /// An MCP server from Muse's settings.json. Secret values never leave the backend.

@@ -260,3 +260,8 @@ let fullViewJSON = #"""
   view.usage = Usage(input: 1, output: 2, total: 3)
   #expect(view.usage?.total == 3)
 }
+
+@Test func compactResultDecodes() throws {
+  let result = try JSONDecoder().decode(CompactResult.self, from: Data(#"{"status":"noop"}"#.utf8))
+  #expect(result == CompactResult(status: "noop"))
+}

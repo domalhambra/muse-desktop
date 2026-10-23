@@ -207,6 +207,34 @@ private let viewJSON = #"""
   ])
 }
 
+@Test(.timeLimit(.minutes(1))) func conversationCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "compact": return [#"{"id":\#(id),"ok":true,"value":{"status":"noop"}}"#]
+    case "export": return [#"{"id":\#(id),"ok":true,"value":"/t/Chat.md"}"#]
+    default: return [#"{"id":\#(id),"ok":true,"value":null}"#]
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  #expect(try await client.compact("s1") == CompactResult(status: "noop"))
+  let file = URL(fileURLWithPath: "/t/Chat.md")
+  #expect(try await client.export(sessionId: "s1", to: file, fallbackTitle: "First prompt") == "/t/Chat.md")
+  _ = try await client.export(sessionId: "s1", to: file, fallbackTitle: nil)
+  try await client.openTerminal(project: "/p")
+  try await client.openCLITerminal(project: "/p")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [
+    ["compact", ["s1"]],
+    ["export", ["s1", "/t/Chat.md", "First prompt"]],
+    ["export", ["s1", "/t/Chat.md"]],
+    ["terminal", ["/p"]],
+    ["cli-terminal", ["/p"]],
+  ])
+}
+
 /// Polls `condition` until it holds. The test's time limit ends a wait that never does.
 private func waitFor(_ condition: () -> Bool) async throws {
   while !condition() { try await Task.sleep(for: .milliseconds(5)) }

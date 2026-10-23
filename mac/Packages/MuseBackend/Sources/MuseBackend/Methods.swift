@@ -73,6 +73,11 @@ extension BackendClient {
     _ = try await request("cancel", [.string(sessionId)])
   }
 
+  /// Asks Muse to compact the conversation's history. The backend checks trust first.
+  public func compact(_ sessionId: String) async throws -> CompactResult {
+    try await call("compact", [.string(sessionId)])
+  }
+
   public func rename(sessionId: String, name: String) async throws {
     _ = try await request("rename", [.string(sessionId), .string(name)])
   }
@@ -101,6 +106,14 @@ extension BackendClient {
   /// A tool item's full stored output, up to 1 MB.
   public func readOutput(sessionId: String, itemId: String) async throws -> String {
     try await call("output", [.string(sessionId), .string(itemId)])
+  }
+
+  /// Writes the open conversation as Markdown to `url`, mode 0600, and returns the path written.
+  /// `fallbackTitle` is the sidebar title, used when the conversation has no name or title.
+  public func export(sessionId: String, to url: URL, fallbackTitle: String?) async throws -> String {
+    var args: [JSONValue] = [.string(sessionId), .string(url.path)]
+    if let fallbackTitle { args.append(.string(fallbackTitle)) }
+    return try await call("export", args)
   }
 
   // The inspector. Each checks that the project was opened in mMac.
@@ -156,6 +169,16 @@ extension BackendClient {
   /// Removes a Muse worktree. Its branch is kept.
   public func removeWorktree(project: String, path: String) async throws {
     _ = try await request("worktree-remove", [.string(project), .string(path)])
+  }
+
+  /// Opens Terminal in the project folder.
+  public func openTerminal(project: String) async throws {
+    _ = try await request("terminal", [.string(project)])
+  }
+
+  /// Opens Terminal in the project folder and starts the Muse Code CLI there.
+  public func openCLITerminal(project: String) async throws {
+    _ = try await request("cli-terminal", [.string(project)])
   }
 
   // Settings: MCP servers in Muse's settings.json, and the bridges.
