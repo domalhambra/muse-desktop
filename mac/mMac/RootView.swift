@@ -65,6 +65,10 @@ struct MainView: View {
     .themedToolbar()
     // The split views exist only from here on.
     .background { if !MMacApp.keepsWindowState { WindowStateGuard() } }
+    // Success notices, at the top of the window. Errors keep the alert below.
+    .overlay(alignment: .top) {
+      ToastView(workspace: workspace).padding(.top, 10)
+    }
     .alert(
       "Muse",
       isPresented: Binding(

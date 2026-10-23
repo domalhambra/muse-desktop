@@ -73,6 +73,7 @@ struct SidebarView: View {
     }
     .onChange(of: workspace.view?.session.sessionId) { highlighted = nil }
     .onChange(of: workspace.project) { highlighted = nil }
+    .onChange(of: workspace.showArchived) { highlighted = nil }
     // `sections` groups by `.now` each time the list draws, so this moves yesterday's rows.
     .onReceive(
       NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)
@@ -140,8 +141,9 @@ struct SidebarView: View {
   @ViewBuilder private var history: some View {
     // Read once: each read groups and sorts every session.
     let sections = workspace.sections
-    if let error = workspace.historyError {
-      Section {
+    Section {
+      conversationsHeader
+      if let error = workspace.historyError {
         VStack(alignment: .leading, spacing: 6) {
           Text("Could not load your conversation history.").font(.headline)
           Text(error).foregroundStyle(.themeSecondary)
@@ -152,18 +154,24 @@ struct SidebarView: View {
     ForEach(sections) { section in
       Section(section.title) {
         ForEach(section.sessions) { session in
-          SessionRow(session: session, showProject: workspace.project.isEmpty)
-            .tag(session.sessionId)
-            .contentShape(.rect)
-            // A click on the row the arrow keys moved to: the selection does not change, so the
-            // binding is not set. An ordinary click clears `highlighted` on mouse-down first, so
-            // it does not open twice.
-            .simultaneousGesture(
-              TapGesture().onEnded {
-                guard highlighted == session.sessionId else { return }
-                highlighted = nil
-                Task { await workspace.open(session.sessionId) }
-              })
+          SessionRow(
+            session: session, showProject: workspace.project.isEmpty,
+            pinned: workspace.isPinned(session.sessionId)
+          ) {
+            Task { await workspace.togglePin(session.sessionId) }
+          }
+          .tag(session.sessionId)
+          .contentShape(.rect)
+          // A click on the row the arrow keys moved to: the selection does not change, so the
+          // binding is not set. An ordinary click clears `highlighted` on mouse-down first, so
+          // it does not open twice.
+          .simultaneousGesture(
+            TapGesture().onEnded {
+              guard highlighted == session.sessionId else { return }
+              highlighted = nil
+              Task { await workspace.open(session.sessionId) }
+            })
+          .contextMenu { rowMenu(session) }
         }
       }
     }
@@ -179,10 +187,53 @@ struct SidebarView: View {
     } else if sections.isEmpty, workspace.historyError == nil, workspace.isConnected {
       Section {
         VStack(alignment: .leading, spacing: 2) {
-          Text("No conversations yet").font(.headline)
-          Text("Start a conversation in this project.").foregroundStyle(.themeSecondary)
+          Text(workspace.showArchived ? "No archived conversations" : "No conversations yet").font(.headline)
+          Text(workspace.showArchived ? "Archived conversations appear here." : "Start a conversation in this project.")
+            .foregroundStyle(.themeSecondary)
         }
       }
+    }
+  }
+
+  /// CONVERSATIONS, or ARCHIVED, with the Archive toggle beside it, as Electron's section header.
+  /// A row without a tag, so the list never selects it.
+  private var conversationsHeader: some View {
+    let label = workspace.showArchived ? "Show conversations" : "Show archived conversations"
+    return HStack {
+      Text(workspace.showArchived ? "ARCHIVED" : "CONVERSATIONS")
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.themeSecondary)
+        .accessibilityAddTraits(.isHeader)
+      Spacer()
+      Button {
+        workspace.showArchived.toggle()
+      } label: {
+        Image(systemName: workspace.showArchived ? "archivebox.fill" : "archivebox")
+      }
+      .buttonStyle(.borderless)
+      .foregroundStyle(workspace.showArchived ? appearance.colors.accent : appearance.colors.secondary)
+      .accessibilityLabel(label)
+      .accessibilityAddTraits(workspace.showArchived ? .isSelected : [])
+      .accessibilityIdentifier("archive-toggle")
+      .help(label)
+    }
+  }
+
+  /// A row's context menu. Archive's label follows the row's own state.
+  @ViewBuilder private func rowMenu(_ session: Session) -> some View {
+    let id = session.sessionId
+    Button(workspace.isPinned(id) ? "Unpin conversation" : "Pin conversation") {
+      Task { await workspace.togglePin(id) }
+    }
+    Button(workspace.isArchived(id) ? "Restore conversation" : "Archive in Desktop") {
+      Task { await workspace.toggleArchive(id) }
+    }
+    Divider()
+    Button("Rename conversation…") {
+      Task { if await workspace.ensureOpen(id), let open = workspace.view?.session { controller.sheets.rename(open) } }
+    }
+    Button("Export as Markdown…") {
+      Task { if await workspace.ensureOpen(id) { await ExportPanel.run(workspace) } }
     }
   }
 
@@ -231,10 +282,18 @@ struct SidebarView: View {
 struct SessionRow: View {
   let session: Session
   let showProject: Bool
+  var pinned = false
+  /// The hover button's action.
+  var togglePin: () -> Void = {}
+  /// While the pointer is over the row, the pin button replaces the time, as in Electron.
+  @State private var hovering = false
 
   var body: some View {
     HStack(spacing: 8) {
-      if session.status == "running" {
+      // As Electron: a pinned row shows its pin, even while it runs.
+      if pinned {
+        Image(systemName: "pin.fill").font(.caption).foregroundStyle(.themeSecondary).accessibilityLabel("Pinned")
+      } else if session.status == "running" {
         ProgressView().controlSize(.mini).accessibilityLabel("Working")
       } else {
         Image(systemName: "bubble.left").foregroundStyle(.themeSecondary).accessibilityHidden(true)
@@ -258,13 +317,26 @@ struct SessionRow: View {
           .background(.quaternary, in: Capsule())
           .help(session.worktree?.path ?? session.workspaceRoot ?? "")
       }
-      TimelineView(.everyMinute) { context in
-        Text(RelativeTime.text(SidebarSections.activity(session), now: context.date))
-          .font(.caption)
-          .foregroundStyle(.themeSecondary)
-          .monospacedDigit()
+      if hovering {
+        Button(action: togglePin) {
+          Image(systemName: pinned ? "pin.slash" : "pin")
+        }
+        .buttonStyle(.borderless)
+        .help(pinned ? "Unpin conversation" : "Pin conversation")
+        .accessibilityLabel("\(pinned ? "Unpin" : "Pin") \(SessionTitle.of(session))")
+        .accessibilityIdentifier("pin-button")
+      } else {
+        TimelineView(.everyMinute) { context in
+          Text(RelativeTime.text(SidebarSections.activity(session), now: context.date))
+            .font(.caption)
+            .foregroundStyle(.themeSecondary)
+            .monospacedDigit()
+        }
       }
     }
+    .onHover { hovering = $0 }
     .help(SessionTitle.of(session))
+    // VoiceOver reaches the pin without hovering.
+    .accessibilityAction(named: pinned ? "Unpin conversation" : "Pin conversation", togglePin)
   }
 }

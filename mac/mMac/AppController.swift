@@ -30,6 +30,8 @@ final class AppController {
   /// with a Workspace overwrites it, so a click's id survives a start that has not built one yet.
   private var reopen: String?
   let asks = AskQueue()
+  /// The sheets the menu bar, the sidebar, the toolbar and the composer open.
+  let sheets = WindowSheets()
   /// Completion notifications. A click opens its conversation in the current Workspace.
   let notifications = Notifications()
   private var client: BackendClient?

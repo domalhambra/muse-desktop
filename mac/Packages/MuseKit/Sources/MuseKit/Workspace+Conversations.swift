@@ -110,3 +110,14 @@ public enum ExportName {
     }
   }
 }
+
+// The sidebar's row actions.
+extension Workspace {
+  /// Opens `sessionId` unless it is the open conversation, and returns whether it is open now.
+  /// The backend renames and exports only the open conversation, so a row's context menu opens
+  /// its conversation first. A failed open shows its error and returns false.
+  public func ensureOpen(_ sessionId: String) async -> Bool {
+    if view?.session.sessionId != sessionId { await open(sessionId) }
+    return view?.session.sessionId == sessionId
+  }
+}
