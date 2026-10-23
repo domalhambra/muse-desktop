@@ -213,6 +213,30 @@ private func fileRequests(_ backend: ScriptedBackend) -> [JSONValue] {
   #expect(menu.rows(for: "@m @").count == 2)
 }
 
+@MainActor @Test func aDismissedMenuShowsAgainWhenTheFolderChanges() async throws {
+  let (workspace, backend) = await makeWorkspace(script: filesScript())
+  let menu = MentionMenu(workspace: workspace)
+  await menu.update(draft: "@")
+  menu.dismiss()
+  #expect(menu.rows(for: "@").isEmpty)
+  await menu.update(draft: "@src/")
+  #expect(fileRequests(backend) == [["/p", ""], ["/p", "src"]])
+  #expect(menu.rows(for: "@src/").map(\.path) == ["src/lib", "src/app.swift"])
+}
+
+@MainActor @Test func aCancelledListingIsListedAgainOnTheNextUpdate() async throws {
+  let (workspace, backend) = await makeWorkspace(script: filesScript())
+  let menu = MentionMenu(workspace: workspace)
+  let cancelled = Task { await menu.update(draft: "@") }
+  cancelled.cancel()
+  await cancelled.value
+  #expect(menu.rows(for: "@").isEmpty)
+  await menu.update(draft: "@")
+  // The cancelled call may not reach the backend at all; the folder is listed on the next call.
+  #expect(!fileRequests(backend).isEmpty)
+  #expect(menu.rows(for: "@").map(\.path) == ["src", "main.swift"])
+}
+
 @MainActor @Test func withNoProjectThereAreNoMentions() async throws {
   let (workspace, backend) = await makeWorkspace(preferences: Preferences(), script: filesScript())
   let menu = MentionMenu(workspace: workspace)
@@ -222,11 +246,43 @@ private func fileRequests(_ backend: ScriptedBackend) -> [JSONValue] {
 }
 
 @MainActor @Test func aFailedListingShowsNoRowsAndNoError() async throws {
-  let (workspace, _) = await makeWorkspace { method, _, id in
-    method == "files" ? [failure(id, "This path is outside the selected project.")] : []
+  let (workspace, _) = await makeWorkspace { method, args, id in
+    guard method == "files" else { return [reply(id, "null")] }
+    return args.last == "src" ? [failure(id, "This path is outside the selected project.")] : [reply(id, rootFiles)]
   }
   let menu = MentionMenu(workspace: workspace)
-  await menu.update(draft: "@../")
-  #expect(menu.rows(for: "@../").isEmpty)
+  await menu.update(draft: "@")
+  #expect(menu.rows(for: "@").count == 2)
+  // The failed folder shows no rows, not the root's: their paths belong to another folder.
+  await menu.update(draft: "@src/")
+  #expect(menu.rows(for: "@src/").isEmpty)
+  #expect(workspace.errorMessage == nil)
+}
+
+@MainActor @Test func aModelChosenBeforeAnotherConversationOpenedIsNotApplied() async throws {
+  let (workspace, backend) = await makeWorkspace(script: commandScript { method, args, id in
+    switch method {
+    case "set-model": return []
+    case "open":
+      // s2 has its own model, so the check can tell it from the one chosen.
+      guard case .string(let sessionId)? = args.first else { return nil }
+      return [reply(id, viewJSON(sessionJSON(sessionId, modelId: sessionId == "s2" ? "m1" : nil)))]
+    default: return nil
+    }
+  })
+  await workspace.loadModels()
+  await workspace.open("s1")
+  workspace.draft = "/model m2"
+  let command = try #require(ComposerCommand.parse("/model m2"))
+  let running = Task { await workspace.run(command) }
+  try await eventually { requests(backend).last?.first == "set-model" }
+  // The person opens another conversation while the reply is held.
+  await workspace.open("s2")
+  let held = try #require(backend.messages.last { $0["method"] == "set-model" }?["id"])
+  guard case .number(let id) = held else { Issue.record("no id"); return }
+  backend.push(reply(Int(id), "null"))
+  _ = await running.value
+  #expect(workspace.view?.session.sessionId == "s2")
+  #expect(workspace.modelId == "m1")
   #expect(workspace.errorMessage == nil)
 }
