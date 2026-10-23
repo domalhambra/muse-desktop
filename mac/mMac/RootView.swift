@@ -53,7 +53,7 @@ struct MainView: View {
       ConversationView(controller: controller, workspace: workspace)
         .inspector(isPresented: $inspectorShown) {
           InspectorView(controller: controller, workspace: workspace, inspector: workspace.inspector)
-            .inspectorColumnWidth(min: 280, ideal: 340, max: 560)
+            .inspectorColumnWidth(min: 360, ideal: 360, max: 560)
         }
         .toolbar {
           ToolbarItem(placement: .primaryAction) {

@@ -436,6 +436,26 @@ public struct AgentRow: Equatable, Sendable, Identifiable {
   public enum Phase: Equatable, Sendable { case running, done, other }
 }
 
+/// The Preview tab's rules. The tab takes a typed address; it does not detect dev servers.
+public enum PreviewRules {
+  /// A typed address as a URL: a bare host or `host:port` gets `http://`. Only `http`, `https` and
+  /// `file` load. Nil for an empty field, another scheme, or `http://` with no host.
+  public static func url(from text: String) -> URL? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let withScheme = trimmed.contains("://") ? trimmed : "http://" + trimmed
+    guard let url = URL(string: withScheme), let scheme = url.scheme?.lowercased() else { return nil }
+    switch scheme {
+    case "http", "https": return url.host == nil ? nil : url
+    case "file": return url
+    default: return nil
+    }
+  }
+
+  /// The defaults key that remembers a project's last preview address.
+  public static func key(for project: String) -> String { "preview-url:\(project)" }
+}
+
 /// One row of the Activity tab, as Electron's `activityTitle` and the detail line in `Inspector.tsx`.
 public struct ActivityEntry: Equatable, Sendable, Identifiable {
   public let id: String

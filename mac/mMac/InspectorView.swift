@@ -27,6 +27,7 @@ struct InspectorView: View {
         case .activity: ActivityView(entries: entries)
         case .tasks: TasksView(rows: TodoRow.build(workspace.view?.todos))
         case .agents: AgentsView(rows: AgentRow.build(workspace.view?.items ?? []), controller: controller, workspace: workspace)
+        case .preview: PreviewView(project: workspace.project)
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -93,6 +94,7 @@ struct InspectorView: View {
         Text(ChangeLabel.counted("Activity", activityCount)).tag(Inspector.Tab.activity)
         Text(ChangeLabel.counted("Tasks", todosCount)).tag(Inspector.Tab.tasks)
         Text(ChangeLabel.counted("Agents", AgentRow.build(workspace.view?.items ?? []).count)).tag(Inspector.Tab.agents)
+        Text("Preview").tag(Inspector.Tab.preview)
       }
       .pickerStyle(.segmented)
       .labelsHidden()

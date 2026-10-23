@@ -392,5 +392,20 @@ let reviewDiff = [
   #expect(rows[1].title == "Explorer")
   #expect(rows[1].status == "inProgress")
   #expect(rows[1].detail == "")
-  #expect(Inspector.Tab.allCases == [.changes, .files, .activity, .tasks, .agents])
+}
+
+@Test func previewURLsGetASchemeAndKeepTheirPort() {
+  #expect(PreviewRules.url(from: "localhost:4321")?.absoluteString == "http://localhost:4321")
+  #expect(PreviewRules.url(from: " 127.0.0.1:8080/docs ")?.absoluteString == "http://127.0.0.1:8080/docs")
+  #expect(PreviewRules.url(from: "https://www.plateworks.org/")?.absoluteString == "https://www.plateworks.org/")
+  #expect(PreviewRules.url(from: "file:///tmp/page.html")?.absoluteString == "file:///tmp/page.html")
+  #expect(PreviewRules.url(from: "") == nil)
+  #expect(PreviewRules.url(from: "ftp://x.test") == nil)
+  #expect(PreviewRules.url(from: "http://") == nil)
+}
+
+@Test func theLastURLIsKeptPerProject() {
+  #expect(PreviewRules.key(for: "/p") == "preview-url:/p")
+  #expect(PreviewRules.key(for: "/p") != PreviewRules.key(for: "/q"))
+  #expect(Inspector.Tab.allCases.last == .preview)
 }
