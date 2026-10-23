@@ -161,9 +161,9 @@ private struct VoiceCommand: View {
       Task { await voice.toggle() }
     }
     .keyboardShortcut("v", modifiers: .option)
-    // On whenever a Workspace exists, so ⌥V is always taken here: a disabled item would let the
-    // key fall through and type "√" into the draft. When voice cannot run, the press does nothing,
-    // as Electron's handler prevents the default and its toggle returns early.
+    // On whenever a Workspace exists. When voice cannot run, the press does nothing, as Electron's
+    // handler prevents the default and its toggle returns early. A focused text view gets ⌥V
+    // before the menu, so the composer hands the key here itself (`ComposerTextView.keyDown`).
     .disabled(controller.voice == nil)
   }
 

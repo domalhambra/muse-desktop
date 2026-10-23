@@ -327,7 +327,19 @@ final class ComposerNSTextView: NSTextView {
     }
   }
 
+  /// ⌥V, Edit › Voice Input's key. It matches the character, as the menu item does.
+  private static func isVoiceShortcut(_ event: NSEvent) -> Bool {
+    modifiers(event) == .option && event.charactersIgnoringModifiers?.lowercased() == "v"
+  }
+
   override func keyDown(with event: NSEvent) {
+    // AppKit offers a key equivalent without Command to the focused text view first, so ⌥V would
+    // type "√" and the menu item would never run. Hand the key to the menu: it toggles voice when
+    // voice can run and does nothing otherwise. The draft never takes the character.
+    if Self.isVoiceShortcut(event), !hasMarkedText() {
+      _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
+      return
+    }
     // A popup takes its keys first, while the composer is editable. Composition owns every key
     // until it commits, and a held Return repeats into the send below, which ignores repeats.
     if isEditable, !hasMarkedText(), let key = Self.popupKey(event), !(key == .enter && event.isARepeat),
