@@ -18,13 +18,14 @@ struct InspectorView: View {
     VStack(spacing: 0) {
       header
       Divider()
-      tabs(activityCount: entries.count)
+      tabs(activityCount: entries.count, todosCount: TodoRow.build(workspace.view?.todos).count)
       Divider()
       Group {
         switch inspector.tab {
         case .changes: ChangesView(workspace: workspace, inspector: inspector)
         case .files: FilesView(controller: controller, workspace: workspace, inspector: inspector)
         case .activity: ActivityView(entries: entries)
+        case .tasks: TasksView(rows: TodoRow.build(workspace.view?.todos))
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -69,6 +70,13 @@ struct InspectorView: View {
         } else {
           Text("Local project").font(.caption).foregroundStyle(.themeSecondary)
         }
+        if let context = workspace.view?.context {
+          Text(ContextGauge.label(context))
+            .font(.caption)
+            .foregroundStyle(gaugeColor(ContextGauge.tint(context)))
+            .accessibilityIdentifier("context-gauge")
+            .help("How full this conversation\u{2019}s context window is. Muse compacts it when it fills.")
+        }
       }
       Spacer(minLength: 0)
     }
@@ -76,12 +84,13 @@ struct InspectorView: View {
     .help(workspace.project)
   }
 
-  private func tabs(activityCount: Int) -> some View {
+  private func tabs(activityCount: Int, todosCount: Int) -> some View {
     HStack(spacing: 8) {
       Picker("Inspector view", selection: $inspector.tab) {
         Text(ChangeLabel.counted("Changes", inspector.git?.changes.count ?? 0)).tag(Inspector.Tab.changes)
         Text("Files").tag(Inspector.Tab.files)
         Text(ChangeLabel.counted("Activity", activityCount)).tag(Inspector.Tab.activity)
+        Text(ChangeLabel.counted("Tasks", todosCount)).tag(Inspector.Tab.tasks)
       }
       .pickerStyle(.segmented)
       .labelsHidden()
@@ -146,6 +155,14 @@ struct InspectorView: View {
     workspace.revealProject { NSWorkspace.shared.open($0) }
   }
 
+  private func gaugeColor(_ tint: ContextGauge.Tint) -> Color {
+    switch tint {
+    case .normal: appearance.colors.secondary
+    case .warning: .orange
+    case .blocked: .red
+    }
+  }
+
   /// What makes the inspector read the project again.
   struct RefreshKey: Equatable {
     let project: String
@@ -188,6 +205,42 @@ struct ActivityView: View {
         .accessibilityElement(children: .combine)
       }
       .listStyle(.inset)
+    }
+  }
+}
+
+/// The Tasks tab: the agent's todo list, replaced whole on every change.
+struct TasksView: View {
+  let rows: [TodoRow]
+
+  var body: some View {
+    if rows.isEmpty {
+      ContentUnavailableView(
+        "No tasks yet", systemImage: "checklist",
+        description: Text("Muse\u{2019}s task list appears here when it makes one.").foregroundStyle(.themeSecondary))
+    } else {
+      List(rows) { row in
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          TodoStatusIcon(status: row.status)
+          Text(row.title).strikethrough(row.status == "completed" || row.status == "cancelled")
+        }
+        .accessibilityElement(children: .combine)
+      }
+      .listStyle(.inset)
+      .accessibilityIdentifier("tasks-list")
+    }
+  }
+}
+
+struct TodoStatusIcon: View {
+  let status: String
+
+  var body: some View {
+    switch status {
+    case "inProgress": ProgressView().controlSize(.mini).accessibilityLabel("In progress")
+    case "completed": Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Completed")
+    case "cancelled": Image(systemName: "xmark.circle").foregroundStyle(.themeSecondary).accessibilityLabel("Cancelled")
+    default: Image(systemName: "circle").foregroundStyle(.themeSecondary).accessibilityLabel("Pending")
     }
   }
 }

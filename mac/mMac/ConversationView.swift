@@ -6,6 +6,7 @@ import SwiftUI
 struct ConversationView: View {
   let controller: AppController
   let workspace: Workspace
+  @AppStorage("inspectorShown", store: MMacApp.appStorage) private var inspectorShown = false
 
   var body: some View {
     @Bindable var sheets = controller.sheets
@@ -32,6 +33,18 @@ struct ConversationView: View {
     .navigationSubtitle(
       workspace.project.isEmpty ? "" : ProjectPath.name(of: ProjectPath.root(of: workspace.project)))
     .toolbar {
+      if let view = workspace.view, let badge = ChangesBadge.text(view.items) {
+        ToolbarItem {
+          Button(badge) {
+            inspectorShown = true
+            workspace.inspector.tab = .changes
+          }
+          .monospacedDigit()
+          .help("What Muse changed in this conversation. Opens the inspector on Changes.")
+          .accessibilityLabel("Changes \(badge)")
+          .accessibilityIdentifier("changes-badge")
+        }
+      }
       if let session = workspace.view?.session {
         ToolbarItem {
           Menu {
