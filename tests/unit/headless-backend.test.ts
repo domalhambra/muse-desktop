@@ -1042,7 +1042,7 @@ describe('headless backend, M4a attachments', () => {
     const { call, muse } = await trusted()
     await expect(
       call('send', { ...message, attachments: ['1', '2', '3', '4', '5', '6'] }),
-    ).rejects.toThrow()
+    ).rejects.toThrow('You can attach up to five files per message.')
     expect(muse.send).not.toHaveBeenCalled()
   })
 
@@ -1088,6 +1088,33 @@ describe('headless backend, M4a attachments', () => {
     )
     await call('send', { ...message, attachments: [chosen.id] })
     expect(muse.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('turns a vanished file into the expired message, without its path', async () => {
+    const { call, muse } = await trusted()
+    const path = await writeTemp('gone.txt', 'a')
+    const [chosen] = (await call('attachments', [path])) as Attachment[]
+    await rm(path)
+    let text = ''
+    try {
+      await call('send', { ...message, attachments: [chosen.id] })
+    } catch (error) {
+      text = (error as Error).message
+    }
+    expect(text).toBe('An attachment expired. Select it again.')
+    expect(muse.send).not.toHaveBeenCalled()
+    await expect(call('attachments', [path])).rejects.toThrow(
+      'gone.txt must be a file smaller than 2 MB.',
+    )
+  })
+
+  it('refuses a FIFO without blocking', async () => {
+    const { call } = await trusted()
+    const fifo = join(dir, 'pipe')
+    execFileSync('mkfifo', [fifo])
+    await expect(call('attachments', [fifo])).rejects.toThrow(
+      'pipe must be a file smaller than 2 MB.',
+    )
   })
 
   it('forgets a removed attachment', async () => {

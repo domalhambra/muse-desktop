@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { open } from 'node:fs/promises'
 import { basename, extname } from 'node:path'
 import type { Attachment } from '../shared/protocol'
 
@@ -24,6 +25,35 @@ const mediaTypes: Record<string, string> = {
   '.gif': 'image/gif',
 }
 
+const EXPIRED = 'An attachment expired. Select it again.'
+
+/** Errors a file that vanished or cannot be read raises; the person never sees their text. */
+function unreadable(error: unknown) {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 'ENOENT' || code === 'EACCES' || code === 'EISDIR'
+}
+
+/**
+ * Opens the path once and checks and reads through that handle, so a swap between the check
+ * and the read cannot slip through. O_NONBLOCK keeps a FIFO from blocking the open. Returns
+ * `undefined` when the path is not a regular file or is over the limit; `data` is read only
+ * when `read` is true.
+ */
+async function inspect(path: string, read: boolean) {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
+  try {
+    const info = await handle.stat()
+    if (!info.isFile() || info.size > MAX_FILE) return undefined
+    if (!read) return { size: info.size, data: Buffer.alloc(0) }
+    const data = await handle.readFile()
+    // The file may have grown after the stat.
+    if (data.length > MAX_FILE) return undefined
+    return { size: info.size, data }
+  } finally {
+    await handle.close()
+  }
+}
+
 type Chosen = { attachment: Attachment; path: string }
 
 export class Attachments {
@@ -37,9 +67,11 @@ export class Attachments {
     if (paths.length > 5) throw new Error('Select up to five files at a time.')
     const chosen: Chosen[] = []
     for (const path of paths) {
-      const info = await stat(path)
-      if (!info.isFile() || info.size > MAX_FILE)
-        throw new Error(`${basename(path)} must be a file smaller than 2 MB.`)
+      const notFile = new Error(`${basename(path)} must be a file smaller than 2 MB.`)
+      const info = await inspect(path, false).catch((error) => {
+        throw unreadable(error) ? notFile : error
+      })
+      if (!info) throw notFile
       chosen.push({
         path,
         attachment: {
@@ -60,8 +92,9 @@ export class Attachments {
   }
 
   /**
-   * The message's parts and display text. Each file is read now, not when it was chosen, so a
-   * file that changed or grew since fails here, with the draft and the ids kept.
+   * The message's parts and display text. Each file is read now, not when it was chosen, so it
+   * sends its current content. A file that grew past a limit since, or vanished, fails here,
+   * with the draft and the ids kept.
    */
   async build(text: string, ids: string[]) {
     const parts: Record<string, unknown>[] = [{ type: 'text', text }]
@@ -69,10 +102,12 @@ export class Attachments {
     let bytes = Buffer.byteLength(text)
     for (const id of ids) {
       const chosen = this.selected.get(id)
-      if (!chosen) throw new Error('An attachment expired. Select it again.')
-      const info = await stat(chosen.path)
-      if (info.size > MAX_FILE) throw new Error('Attachments must be 2 MB or smaller.')
-      const data = await readFile(chosen.path)
+      if (!chosen) throw new Error(EXPIRED)
+      const read = await inspect(chosen.path, true).catch((error) => {
+        throw unreadable(error) ? new Error(EXPIRED) : error
+      })
+      if (!read) throw new Error('Attachments must be 2 MB or smaller.')
+      const { data } = read
       bytes += data.length * ENCODED
       if (bytes > MAX_MESSAGE) throw new Error('This message exceeds the 4 MB attachment limit.')
       if (chosen.attachment.kind === 'image') {

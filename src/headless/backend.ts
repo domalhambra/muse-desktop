@@ -323,11 +323,13 @@ export function createBackend({
       .object({
         sessionId: id,
         text: z.string().max(200000),
-        attachments: z.array(id).max(5),
+        attachments: z.array(id),
         effort: effortSchema,
         mode: z.enum(['queue', 'steer']),
       })
       .parse(value)
+    if (input.attachments.length > 5)
+      throw new Error('You can attach up to five files per message.')
     if (!input.text.trim() && !input.attachments.length)
       throw new Error('Write a message or attach a file first.')
     await sessionProject(input.sessionId)
@@ -340,7 +342,6 @@ export function createBackend({
   // Attachments, as src/main/index.ts registers them. mMac shows the panel and sends the paths.
   method('attachments', (value) => {
     const paths = z.array(pathSchema).parse(value)
-    if (paths.length > 5) throw new Error('Select up to five files at a time.')
     if (paths.some((path) => !isAbsolute(path)))
       throw new Error('Choose files by their full paths.')
     return attachments.register(paths)
