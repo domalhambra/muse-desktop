@@ -20,9 +20,11 @@ final class AppController {
   private(set) var workspace: Workspace?
   /// The Settings window's store for this Workspace. Made and dropped with it.
   private(set) var settings: SettingsModel?
+  /// Voice input for this Workspace. Made and dropped with it.
+  private(set) var voice: VoiceSession?
   /// Read once: in memory mode every read of `BridgeTokenStores.app` makes a new, empty store, so
   /// every `start` and every `SettingsModel` must share this one.
-  let tokens: any BridgeTokenStore = BridgeTokenStores.app
+  let tokens: any BridgeTokenStore = AppController.tokenStore()
   /// The last Workspace's unsent drafts, for the next backend's Workspace.
   private var drafts: [String: String] = [:]
   /// The conversation the last Workspace showed or was opening, or one whose notification was
@@ -30,6 +32,8 @@ final class AppController {
   /// with a Workspace overwrites it, so a click's id survives a start that has not built one yet.
   private var reopen: String?
   let asks = AskQueue()
+  /// The sheets the menu bar, the sidebar, the toolbar and the composer open.
+  let sheets = WindowSheets()
   /// Completion notifications. A click opens its conversation in the current Workspace.
   let notifications = Notifications()
   private var client: BackendClient?
@@ -122,6 +126,7 @@ final class AppController {
       }
       self.workspace = workspace
       self.settings = SettingsModel(workspace: workspace, tokens: tokens, tokenError: tokenError)
+      self.voice = VoiceSession(workspace: workspace, capture: VoiceRecorder())
       phase = .running
       // A backend that stops while history loads shows the stopped screen. Its Restart must not
       // find this start still under way.
@@ -202,6 +207,9 @@ final class AppController {
       // A reopen the Workspace had not done yet, if it stopped while history loaded, carries on.
       reopen = workspace.openingSessionId ?? workspace.view?.session.sessionId ?? workspace.pendingReopen
     }
+    // A recording or a transcription belongs to this backend.
+    voice?.cancel()
+    voice = nil
     workspace = nil
     settings = nil
   }
@@ -210,6 +218,20 @@ final class AppController {
   /// wait while the Keychain asks for the login password, and the app must keep drawing meanwhile.
   private static func readToken(from tokens: any BridgeTokenStore) async throws -> String {
     try await Task.detached { try tokens.read() ?? "" }.value
+  }
+
+  /// This build's token store. The size measurement's build (`MMAC_MEASURE`, which only
+  /// `mac/scripts/measure-size.sh` sets) is a Release build that keeps the token in memory, so a
+  /// measurement never reads or writes the real Keychain item.
+  private nonisolated static func tokenStore() -> any BridgeTokenStore {
+    #if MMAC_MEASURE
+      // The script looks for this line in the binary before it launches the build, and in
+      // mMac's stderr after. Keep the two in step.
+      FileHandle.standardError.write(Data("mMac measurement build: the bridge token stays in memory.\n".utf8))
+      return MemoryTokenStore()
+    #else
+      return BridgeTokenStores.app
+    #endif
   }
 
   /// The backend's last stderr output, once stderr has ended.
@@ -306,8 +328,14 @@ final class AppController {
   }
 
   /// The checkout the backend runs from: the one chosen in the app, else the one this build came from.
+  /// The size measurement's build always runs the checkout it came from, so its numbers are that
+  /// checkout's, whatever checkout Dom chose in his own mMac.
   static func repository() throws -> URL {
-    let chosen = UserDefaults.standard.string(forKey: repositoryKey)
+    #if MMAC_MEASURE
+      let chosen: String? = nil
+    #else
+      let chosen = UserDefaults.standard.string(forKey: repositoryKey)
+    #endif
     let built = Bundle.main.object(forInfoDictionaryKey: repositoryKey) as? String
     guard let path = chosen ?? built else {
       throw SetupError("This mMac build does not name a Muse Desktop checkout. Choose one.")

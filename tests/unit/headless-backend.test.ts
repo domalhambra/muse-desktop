@@ -1,17 +1,30 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AppEvent,
+  Attachment,
   ConnectionStatus,
   MuseSession,
   SessionView,
 } from '../../src/shared/protocol'
 import type { AgentApi, AgentPolicy } from '../../src/main/agent-api'
 import { splitHunks } from '../../src/main/git'
-import { createBackend, type Muse } from '../../src/headless/backend'
+import { VoiceTranscriber } from '../../src/main/voice'
+import { encodeVoiceWav, MAX_VOICE_BYTES } from '../../src/shared/voice'
+import { createBackend, type BackendDeps, type Muse } from '../../src/headless/backend'
 import type { BridgeFactories } from '../../src/headless/bridges'
 import { HEADLESS_PROTOCOL, type Ask } from '../../src/headless/wire'
 
@@ -53,7 +66,9 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     open: vi.fn(async (sessionId: string) => view(session({ sessionId }))),
     send: vi.fn(async () => {}),
     cancel: vi.fn(async () => {}),
+    compact: vi.fn(async () => ({ status: 'started' })),
     getSession: vi.fn(() => session()),
+    getView: vi.fn((sessionId: string) => view(session({ sessionId }))),
     hasActiveTurns: vi.fn(() => false),
     rename: vi.fn(async () => {}),
     models: vi.fn(async () => [
@@ -77,13 +92,26 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
   } satisfies Muse
 }
 
+/** A VoiceTranscriber stand-in that records its calls. */
+function fakeVoice() {
+  return {
+    transcribe: vi.fn(async (_data: Buffer, _cliPath: string) => 'A voice draft to review.'),
+    cancel: vi.fn(async () => {}),
+  }
+}
+
 /** A backend wired to fakes. `answers` are the choices the fake app gives, in order. */
 function harness(
   muse: Muse = fakeMuse(),
   answers: number[] = [],
-  options: { askStartsQuit?: boolean; dataFolder?: string } = {},
+  options: {
+    askStartsQuit?: boolean
+    dataFolder?: string
+    voice?: NonNullable<BackendDeps['voice']>
+  } = {},
 ) {
   const asks: Ask[] = []
+  const voice = options.voice ?? fakeVoice()
   const dataFolder = join(dir, options.dataFolder ?? 'data')
   const events: AppEvent[] = []
   const terminal: string[] = []
@@ -116,6 +144,7 @@ function harness(
       return { activeCount: 0 } as unknown as AgentApi
     },
     bridgeFactories,
+    voice,
     ask: async (value) => {
       asks.push(value)
       // A quit that starts while the Ask shows: the answer still comes back.
@@ -150,6 +179,8 @@ function harness(
     start,
     lastPreferences,
     backend,
+    /** The transcriber the backend was given. */
+    voice,
     /** The file the backend saves preferences in. */
     preferencesFile: join(dataFolder, 'preferences.json'),
     /** The policy the backend gave the agent factory in start. */
@@ -241,17 +272,17 @@ describe('headless backend', () => {
     expect(muse.create).toHaveBeenCalledWith(project, undefined, { worktree: undefined })
   })
 
-  it('sends text only, after the trust check', async () => {
+  it('sends a text message after the trust check, and refuses an empty one first', async () => {
     const project = await folder('project')
     const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
     const { call, start, asks } = harness(muse, [0])
     await start()
     const message = { sessionId: 's1', text: 'hi', attachments: [], effort: 'high', mode: 'steer' }
-    await expect(call('send', { ...message, attachments: ['a1'] })).rejects.toThrow(/attachments/)
-    expect(muse.send).not.toHaveBeenCalled()
     await expect(call('send', { ...message, text: '   ' })).rejects.toThrow(
-      'Write a message first.',
+      'Write a message or attach a file first.',
     )
+    expect(asks).toHaveLength(0)
+    expect(muse.send).not.toHaveBeenCalled()
     await call('send', message)
     expect(muse.send).toHaveBeenCalledWith(
       's1',
@@ -370,6 +401,7 @@ describe('headless backend, M1 methods', () => {
     ['approve', 'approve', ['s1', 'a1', 'c1']],
     ['answer', 'answer', ['s1', 'u1', [{ questionId: 'q', selectedLabel: 'Yes' }]]],
     ['cancel-question', 'cancelQuestion', ['s1', 'u1']],
+    ['compact', 'compact', ['s1']],
   ] as const)('%s stops at a cancelled trust check', async (name, hostMethod, args) => {
     const project = await folder('project')
     const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
@@ -810,6 +842,484 @@ describe('headless backend, M3 MCP methods', () => {
       `cd '${homedir()}' && '/opt/muse' 'mcp' 'login' 'remote'`,
       `cd '${homedir()}' && '/opt/muse' 'mcp' 'logout' 'remote'`,
     ])
+  })
+})
+
+describe('headless backend, M4a conversation actions', () => {
+  it('compacts after the trust check and returns Muse’s status', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse({
+      getSession: vi.fn(() => session({ workspaceRoot: project })),
+      compact: vi.fn(async () => ({ status: 'noop' })),
+    })
+    const { call, start, asks } = harness(muse, [0])
+    await start()
+    expect(await call('compact', 's1')).toEqual({ status: 'noop' })
+    expect(muse.compact).toHaveBeenCalledWith('s1')
+    expect(asks).toHaveLength(1)
+  })
+
+  it('exports the open view to the chosen path, mode 0600, without a trust check', async () => {
+    const exported = view(session({ name: 'Plan', workspaceRoot: '/p' }))
+    exported.items = [
+      { itemId: 'i1', kind: 'userMessage', revision: 1, status: 'completed', text: 'Hello' },
+    ]
+    const muse = fakeMuse({ getView: vi.fn(() => exported) })
+    const { call, start, asks } = harness(muse)
+    await start()
+    const path = join(dir, 'Plan.md')
+    // A file the person chose to replace: its old mode must not stay.
+    await writeFile(path, 'old', { mode: 0o644 })
+    expect(await call('export', 's1', path)).toBe(path)
+    expect(muse.getView).toHaveBeenCalledWith('s1')
+    expect(await readFile(path, 'utf8')).toBe('# Plan\n\nProject: /p\n\n## You\n\nHello\n')
+    expect((await stat(path)).mode & 0o777).toBe(0o600)
+    expect(asks).toHaveLength(0)
+  })
+
+  it('titles an unnamed conversation with the sidebar title mMac sends', async () => {
+    const { call, start } = harness()
+    await start()
+    const path = join(dir, 'out.md')
+    await call('export', 's1', path, 'Fix the login bug')
+    expect(await readFile(path, 'utf8')).toBe('# Fix the login bug\n\nProject: None\n')
+    await call('export', 's1', path)
+    expect(await readFile(path, 'utf8')).toBe('# Muse conversation\n\nProject: None\n')
+  })
+
+  it('writes nothing for a conversation that is not open, or for a relative path', async () => {
+    const muse = fakeMuse({
+      getView: vi.fn((sessionId: string): SessionView => {
+        if (sessionId === 'gone')
+          throw new Error('Open this conversation before performing an action.')
+        return view(session({ sessionId }))
+      }),
+    })
+    const { call, start } = harness(muse)
+    await start()
+    const path = join(dir, 'never.md')
+    await expect(call('export', 'gone', path)).rejects.toThrow(
+      'Open this conversation before performing an action.',
+    )
+    await expect(call('export', 's1', 'never.md')).rejects.toThrow(
+      'Choose a full path for the exported file.',
+    )
+    await expect(readFile(path)).rejects.toThrow('ENOENT')
+  })
+
+  it('shortens a long sidebar title instead of refusing the export', async () => {
+    const { call, start } = harness()
+    await start()
+    const path = join(dir, 'long.md')
+    await call('export', 's1', path, 'x'.repeat(1500))
+    expect(await readFile(path, 'utf8')).toBe(`# ${'x'.repeat(200)}\n\nProject: None\n`)
+  })
+
+  it('cuts a long sidebar title by characters, keeping an emoji whole', async () => {
+    const { call, start } = harness()
+    await start()
+    const path = join(dir, 'emoji.md')
+    await call('export', 's1', path, `${'x'.repeat(199)}🎉🎉`)
+    expect(await readFile(path, 'utf8')).toBe(`# ${'x'.repeat(199)}🎉\n\nProject: None\n`)
+  })
+
+  it('opens Terminal in a known project, then with the CLI', async () => {
+    const project = await folder("O'Brien project")
+    const { call, start, terminal } = harness(fakeMuse({ status: { ...ready, path: '/opt/muse' } }))
+    await start()
+    await expect(call('terminal', project)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    await expect(call('cli-terminal', project)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    expect(terminal).toEqual([])
+    await call('add-project', project)
+    await call('terminal', project)
+    await call('cli-terminal', project)
+    expect(terminal).toEqual([
+      `cd '${dir}/O'\\''Brien project'`,
+      `cd '${dir}/O'\\''Brien project' && '/opt/muse'`,
+    ])
+  })
+
+  it('runs muse when the CLI path is not known', async () => {
+    const project = await folder('project')
+    const { call, start, terminal } = harness()
+    await start()
+    await call('add-project', project)
+    await call('cli-terminal', project)
+    expect(terminal).toEqual([`cd '${project}' && 'muse'`])
+  })
+})
+
+describe('headless backend, M4a attachments', () => {
+  const MB = 1024 * 1024
+  const message = {
+    sessionId: 's1',
+    text: 'Look',
+    attachments: [] as string[],
+    effort: 'high',
+    mode: 'queue',
+  }
+
+  async function trusted() {
+    const project = await folder('project')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const h = harness(muse, [0])
+    await h.start()
+    return { ...h, muse }
+  }
+
+  async function writeTemp(name: string, content: string | Buffer) {
+    const path = join(dir, name)
+    await writeFile(path, content)
+    return path
+  }
+
+  it('registers up to five regular files, with Electron’s kind rule', async () => {
+    const { call } = await trusted()
+    const paths = [
+      await writeTemp('shot.PNG', 'png'),
+      await writeTemp('photo.jpeg', 'jpg'),
+      await writeTemp('notes.md', '# Notes\n'),
+      await writeTemp('doc.pdf', '%PDF'),
+      await writeTemp('pic.heic', 'heic'),
+    ]
+    const chosen = (await call('attachments', paths)) as Attachment[]
+    expect(chosen.map(({ name, kind, size }) => ({ name, kind, size }))).toEqual([
+      { name: 'shot.PNG', kind: 'image', size: 3 },
+      { name: 'photo.jpeg', kind: 'image', size: 3 },
+      { name: 'notes.md', kind: 'text', size: 8 },
+      { name: 'doc.pdf', kind: 'text', size: 4 },
+      { name: 'pic.heic', kind: 'text', size: 4 },
+    ])
+    expect(new Set(chosen.map((attachment) => attachment.id)).size).toBe(5)
+  })
+
+  it('refuses six paths, a folder, a file over 2 MB and a relative path', async () => {
+    const { call } = await trusted()
+    const small = await writeTemp('a.txt', 'a')
+    await expect(call('attachments', Array(6).fill(small))).rejects.toThrow(
+      'Select up to five files at a time.',
+    )
+    await expect(call('attachments', [await folder('notes')])).rejects.toThrow(
+      'notes must be a file smaller than 2 MB.',
+    )
+    await expect(
+      call('attachments', [await writeTemp('big.txt', Buffer.alloc(2 * MB + 1, 'a'))]),
+    ).rejects.toThrow('big.txt must be a file smaller than 2 MB.')
+    await expect(call('attachments', ['a.txt'])).rejects.toThrow(
+      'Choose files by their full paths.',
+    )
+    // Exactly 2 MB passes, as in Electron.
+    expect(
+      await call('attachments', [await writeTemp('edge.txt', Buffer.alloc(2 * MB, 'a'))]),
+    ).toHaveLength(1)
+  })
+
+  it('sends Electron’s parts and display text, then forgets the ids', async () => {
+    const { call, muse } = await trusted()
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47])
+    const [image, text] = (await call('attachments', [
+      await writeTemp('shot.png', png),
+      await writeTemp('notes.md', 'Line one\n'),
+    ])) as Attachment[]
+    await call('send', { ...message, attachments: [image.id, text.id] })
+    expect(muse.send).toHaveBeenCalledWith(
+      's1',
+      [
+        { type: 'text', text: 'Look' },
+        { type: 'image', mediaType: 'image/png', base64Data: png.toString('base64') },
+        { type: 'text', text: 'Attached file: notes.md\n\nLine one\n' },
+      ],
+      'high',
+      'queue',
+      'Look\n[Attached: shot.png]\n[Attached: notes.md]',
+    )
+    await expect(call('send', { ...message, attachments: [image.id] })).rejects.toThrow(
+      'An attachment expired. Select it again.',
+    )
+  })
+
+  it('sends files with no text, with each image extension’s media type', async () => {
+    const { call, muse } = await trusted()
+    const chosen = (await call('attachments', [
+      await writeTemp('a.JPG', 'a'),
+      await writeTemp('b.jpeg', 'b'),
+      await writeTemp('c.webp', 'c'),
+      await writeTemp('d.gif', 'd'),
+    ])) as Attachment[]
+    await call('send', { ...message, text: '', attachments: chosen.map((entry) => entry.id) })
+    expect(muse.send).toHaveBeenCalledWith(
+      's1',
+      [
+        { type: 'text', text: '' },
+        { type: 'image', mediaType: 'image/jpeg', base64Data: Buffer.from('a').toString('base64') },
+        { type: 'image', mediaType: 'image/jpeg', base64Data: Buffer.from('b').toString('base64') },
+        { type: 'image', mediaType: 'image/webp', base64Data: Buffer.from('c').toString('base64') },
+        { type: 'image', mediaType: 'image/gif', base64Data: Buffer.from('d').toString('base64') },
+      ],
+      'high',
+      'queue',
+      '\n[Attached: a.JPG]\n[Attached: b.jpeg]\n[Attached: c.webp]\n[Attached: d.gif]',
+    )
+  })
+
+  it('refuses more than five ids', async () => {
+    const { call, muse } = await trusted()
+    await expect(
+      call('send', { ...message, attachments: ['1', '2', '3', '4', '5', '6'] }),
+    ).rejects.toThrow('You can attach up to five files per message.')
+    expect(muse.send).not.toHaveBeenCalled()
+  })
+
+  it('keeps every limit and string, and keeps the ids after each failure', async () => {
+    const { call, muse } = await trusted()
+    const one = async (name: string, content: string | Buffer) =>
+      ((await call('attachments', [await writeTemp(name, content)])) as Attachment[])[0]
+    await expect(call('send', { ...message, attachments: ['gone'] })).rejects.toThrow(
+      'An attachment expired. Select it again.',
+    )
+    // A file that grew past 2 MB after it was chosen.
+    const grown = await one('grown.txt', 'small')
+    await writeFile(join(dir, 'grown.txt'), Buffer.alloc(2 * MB + 1, 'a'))
+    await expect(call('send', { ...message, attachments: [grown.id] })).rejects.toThrow(
+      'Attachments must be 2 MB or smaller.',
+    )
+    // Two 1.5 MB images: 1.4 times their bytes passes 4 MB.
+    const a = await one('a.png', Buffer.alloc(1.5 * MB))
+    const b = await one('b.png', Buffer.alloc(1.5 * MB))
+    await expect(call('send', { ...message, attachments: [a.id, b.id] })).rejects.toThrow(
+      'This message exceeds the 4 MB attachment limit.',
+    )
+    const binary = await one('data.bin', Buffer.from([0x61, 0x00, 0x62]))
+    await expect(call('send', { ...message, attachments: [binary.id] })).rejects.toThrow(
+      'data.bin is a binary file. Attach an image or a text file.',
+    )
+    const long = await one('long.txt', 'a'.repeat(200 * 1024 + 1))
+    await expect(call('send', { ...message, attachments: [long.id] })).rejects.toThrow(
+      'Text attachments must be 200 KB or smaller.',
+    )
+    expect(muse.send).not.toHaveBeenCalled()
+    // Nothing was forgotten: the first image still sends.
+    await call('send', { ...message, attachments: [a.id] })
+    expect(muse.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the ids when Muse refuses the message', async () => {
+    const { call, muse } = await trusted()
+    const [chosen] = (await call('attachments', [await writeTemp('a.txt', 'a')])) as Attachment[]
+    vi.mocked(muse.send).mockRejectedValueOnce(new Error('Muse is not connected.'))
+    await expect(call('send', { ...message, attachments: [chosen.id] })).rejects.toThrow(
+      'Muse is not connected.',
+    )
+    await call('send', { ...message, attachments: [chosen.id] })
+    expect(muse.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('turns a vanished file into the expired message, without its path', async () => {
+    const { call, muse } = await trusted()
+    const path = await writeTemp('gone.txt', 'a')
+    const [chosen] = (await call('attachments', [path])) as Attachment[]
+    await rm(path)
+    let text = ''
+    try {
+      await call('send', { ...message, attachments: [chosen.id] })
+    } catch (error) {
+      text = (error as Error).message
+    }
+    expect(text).toBe('An attachment expired. Select it again.')
+    expect(muse.send).not.toHaveBeenCalled()
+    await expect(call('attachments', [path])).rejects.toThrow(
+      'gone.txt must be a file smaller than 2 MB.',
+    )
+  })
+
+  it('maps any fs error with a code, such as ENOTDIR, to the friendly messages', async () => {
+    const { call } = await trusted()
+    const file = await writeTemp('plain.txt', 'a')
+    const through = join(file, 'inside.txt')
+    await expect(call('attachments', [through])).rejects.toThrow(
+      'inside.txt must be a file smaller than 2 MB.',
+    )
+    // The same code at send time: the file's parent turned into a regular file.
+    await mkdir(join(dir, 'box'))
+    const [chosen] = (await call('attachments', [
+      await writeTemp('box/a.txt', 'a'),
+    ])) as Attachment[]
+    await rm(join(dir, 'box'), { recursive: true })
+    await writeFile(join(dir, 'box'), 'now a file')
+    let text = ''
+    try {
+      await call('send', { ...message, attachments: [chosen.id] })
+    } catch (error) {
+      text = (error as Error).message
+    }
+    expect(text).toBe('An attachment expired. Select it again.')
+  })
+
+  it('refuses a FIFO without blocking', async () => {
+    const { call } = await trusted()
+    const fifo = join(dir, 'pipe')
+    execFileSync('mkfifo', [fifo])
+    await expect(call('attachments', [fifo])).rejects.toThrow(
+      'pipe must be a file smaller than 2 MB.',
+    )
+  })
+
+  it('forgets a removed attachment', async () => {
+    const { call } = await trusted()
+    const [chosen] = (await call('attachments', [await writeTemp('a.txt', 'a')])) as Attachment[]
+    await call('remove-attachment', chosen.id)
+    await expect(call('send', { ...message, attachments: [chosen.id] })).rejects.toThrow(
+      'An attachment expired. Select it again.',
+    )
+    await expect(call('remove-attachment', '')).rejects.toThrow()
+  })
+})
+
+describe('headless backend, M4a voice', () => {
+  const PCM = 'The recording is not a supported PCM audio clip. Please record it again.'
+  const GENERAL =
+    'Muse Code could not transcribe this recording. Check your connection and CLI voice setup, then try again.'
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  /** One second of silence as mMac records it: 16 kHz mono 16-bit PCM WAV. */
+  async function recording(name = 'clip.wav') {
+    const path = join(dir, name)
+    await writeFile(path, encodeVoiceWav([new Float32Array(16000)], 16000))
+    return path
+  }
+
+  /** The error a call rejects with, so a test can compare the whole message. */
+  async function failure(result: unknown) {
+    return Promise.resolve(result).then(
+      () => new Error('It did not fail.'),
+      (error: unknown) => error as Error,
+    )
+  }
+
+  it('reads the recording, deletes it, and returns the transcribed text', async () => {
+    const h = harness()
+    await h.start()
+    await h.call('preferences', { cliPath: '/opt/muse' })
+    const path = await recording()
+    const bytes = await readFile(path)
+    expect(await h.call('voice', path)).toBe('A voice draft to review.')
+    expect(h.voice.transcribe).toHaveBeenCalledWith(bytes, '/opt/muse')
+    await expect(stat(path)).rejects.toThrow('ENOENT')
+  })
+
+  it('refuses anything but a regular .wav file, and deletes nothing it refuses', async () => {
+    const h = harness()
+    await h.start()
+    const text = join(dir, 'notes.txt')
+    await writeFile(text, 'x')
+    await expect(h.call('voice', text)).rejects.toThrow(PCM)
+    expect((await stat(text)).isFile()).toBe(true)
+    const wavFolder = await folder('folder.wav')
+    await expect(h.call('voice', wavFolder)).rejects.toThrow(PCM)
+    expect((await stat(wavFolder)).isDirectory()).toBe(true)
+    const target = await recording('target.wav')
+    const link = join(dir, 'link.wav')
+    await symlink(target, link)
+    await expect(h.call('voice', link)).rejects.toThrow(PCM)
+    expect((await stat(target)).isFile()).toBe(true)
+    const fifo = join(dir, 'pipe.wav')
+    execFileSync('mkfifo', [fifo])
+    await expect(h.call('voice', fifo)).rejects.toThrow(PCM)
+    expect((await stat(fifo)).isFIFO()).toBe(true)
+    await expect(h.call('voice', join(dir, 'missing.wav'))).rejects.toThrow(PCM)
+    await expect(h.call('voice', 'clip.wav')).rejects.toThrow('full path')
+    expect(h.voice.transcribe).not.toHaveBeenCalled()
+  })
+
+  it('never shows a raw fs error or the temp path for a recording it cannot open', async () => {
+    const h = harness()
+    await h.start()
+    const locked = await recording('locked.wav')
+    await chmod(locked, 0o000)
+    const error = await failure(h.call('voice', locked))
+    expect(error.message).toBe(PCM)
+    expect(error.message).not.toContain(dir)
+    await chmod(locked, 0o600)
+    expect((await stat(locked)).isFile()).toBe(true)
+  })
+
+  it('deletes a recording that fails the size or header check, and never transcribes it', async () => {
+    const h = harness()
+    await h.start()
+    const big = join(dir, 'big.wav')
+    await writeFile(big, Buffer.alloc(MAX_VOICE_BYTES + 1))
+    await expect(h.call('voice', big)).rejects.toThrow(
+      'Record between a moment and two minutes of speech.',
+    )
+    await expect(stat(big)).rejects.toThrow('ENOENT')
+    const bad = await recording('bad.wav')
+    const bytes = await readFile(bad)
+    bytes[20] = 3 // Floats cannot be passed off as PCM16.
+    await writeFile(bad, bytes)
+    await expect(h.call('voice', bad)).rejects.toThrow(PCM)
+    await expect(stat(bad)).rejects.toThrow('ENOENT')
+    expect(h.voice.transcribe).not.toHaveBeenCalled()
+  })
+
+  it('maps Command failed to the general string and passes other errors through', async () => {
+    const voice = fakeVoice()
+    const h = harness(fakeMuse(), [], { voice })
+    await h.start()
+    voice.transcribe.mockRejectedValueOnce(
+      new Error(`Command failed: /opt/muse voice transcribe ${dir}/v/recording.wav\n`),
+    )
+    expect((await failure(h.call('voice', await recording()))).message).toBe(GENERAL)
+    voice.transcribe.mockRejectedValueOnce(
+      new Error('Muse voice needs authentication. Run muse login in Terminal, then try again.'),
+    )
+    expect((await failure(h.call('voice', await recording()))).message).toBe(
+      'Muse voice needs authentication. Run muse login in Terminal, then try again.',
+    )
+  })
+
+  it('maps the real transcriber’s failure when the CLI exits with no stderr', async () => {
+    // discoverCli runs $SHELL -ilc and reads HOME. Keep both away from Dom's own setup.
+    vi.stubEnv('SHELL', '/bin/sh')
+    vi.stubEnv('HOME', dir)
+    const cli = join(dir, 'muse')
+    await writeFile(
+      cli,
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "Muse Code 9.9.9"; exit 0; fi\nexit 3\n',
+    )
+    await chmod(cli, 0o755)
+    const h = harness(fakeMuse(), [], { voice: new VoiceTranscriber() })
+    await h.start()
+    await h.call('preferences', { cliPath: cli })
+    const path = await recording()
+    const error = await failure(h.call('voice', path))
+    expect(error.message).toBe(GENERAL)
+    await expect(stat(path)).rejects.toThrow('ENOENT')
+  }, 20_000)
+
+  it('stops a voice call that is cancelled while the recording is still being read', async () => {
+    const h = harness()
+    await h.start()
+    const path = await recording()
+    const pending = h.call('voice', path)
+    await h.call('cancel-voice') // Lands before the read ends.
+    expect((await failure(pending)).message).toBe('Voice transcription cancelled.')
+    expect(h.voice.transcribe).not.toHaveBeenCalled()
+    await expect(stat(path)).rejects.toThrow('ENOENT')
+  })
+
+  it('cancels a transcription on cancel-voice and on the quit path', async () => {
+    const h = harness()
+    await h.start()
+    await h.call('cancel-voice')
+    await h.backend.stopVoice()
+    expect(h.voice.cancel).toHaveBeenCalledTimes(2)
   })
 })
 

@@ -1,10 +1,11 @@
 import AppKit
+import MuseKit
 import SwiftUI
 
 /// The composer's text area: an NSTextView, so the keys behave as in Electron's textarea.
 /// Return sends, Cmd-Return sends, Shift-Return and Option-Return add a line at the cursor, and
-/// Return never interrupts input-method composition. It grows from one line to `maxHeight`, then
-/// scrolls.
+/// Return never interrupts input-method composition. While a popup shows, Up, Down, Tab, Return
+/// and Escape go to it first. It grows from one line to `maxHeight`, then scrolls.
 struct ComposerTextView: NSViewRepresentable {
   @Binding var text: String
   /// The height the text needs, from one line to `maxHeight`. The caller frames the view with it.
@@ -15,7 +16,19 @@ struct ComposerTextView: NSViewRepresentable {
   var isEnabled = true
   /// Bumped when the composer should take keyboard focus, with the cursor at the end.
   var focusRequest = 0
+  /// Bumped when a popup rewrote the text: the composer takes focus with the cursor at the end.
+  var cursorRequest = 0
   let onSubmit: () -> Void
+  /// A popup's key. Returns true when the popup took it.
+  var onPopupKey: (SlashKey) -> Bool = { _ in false }
+  /// Files or folders dropped on the text, for the drop plan.
+  var onDropFiles: ([URL]) -> Void = { _ in }
+  /// A file drag entered (true) or left (false) the text.
+  var onDragChange: (Bool) -> Void = { _ in }
+  /// Files or folders copied in Finder, pasted, for the drop plan.
+  var onPasteFiles: ([URL]) -> Void = { _ in }
+  /// Image data pasted with no text, as PNG. The composer passes it to `attachPasted` as `public.png`.
+  var onPasteImage: (Data) -> Void = { _ in }
 
   static let maxHeight: CGFloat = 200
   static let font = NSFont.preferredFont(forTextStyle: .body)
@@ -53,7 +66,14 @@ struct ComposerTextView: NSViewRepresentable {
     textView.setAccessibilityLabel("Message Muse")
     textView.string = text
     textView.onSubmit = { [weak coordinator = context.coordinator] in coordinator?.parent.onSubmit() }
+    textView.onPopupKey = { [weak coordinator = context.coordinator] key in
+      coordinator?.parent.onPopupKey(key) ?? false
+    }
     textView.onWidthChange = { [weak coordinator = context.coordinator] in coordinator?.measureLater() }
+    textView.onDropFiles = { [weak coordinator = context.coordinator] urls in coordinator?.parent.onDropFiles(urls) }
+    textView.onDragChange = { [weak coordinator = context.coordinator] over in coordinator?.parent.onDragChange(over) }
+    textView.onPasteFiles = { [weak coordinator = context.coordinator] urls in coordinator?.parent.onPasteFiles(urls) }
+    textView.onPasteImage = { [weak coordinator = context.coordinator] data in coordinator?.parent.onPasteImage(data) }
 
     let scroll = NSScrollView()
     scroll.drawsBackground = false
@@ -65,6 +85,7 @@ struct ComposerTextView: NSViewRepresentable {
     context.coordinator.textView = textView
     // A new composer does not grab focus for a request made before it existed.
     context.coordinator.appliedFocusRequest = focusRequest
+    context.coordinator.appliedCursorRequest = cursorRequest
     apply(to: textView)
     context.coordinator.measureLater()
     return scroll
@@ -74,7 +95,12 @@ struct ComposerTextView: NSViewRepresentable {
     guard let textView = scroll.documentView as? ComposerNSTextView else { return }
     textView.delegate = nil
     textView.onSubmit = nil
+    textView.onPopupKey = nil
     textView.onWidthChange = nil
+    textView.onDropFiles = nil
+    textView.onDragChange = nil
+    textView.onPasteFiles = nil
+    textView.onPasteImage = nil
   }
 
   func updateNSView(_ scroll: NSScrollView, context: Context) {
@@ -101,12 +127,21 @@ struct ComposerTextView: NSViewRepresentable {
     // Ask Muse adds to the draft and asks for focus, so the person can keep typing.
     if context.coordinator.appliedFocusRequest != focusRequest {
       context.coordinator.appliedFocusRequest = focusRequest
-      if let window = textView.window {
-        window.makeFirstResponder(textView)
-        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
-        textView.scrollRangeToVisible(textView.selectedRange())
-      }
+      Self.focusAtEnd(textView)
     }
+    // After the text above: a popup's choice puts the cursor after the text it wrote.
+    if context.coordinator.appliedCursorRequest != cursorRequest {
+      context.coordinator.appliedCursorRequest = cursorRequest
+      Self.focusAtEnd(textView)
+    }
+  }
+
+  /// Takes keyboard focus with the cursor after the last character.
+  private static func focusAtEnd(_ textView: NSTextView) {
+    guard let window = textView.window else { return }
+    window.makeFirstResponder(textView)
+    textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+    textView.scrollRangeToVisible(textView.selectedRange())
   }
 
   private func apply(to textView: ComposerNSTextView) {
@@ -136,6 +171,8 @@ struct ComposerTextView: NSViewRepresentable {
     let undo = UndoManager()
     /// The last `focusRequest` acted on.
     var appliedFocusRequest = 0
+    /// The last `cursorRequest` acted on.
+    var appliedCursorRequest = 0
 
     init(_ parent: ComposerTextView) { self.parent = parent }
 
@@ -165,8 +202,95 @@ final class ComposerNSTextView: NSTextView {
   var placeholder = ""
   var placeholderColor = NSColor.placeholderTextColor
   var onSubmit: (() -> Void)?
+  var onPopupKey: ((SlashKey) -> Bool)?
   var onWidthChange: (() -> Void)?
+  var onDropFiles: (([URL]) -> Void)?
+  var onDragChange: ((Bool) -> Void)?
+  var onPasteFiles: (([URL]) -> Void)?
+  var onPasteImage: ((Data) -> Void)?
   private var focusedOnce = false
+
+  /// The file URLs on a pasteboard: files and folders, never web links.
+  private static func fileURLs(_ pasteboard: NSPasteboard) -> [URL] {
+    pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+  }
+
+  /// The pasteboard's image as PNG: PNG as it is, and TIFF (a screenshot, Preview) converted, since
+  /// the backend reads an image's kind from its extension.
+  private static func pngData(_ pasteboard: NSPasteboard) -> Data? {
+    if let png = pasteboard.data(forType: .png) { return png }
+    guard let tiff = pasteboard.data(forType: .tiff), let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+    return bitmap.representation(using: .png, properties: [:])
+  }
+
+  /// File URLs too, so a file dropped on the text reaches `performDragOperation` below instead of
+  /// passing by. NSTextView reads this when it registers its drag types.
+  override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+    super.acceptableDragTypes + [.fileURL]
+  }
+
+  // A dropped file goes to the drop plan; NSTextView would insert its path as text. Text drags
+  // behave as before.
+  override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+    guard isEditable, !Self.fileURLs(sender.draggingPasteboard).isEmpty else { return super.draggingEntered(sender) }
+    onDragChange?(true)
+    return .copy
+  }
+
+  override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+    guard isEditable, !Self.fileURLs(sender.draggingPasteboard).isEmpty else { return super.draggingUpdated(sender) }
+    return .copy
+  }
+
+  override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+    onDragChange?(false)
+    super.draggingExited(sender)
+  }
+
+  override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+    guard isEditable, !Self.fileURLs(sender.draggingPasteboard).isEmpty else {
+      return super.prepareForDragOperation(sender)
+    }
+    return true
+  }
+
+  override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+    let urls = Self.fileURLs(sender.draggingPasteboard)
+    guard isEditable, !urls.isEmpty else { return super.performDragOperation(sender) }
+    onDragChange?(false)
+    onDropFiles?(urls)
+    return true
+  }
+
+  /// Files copied in Finder go to the drop plan. An image with no text attaches as a PNG. Text
+  /// pastes as before.
+  override func paste(_ sender: Any?) {
+    if !pasteAttachments() { super.paste(sender) }
+  }
+
+  /// Edit › Paste and Match Style (⌥⇧⌘V) handles files and images as Paste does.
+  override func pasteAsPlainText(_ sender: Any?) {
+    if !pasteAttachments() { super.pasteAsPlainText(sender) }
+  }
+
+  /// Passes the general pasteboard's files or image on. True when it took them; false leaves the
+  /// paste to NSTextView.
+  private func pasteAttachments() -> Bool {
+    guard isEditable else { return false }
+    let pasteboard = NSPasteboard.general
+    if let onPasteFiles {
+      let urls = Self.fileURLs(pasteboard)
+      if !urls.isEmpty {
+        onPasteFiles(urls)
+        return true
+      }
+    }
+    if let onPasteImage, pasteboard.string(forType: .string) == nil, let png = Self.pngData(pasteboard) {
+      onPasteImage(png)
+      return true
+    }
+    return false
+  }
 
   var lineHeight: CGFloat {
     let font = font ?? ComposerTextView.font
@@ -189,7 +313,28 @@ final class ComposerNSTextView: NSTextView {
     event.modifierFlags.intersection([.shift, .option, .command, .control])
   }
 
+  /// The keys a popup takes: the arrows, Tab, Return and Escape, with no modifier. Shift-Return
+  /// stays a new line and Shift-Tab still moves focus, as in Electron.
+  private static func popupKey(_ event: NSEvent) -> SlashKey? {
+    guard modifiers(event).isEmpty else { return nil }
+    switch event.keyCode {
+    case 125: return .down
+    case 126: return .up
+    case 48: return .tab
+    case 36, 76: return .enter
+    case 53: return .escape
+    default: return nil
+    }
+  }
+
   override func keyDown(with event: NSEvent) {
+    // A popup takes its keys first, while the composer is editable. Composition owns every key
+    // until it commits, and a held Return repeats into the send below, which ignores repeats.
+    if isEditable, !hasMarkedText(), let key = Self.popupKey(event), !(key == .enter && event.isARepeat),
+      onPopupKey?(key) == true
+    {
+      return
+    }
     // Composition owns Return: it commits the marked text.
     guard Self.isReturn(event), !hasMarkedText() else { return super.keyDown(with: event) }
     let modifiers = Self.modifiers(event)
@@ -217,9 +362,13 @@ final class ComposerNSTextView: NSTextView {
     return super.performKeyEquivalent(with: event)
   }
 
-  /// Tab and Shift-Tab move focus, as in Electron's textarea, rather than typing a tab.
+  /// Tab and Shift-Tab move focus, as in Electron's textarea, rather than typing a tab. While a
+  /// popup shows, `keyDown` gives Tab to it before this runs.
   override func insertTab(_ sender: Any?) { window?.selectNextKeyView(nil) }
   override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(nil) }
+  /// A bare Escape does nothing, as in Electron's textarea. NSTextView's own `cancelOperation`
+  /// opens the word-completion list. While a popup shows, `keyDown` gives Escape to it first.
+  override func cancelOperation(_ sender: Any?) {}
 
   override func didChangeText() {
     super.didChangeText()

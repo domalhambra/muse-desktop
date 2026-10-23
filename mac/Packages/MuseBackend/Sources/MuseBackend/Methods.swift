@@ -58,19 +58,39 @@ extension BackendClient {
     try await call("open", [.string(sessionId)])
   }
 
+  /// Sends a message. `attachments` holds up to five ids from `attachments(_:)`; the backend
+  /// forgets them only when Muse accepts the message, so a failed send can be tried again.
   public func send(
-    sessionId: String, text: String, effort: String = "high", mode: SendMode = .queue
+    sessionId: String, text: String, effort: String = "high", mode: SendMode = .queue,
+    attachments: [String] = []
   ) async throws {
     _ = try await request("send", [
       [
-        "sessionId": .string(sessionId), "text": .string(text), "attachments": [],
+        "sessionId": .string(sessionId), "text": .string(text),
+        "attachments": .array(attachments.map { .string($0) }),
         "effort": .string(effort), "mode": .string(mode.rawValue),
       ]
     ])
   }
 
+  /// Registers files chosen in mMac's panel, at most five. The backend checks each one and
+  /// keeps its path.
+  public func attachments(_ urls: [URL]) async throws -> [Attachment] {
+    try await call("attachments", [.array(urls.map { .string($0.path) })])
+  }
+
+  /// Forgets an attachment mMac no longer shows.
+  public func removeAttachment(_ id: String) async throws {
+    _ = try await request("remove-attachment", [.string(id)])
+  }
+
   public func cancel(_ sessionId: String) async throws {
     _ = try await request("cancel", [.string(sessionId)])
+  }
+
+  /// Asks Muse to compact the conversation's history. The backend checks trust first.
+  public func compact(_ sessionId: String) async throws -> CompactResult {
+    try await call("compact", [.string(sessionId)])
   }
 
   public func rename(sessionId: String, name: String) async throws {
@@ -101,6 +121,14 @@ extension BackendClient {
   /// A tool item's full stored output, up to 1 MB.
   public func readOutput(sessionId: String, itemId: String) async throws -> String {
     try await call("output", [.string(sessionId), .string(itemId)])
+  }
+
+  /// Writes the open conversation as Markdown to `url`, mode 0600, and returns the path written.
+  /// `fallbackTitle` is the sidebar title, used when the conversation has no name or title.
+  public func export(sessionId: String, to url: URL, fallbackTitle: String?) async throws -> String {
+    var args: [JSONValue] = [.string(sessionId), .string(url.path)]
+    if let fallbackTitle { args.append(.string(fallbackTitle)) }
+    return try await call("export", args)
   }
 
   // The inspector. Each checks that the project was opened in mMac.
@@ -158,6 +186,16 @@ extension BackendClient {
     _ = try await request("worktree-remove", [.string(project), .string(path)])
   }
 
+  /// Opens Terminal in the project folder.
+  public func openTerminal(project: String) async throws {
+    _ = try await request("terminal", [.string(project)])
+  }
+
+  /// Opens Terminal in the project folder and starts the Muse Code CLI there.
+  public func openCLITerminal(project: String) async throws {
+    _ = try await request("cli-terminal", [.string(project)])
+  }
+
   // Settings: MCP servers in Muse's settings.json, and the bridges.
 
   /// The MCP servers in Muse's settings file, and the file's path.
@@ -184,6 +222,19 @@ extension BackendClient {
 
   /// Makes a new bridge token and returns it. mMac saves it in the Keychain.
   public func bridgeNewToken() async throws -> String { try await call("bridge-token") }
+
+  // Voice input. mMac records and writes the WAV; the backend runs the CLI.
+
+  /// Transcribes mMac's recording, a 16 kHz mono WAV in its temp folder, with
+  /// `muse voice transcribe`. The backend deletes the file, whatever the outcome.
+  public func voice(_ url: URL) async throws -> String {
+    try await call("voice", [.string(url.path)])
+  }
+
+  /// Stops a transcription in progress.
+  public func cancelVoice() async throws {
+    _ = try await request("cancel-voice")
+  }
 
   /// Asks the backend to quit, then waits for it to exit.
   /// Returns false when the person chose to keep Muse working.

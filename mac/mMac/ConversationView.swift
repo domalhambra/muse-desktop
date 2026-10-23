@@ -6,10 +6,9 @@ import SwiftUI
 struct ConversationView: View {
   let controller: AppController
   let workspace: Workspace
-  @State private var renaming = false
-  @State private var newName = ""
 
   var body: some View {
+    @Bindable var sheets = controller.sheets
     VStack(spacing: 0) {
       if !workspace.isConnected, workspace.status.state != "connecting" {
         ConnectionBanner(controller: controller, workspace: workspace)
@@ -36,19 +35,42 @@ struct ConversationView: View {
       if let session = workspace.view?.session {
         ToolbarItem {
           Menu {
-            Button("Rename conversation…") {
-              newName = session.name ?? SessionTitle.of(session)
-              renaming = true
-            }
+            conversationActions(session)
           } label: {
             Label("Conversation actions", systemImage: "ellipsis.circle")
           }
+          .help("Conversation actions")
+          .accessibilityIdentifier("conversation-actions")
         }
       }
     }
-    .sheet(isPresented: $renaming) {
-      RenameSheet(name: $newName, workspace: workspace) { renaming = false }
+    // The toolbar, the sidebar's context menu and /rename all raise it.
+    .sheet(isPresented: $sheets.renaming) {
+      RenameSheet(name: $sheets.newName, workspace: workspace) { controller.sheets.renaming = false }
     }
+  }
+
+  /// Electron's four actions, in its order. Archive's label follows whether the open conversation
+  /// is archived; Electron's followed the sidebar's toggle.
+  @ViewBuilder private func conversationActions(_ session: Session) -> some View {
+    let id = session.sessionId
+    Button("Rename conversation…") { controller.sheets.rename(session) }
+      .accessibilityIdentifier("conversation-rename")
+    Button(workspace.isPinned(id) ? "Unpin conversation" : "Pin conversation") {
+      Task { await workspace.togglePin(id) }
+    }
+    .accessibilityIdentifier("conversation-pin")
+    Button("Export as Markdown…", systemImage: "square.and.arrow.down") {
+      Task { await ExportPanel.run(workspace) }
+    }
+    .accessibilityIdentifier("conversation-export")
+    Button(
+      workspace.isArchived(id) ? "Restore conversation" : "Archive in Desktop",
+      systemImage: workspace.isArchived(id) ? "arrow.uturn.backward" : "archivebox"
+    ) {
+      Task { await workspace.toggleArchive(id) }
+    }
+    .accessibilityIdentifier("conversation-archive")
   }
 }
 

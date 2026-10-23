@@ -117,16 +117,27 @@ enum SheetAlert {
     return buttons.count - 1 - offset
   }
 
-  /// Runs an open panel as a sheet on the conversation window, or with `preferringKey` on the key
-  /// window, or on its own when no window shows. Waits a moment for a conversation window that
-  /// the File menu has just opened.
-  static func run(_ panel: NSOpenPanel, preferringKey: Bool = false) async -> URL? {
+  /// Runs an open or save panel as a sheet on the conversation window, or with `preferringKey` on
+  /// the key window, or on its own when no window shows. Waits a moment for a conversation window
+  /// that the File menu has just opened. Returns the chosen file or folder, or nil on Cancel.
+  static func run(_ panel: NSSavePanel, preferringKey: Bool = false) async -> URL? {
+    await show(panel, preferringKey: preferringKey) ? panel.url : nil
+  }
+
+  /// Runs a multi-select open panel as `run(_:preferringKey:)` does. Returns every chosen file,
+  /// or none on Cancel.
+  static func runMultiple(_ panel: NSOpenPanel) async -> [URL] {
+    await show(panel, preferringKey: false) ? panel.urls : []
+  }
+
+  /// Shows `panel` as `run(_:preferringKey:)` describes. True when the person chose.
+  private static func show(_ panel: NSSavePanel, preferringKey: Bool) async -> Bool {
     let response =
       if let window = await host(waitingUpTo: .seconds(1), preferringKey: preferringKey) {
         await panel.beginSheetModal(for: window)
       } else {
         await panel.begin()
       }
-    return response == .OK ? panel.url : nil
+    return response == .OK
   }
 }

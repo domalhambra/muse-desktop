@@ -207,6 +207,79 @@ private let viewJSON = #"""
   ])
 }
 
+@Test(.timeLimit(.minutes(1))) func conversationCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "compact": return [#"{"id":\#(id),"ok":true,"value":{"status":"noop"}}"#]
+    case "export": return [#"{"id":\#(id),"ok":true,"value":"/t/Chat.md"}"#]
+    default: return [#"{"id":\#(id),"ok":true,"value":null}"#]
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  #expect(try await client.compact("s1") == CompactResult(status: "noop"))
+  let file = URL(fileURLWithPath: "/t/Chat.md")
+  #expect(try await client.export(sessionId: "s1", to: file, fallbackTitle: "First prompt") == "/t/Chat.md")
+  _ = try await client.export(sessionId: "s1", to: file, fallbackTitle: nil)
+  try await client.openTerminal(project: "/p")
+  try await client.openCLITerminal(project: "/p")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [
+    ["compact", ["s1"]],
+    ["export", ["s1", "/t/Chat.md", "First prompt"]],
+    ["export", ["s1", "/t/Chat.md"]],
+    ["terminal", ["/p"]],
+    ["cli-terminal", ["/p"]],
+  ])
+}
+
+@Test(.timeLimit(.minutes(1))) func attachmentCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "attachments":
+      return [#"{"id":\#(id),"ok":true,"value":[{"id":"a1","name":"shot.png","kind":"image","size":2048}]}"#]
+    default:
+      return [#"{"id":\#(id),"ok":true,"value":null}"#]
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let chosen = try await client.attachments([
+    URL(fileURLWithPath: "/p/shot.png"), URL(fileURLWithPath: "/p/notes.md"),
+  ])
+  #expect(chosen == [Attachment(id: "a1", name: "shot.png", kind: "image", size: 2048)])
+  try await client.removeAttachment("a1")
+  try await client.send(sessionId: "s1", text: "", effort: "low", mode: .steer, attachments: ["a1", "a2"])
+  try await client.send(sessionId: "s1", text: "hi")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [
+    ["attachments", [["/p/shot.png", "/p/notes.md"]]],
+    ["remove-attachment", ["a1"]],
+    ["send", [["sessionId": "s1", "text": "", "attachments": ["a1", "a2"], "effort": "low", "mode": "steer"]]],
+    ["send", [["sessionId": "s1", "text": "hi", "attachments": [], "effort": "high", "mode": "queue"]]],
+  ])
+}
+
+@Test(.timeLimit(.minutes(1))) func voiceCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    return message["method"] == "voice"
+      ? [#"{"id":\#(id),"ok":true,"value":"A voice draft to review."}"#]
+      : [#"{"id":\#(id),"ok":true,"value":null}"#]
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  #expect(try await client.voice(URL(fileURLWithPath: "/t/mmac-voice/clip.wav")) == "A voice draft to review.")
+  try await client.cancelVoice()
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [["voice", ["/t/mmac-voice/clip.wav"]], ["cancel-voice", []]])
+}
+
 /// Polls `condition` until it holds. The test's time limit ends a wait that never does.
 private func waitFor(_ condition: () -> Bool) async throws {
   while !condition() { try await Task.sleep(for: .milliseconds(5)) }

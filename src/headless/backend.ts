@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, realpath, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { mkdir, open, realpath, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import {
   answerSchema,
@@ -33,18 +34,22 @@ import {
 import type { AgentApi, AgentPolicy } from '../main/agent-api'
 import type { MuseHost } from '../main/muse-host'
 import { readPreferences, writePreferences } from '../main/preferences'
+import { validateVoiceAudio, VoiceTranscriber } from '../main/voice'
 import { mergeWorktree, removeWorktree } from '../main/worktrees'
+import { MAX_VOICE_BYTES } from '../shared/voice'
 import { projectRoot, worktreeParent } from '../shared/worktree'
+import { Attachments } from './attachments'
 import { Bridges, type BridgeFactories } from './bridges'
+import { exportMarkdown, exportTitle } from './export'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
-import { openInTerminal, terminalCommand } from './terminal'
+import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
 // mMac's backend methods and the state they share. src/headless/server.ts owns
 // stdin, stdout and the quit path, so unit tests can drive these methods with a
-// fake MuseHost (tests/unit/headless-backend.test.ts). This repeats the wiring of
-// src/main/index.ts instead of sharing it, so upstream syncs of index.ts stay
-// clean; tests/unit/headless-parity.test.ts catches drift between the two.
+// fake MuseHost (tests/unit/headless-backend.test.ts). The wiring began as a copy
+// of Electron's src/main/index.ts, which M4a removed; docs/decisions.md names the
+// last commit that has it. tests/unit/headless-parity.test.ts pins the method list.
 
 /** The parts of MuseHost the methods use. */
 export type Muse = Pick<
@@ -56,7 +61,9 @@ export type Muse = Pick<
   | 'open'
   | 'send'
   | 'cancel'
+  | 'compact'
   | 'getSession'
+  | 'getView'
   | 'hasActiveTurns'
   | 'rename'
   | 'models'
@@ -85,6 +92,8 @@ export type BackendDeps = {
   agent?: (policy: AgentPolicy) => AgentApi
   /** The bridges to run. Tests pass fakes; the default is the real FileBridge and McpBridge. */
   bridgeFactories?: BridgeFactories
+  /** Runs `muse voice transcribe`. Tests pass a fake; the default is src/main/voice.ts's. */
+  voice?: { transcribe(data: Buffer, cliPath: string): Promise<string>; cancel(): Promise<void> }
 }
 
 export function createBackend({
@@ -97,6 +106,7 @@ export function createBackend({
   openTerminal = openInTerminal,
   agent,
   bridgeFactories,
+  voice = new VoiceTranscriber(),
 }: BackendDeps) {
   const id = z.string().min(1).max(200)
   const pathSchema = z.string().min(1).max(4096)
@@ -107,6 +117,8 @@ export function createBackend({
   let preferencePath = ''
   let preferenceWrites: Promise<void> = Promise.resolve()
   let bridges: Bridges | undefined
+  // Files chosen for the next message. Memory only, as in Electron.
+  const attachments = new Attachments()
 
   // Register every method with a literal call to method, name in quotes as the first argument:
   // tests/unit/headless-parity.test.ts finds them by that pattern.
@@ -313,28 +325,45 @@ export function createBackend({
   })
 
   method('send', async (value) => {
-    // Text only. Attachments come with the attachment methods in M4.
     const input = z
       .object({
         sessionId: id,
         text: z.string().max(200000),
-        attachments: z.array(id).max(0),
+        attachments: z.array(id),
         effort: effortSchema,
         mode: z.enum(['queue', 'steer']),
       })
       .parse(value)
-    if (!input.text.trim()) throw new Error('Write a message first.')
+    if (input.attachments.length > 5)
+      throw new Error('You can attach up to five files per message.')
+    if (!input.text.trim() && !input.attachments.length)
+      throw new Error('Write a message or attach a file first.')
     await sessionProject(input.sessionId)
-    await muse.send(
-      input.sessionId,
-      [{ type: 'text', text: input.text }],
-      input.effort,
-      input.mode,
-      input.text,
-    )
+    const { parts, display } = await attachments.build(input.text, input.attachments)
+    await muse.send(input.sessionId, parts, input.effort, input.mode, display)
+    // Only now: after any failure the ids stay valid, so mMac can send them again.
+    attachments.forget(input.attachments)
+  })
+
+  // Attachments, as src/main/index.ts registers them. mMac shows the panel and sends the paths.
+  method('attachments', (value) => {
+    const paths = z.array(pathSchema).parse(value)
+    if (paths.some((path) => !isAbsolute(path)))
+      throw new Error('Choose files by their full paths.')
+    return attachments.register(paths)
+  })
+
+  method('remove-attachment', (value) => {
+    attachments.remove(id.parse(value))
   })
 
   method('cancel', (value) => muse.cancel(id.parse(value)))
+
+  method('compact', async (value) => {
+    const sessionId = id.parse(value)
+    await sessionProject(sessionId)
+    return muse.compact(sessionId)
+  })
 
   method('preferences', (value) => savePreferences(preferencesPatchSchema.parse(value)))
 
@@ -371,6 +400,31 @@ export function createBackend({
   })
 
   method('output', (session, item) => muse.readOutput(id.parse(session), id.parse(item)))
+
+  // Markdown export, as src/main/index.ts's `export` handler writes it. mMac shows the save
+  // panel and sends the path; like Electron, this needs the conversation open, not trusted.
+  method('export', async (session, path, fallback) => {
+    const view = muse.getView(id.parse(session))
+    const file = pathSchema.parse(path)
+    if (!isAbsolute(file)) throw new Error('Choose a full path for the exported file.')
+    // A long sidebar title is shortened, by code points so an emoji stays whole, not a reason
+    // to refuse the export.
+    const long = z.string().nullish().parse(fallback)
+    const title = exportTitle(
+      view.session,
+      long ? Array.from(long).slice(0, 200).join('') : undefined,
+    )
+    // The open call sets 0600 on a new file; a file the person replaced would keep its old mode,
+    // as in Electron, so mMac sets it on the open handle before any content lands.
+    const handle = await open(file, 'w', 0o600)
+    try {
+      await handle.chmod(0o600)
+      await handle.writeFile(exportMarkdown(view, title))
+    } finally {
+      await handle.close()
+    }
+    return file
+  })
 
   // The inspector, as src/main/index.ts registers it. Like Electron, these check that the
   // project is known but do not ask to trust it.
@@ -433,6 +487,16 @@ export function createBackend({
     if (busy) throw new Error('A conversation is still working in this worktree.')
     await removeWorktree(root, target)
   })
+
+  // The inspector's footer, as src/main/index.ts's `terminal` and `cli-terminal` open it. mMac
+  // reveals the folder in Finder itself.
+  // Electron's unused `login` argument is left out on purpose.
+  method('terminal', async (project) => openTerminal(folderCommand(await knownProject(project))))
+
+  // Opens the CLI without a trust check, as Electron does.
+  method('cli-terminal', async (project) =>
+    openTerminal(terminalCommand(await knownProject(project), muse.status.path || 'muse', [])),
+  )
 
   // MCP servers, as src/main/index.ts registers them: direct edits of Muse's settings.json.
   const mcpFile = () => settingsFile(muse.configDir())
@@ -498,6 +562,82 @@ export function createBackend({
     return token
   })
 
+  // Voice, as src/main/index.ts registers it, with the audio as a file instead of bytes: the
+  // longest clip is about 3.8 MB, too much for one JSON line. mMac writes the WAV to its own
+  // temp folder; the backend checks it, reads it and deletes it before transcribing.
+  const NOT_A_CLIP = 'The recording is not a supported PCM audio clip. Please record it again.'
+  const TOO_LONG = 'Record between a moment and two minutes of speech.'
+
+  /**
+   * Opens the recording once and checks and reads through that handle. O_NOFOLLOW refuses a
+   * symlink, O_NONBLOCK keeps a FIFO from blocking the open. Nothing is deleted unless the path
+   * opened as a regular file; after that the file is deleted whatever the checks say. A raw fs
+   * error (it would name the temp path) never reaches the person.
+   */
+  async function takeRecording(value: unknown) {
+    const path = pathSchema.parse(value)
+    if (!isAbsolute(path)) throw new Error('Choose a full path for the recording.')
+    if (!/\.wav$/i.test(path)) throw new Error(NOT_A_CLIP)
+    const coded = (error: unknown) => typeof (error as { code?: unknown } | null)?.code === 'string'
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
+    ).catch((error) => {
+      throw coded(error) ? new Error(NOT_A_CLIP) : error
+    })
+    try {
+      const info = await handle.stat().catch((error) => {
+        throw coded(error) ? new Error(NOT_A_CLIP) : error
+      })
+      if (!info.isFile()) throw new Error(NOT_A_CLIP)
+      try {
+        if (info.size > MAX_VOICE_BYTES) throw new Error(TOO_LONG)
+        // At most one byte past the limit, so a file that grew after the stat cannot fill memory.
+        const buffer = Buffer.alloc(Math.min(info.size, MAX_VOICE_BYTES) + 1)
+        let length = 0
+        while (length < buffer.length) {
+          const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+          if (!bytesRead) break
+          length += bytesRead
+        }
+        if (length > MAX_VOICE_BYTES) throw new Error(TOO_LONG)
+        return validateVoiceAudio(buffer.subarray(0, length))
+      } catch (error) {
+        throw coded(error) ? new Error(NOT_A_CLIP) : error
+      } finally {
+        await rm(path, { force: true }).catch(() => {})
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+
+  // Raised by every cancel. A cancel that lands while takeRecording still reads finds no active
+  // transcription to abort, so voice compares this count before and after the read.
+  let voiceCancels = 0
+  const cancelVoice = () => {
+    voiceCancels += 1
+    return voice.cancel()
+  }
+
+  method('voice', async (value) => {
+    const cancels = voiceCancels
+    const data = await takeRecording(value)
+    if (cancels !== voiceCancels) throw new Error('Voice transcription cancelled.')
+    try {
+      return await voice.transcribe(data, current().cliPath)
+    } catch (error) {
+      // A CLI that fails with no stderr gives execFile's own text, which names the temp file.
+      if (error instanceof Error && error.message.startsWith('Command failed'))
+        throw new Error(
+          'Muse Code could not transcribe this recording. Check your connection and CLI voice setup, then try again.',
+        )
+      throw error
+    }
+  })
+
+  method('cancel-voice', () => cancelVoice())
+
   method('shutdown', async () => {
     if (muse.hasActiveTurns()) {
       const choice = await ask({
@@ -518,5 +658,7 @@ export function createBackend({
     preferenceWrites: () => preferenceWrites,
     /** Stops both bridges for good: the quit path. */
     stopBridges: () => bridges?.stop() ?? Promise.resolve(),
+    /** Cancels a transcription in progress: the quit path. */
+    stopVoice: () => cancelVoice(),
   }
 }

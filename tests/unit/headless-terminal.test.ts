@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { openInTerminal, terminalCommand } from '../../src/headless/terminal'
+import { folderCommand, openInTerminal, terminalCommand } from '../../src/headless/terminal'
 
 let dir = ''
 beforeEach(async () => {
@@ -31,6 +31,22 @@ describe('terminalCommand', () => {
     expect(() => execFileSync('/bin/sh', ['-n', '-c', line])).not.toThrow()
     const output = execFileSync('/bin/sh', ['-c', line], { encoding: 'utf8' })
     expect(output.split('\n')).toEqual(['mcp', "x'; echo pwned", '$HOME `id`', folder, ''])
+  })
+})
+
+describe('folderCommand', () => {
+  it('escapes a single quote in the folder', () => {
+    expect(folderCommand("/tmp/O'Brien dir")).toBe(`cd '/tmp/O'\\''Brien dir'`)
+  })
+
+  it('gives a line the shell parses and runs into the folder, every character literal', async () => {
+    const folder = join(dir, "O'Brien $HOME `id`")
+    await mkdir(folder)
+    const line = folderCommand(folder)
+    expect(() => execFileSync('/bin/sh', ['-n', '-c', line])).not.toThrow()
+    expect(execFileSync('/bin/sh', ['-c', `${line} && pwd`], { encoding: 'utf8' })).toBe(
+      `${folder}\n`,
+    )
   })
 })
 

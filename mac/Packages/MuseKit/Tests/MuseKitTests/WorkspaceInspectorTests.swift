@@ -607,3 +607,26 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
   #expect(workspace.projectGit["/p"] != nil)
   #expect(workspace.projectBadge?.branch == "muse/x")
 }
+
+@MainActor @Test func askMuseChangesNoDraftWhileAConversationOpens() async throws {
+  // `open` gets no answer until the test pushes one.
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    method == "open" ? [] : [reply(id, "null")]
+  }
+  workspace.draft = "Keep me."
+  let focus = workspace.composerFocusRequest
+  let opening = Task { await workspace.open("s1") }
+  try await eventually { workspace.openingSessionId == "s1" }
+  workspace.askAboutChanges("src/a.swift")
+  workspace.askAboutFile("docs/plan.md")
+  #expect(workspace.draft == "Keep me.")
+  #expect(workspace.composerFocusRequest == focus)
+  guard case .number(let id)? = backend.messages.last(where: { $0["method"] == "open" })?["id"] else {
+    Issue.record("No open request")
+    return
+  }
+  backend.push(reply(Int(id), viewJSON(sessionJSON("s1"))))
+  await opening.value
+  workspace.askAboutFile("docs/plan.md")
+  #expect(workspace.draft.hasSuffix("Please look at the project file: \"docs/plan.md\"\n"))
+}

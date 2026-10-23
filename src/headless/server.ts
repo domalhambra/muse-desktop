@@ -73,9 +73,11 @@ async function quit(code: number) {
     console.error(`The mMac backend did not shut down cleanly: ${messageOf(error)}`)
     code ||= 1
   }
-  // Closing Muse makes waiting requests fail, so drain() cannot wait forever.
+  // Closing Muse makes waiting requests fail, and cancelling ends a voice request, so drain()
+  // cannot wait forever, or 90 seconds for a transcription.
   const results = await Promise.allSettled([
     backend.stopBridges(),
+    backend.stopVoice(),
     muse.close(),
     backend.preferenceWrites(),
     wire.drain(),

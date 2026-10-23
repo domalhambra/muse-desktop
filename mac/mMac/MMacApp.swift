@@ -1,4 +1,5 @@
 import AppKit
+import MuseKit
 import SwiftUI
 
 @main
@@ -12,12 +13,18 @@ struct MMacApp: App {
     window.identifier?.rawValue == mainWindow
   }
 
-  #if DEBUG
+  #if DEBUG || MMAC_MEASURE
     /// The UI tests' own defaults suite, from `MMAC_DEFAULTS_SUITE`. Debug builds only; nil when
-    /// the variable is unset or empty.
+    /// the variable is unset or empty. The size measurement's build (`MMAC_MEASURE`) always has
+    /// one, `com.domalhambra.mmac.measure` unless the variable names another, so it never writes
+    /// Dom's defaults.
     static let testDefaultsSuite: String? = {
       guard let suite = ProcessInfo.processInfo.environment["MMAC_DEFAULTS_SUITE"], !suite.isEmpty else {
-        return nil
+        #if MMAC_MEASURE
+          return "com.domalhambra.mmac.measure"
+        #else
+          return nil
+        #endif
       }
       return suite
     }()
@@ -28,7 +35,7 @@ struct MMacApp: App {
   /// starts from the defaults and never reads or changes Dom's. The test runner is sandboxed and
   /// cannot reach mMac's preferences itself.
   static let appStorage: UserDefaults = {
-    #if DEBUG
+    #if DEBUG || MMAC_MEASURE
       if let suite = testDefaultsSuite, let defaults = UserDefaults(suiteName: suite) {
         defaults.removePersistentDomain(forName: suite)
         return defaults
@@ -43,7 +50,7 @@ struct MMacApp: App {
   /// standard defaults, not in `appStorage`, so such a run turns those saves off instead: see
   /// `WindowStateGuard`.
   static let keepsWindowState: Bool = {
-    #if DEBUG
+    #if DEBUG || MMAC_MEASURE
       if testDefaultsSuite != nil { return false }
     #endif
     return true
@@ -64,10 +71,12 @@ struct MMacApp: App {
         FileCommands(controller: delegate.controller)
       }
       CommandGroup(after: .sidebar) {
+        CommandMenuCommand(controller: delegate.controller)
         InspectorCommand()
       }
-      // Edit › Find, for the find bars of the file preview and of stored output.
+      // Edit › Voice Input, then Edit › Find, for the find bars of the file preview and of stored output.
       CommandGroup(after: .textEditing) {
+        VoiceCommand(controller: delegate.controller)
         Menu("Find") {
           Button("Find…") { TextFinder.send(.showFindInterface) }.keyboardShortcut("f")
           Button("Find Next") { TextFinder.send(.nextMatch) }.keyboardShortcut("g")
@@ -117,6 +126,61 @@ private struct InspectorCommand: View {
   var body: some View {
     Button(inspectorShown ? "Hide Inspector" : "Show Inspector") { inspectorShown.toggle() }
       .keyboardShortcut("i", modifiers: [.command, .option])
+  }
+}
+
+/// View → Command Menu. ⌘K only opens it, as in Electron: a second press while it shows does nothing.
+/// It waits while another sheet is up on the main window: the Rename and Help sheets disable the item, and
+/// AppKit's panels and alerts (an export or open panel, an Ask), which SwiftUI cannot observe, make
+/// the press do nothing.
+private struct CommandMenuCommand: View {
+  let controller: AppController
+
+  var body: some View {
+    Button("Command Menu") {
+      let main = NSApp.windows.first(where: { $0.isVisible && MMacApp.isMainWindow($0) })
+      guard main?.attachedSheet == nil else { return }
+      controller.showMainWindow()
+      // A result left from a sheet that closed without running it must not run on the next close.
+      controller.sheets.chosen = nil
+      controller.sheets.commandMenu = true
+    }
+    .keyboardShortcut("k")
+    .disabled(controller.workspace == nil || controller.sheets.renaming || controller.sheets.help)
+  }
+}
+
+/// Edit → Voice Input (⌥V): starts or stops voice input from anywhere in the conversation window,
+/// as Electron's window-wide Option-V. A menu key equivalent, so the composer never types "√".
+private struct VoiceCommand: View {
+  let controller: AppController
+
+  var body: some View {
+    Button("Voice Input") {
+      guard canRun, let voice = controller.voice else { return }
+      Task { await voice.toggle() }
+    }
+    .keyboardShortcut("v", modifiers: .option)
+    // On whenever a Workspace exists, so ⌥V is always taken here: a disabled item would let the
+    // key fall through and type "√" into the draft. When voice cannot run, the press does nothing,
+    // as Electron's handler prevents the default and its toggle returns early.
+    .disabled(controller.voice == nil)
+  }
+
+  /// Only in the conversation window, and not over one of its sheets: Electron ignores Option-V
+  /// while a dialog is open. A sheet is the key window while it shows; the checks on
+  /// `attachedSheet` and `anyShown` are the ones ⌘K and the composer's popups use. Then as the mic
+  /// button: idle needs the connection and no send in flight; a recording can always stop.
+  private var canRun: Bool {
+    guard let voice = controller.voice, let workspace = controller.workspace,
+      let window = NSApp.keyWindow, MMacApp.isMainWindow(window), window.attachedSheet == nil,
+      !controller.sheets.anyShown
+    else { return false }
+    switch voice.phase {
+    case .idle: return workspace.isConnected && !workspace.submitting
+    case .recording: return true
+    case .permission, .transcribing: return false
+    }
   }
 }
 

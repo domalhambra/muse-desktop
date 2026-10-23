@@ -7,9 +7,14 @@ export type Run = (file: string, args: string[], options: { timeout: number }) =
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
+/** The line Terminal runs to open a shell in `folder`, as Electron's Terminal button does. */
+export function folderCommand(folder: string) {
+  return `cd ${quote(folder)}`
+}
+
 /** The line Terminal runs: change to `folder`, then run the CLI with `cliArgs`. */
 export function terminalCommand(folder: string, cli: string, cliArgs: string[]) {
-  return `cd ${quote(folder)} && ${[cli, ...cliArgs].map(quote).join(' ')}`
+  return `${folderCommand(folder)} && ${[cli, ...cliArgs].map(quote).join(' ')}`
 }
 
 /** Opens Terminal and runs `command`. argv carries it as data; nothing is put into AppleScript. */

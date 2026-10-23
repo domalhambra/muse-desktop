@@ -10,6 +10,16 @@ One section per task. Each names the file to edit, the test that judges it, the 
 4. Run `git push origin main`.
 5. Merge `main` into each open feature branch, and run the gate there.
 
+`main` still holds upstream's Electron app. `extensions` and the branches cut from it do not: M4a deleted Electron's shell (`src/renderer/`, `src/preload/`, `src/main/index.ts`, `src/main/updates.ts`, `tests/e2e/`, the Electron build files and the Sparkle scripts). An upstream change to one of those files stops the merge with a modify/delete conflict. Then:
+
+1. List the files: `git status --porcelain | sed -n 's/^DU //p'`.
+2. Keep the deletion: `git rm -- <path>` for each file listed.
+3. Read what upstream changed in each one: `git diff HEAD...MERGE_HEAD -- <path>`.
+4. Port a core change by hand. A change to a kept `src/main/` module or to `src/shared/` merges by itself. A new or changed IPC channel in `src/main/index.ts` becomes a backend method: follow "To add a backend method" in "Change mMac or its backend". A renderer change becomes a change in `mac/` only if Dom wants it.
+5. Finish the merge, and run the gate.
+
+"2026-10-22: mMac M4a" in `docs/decisions.md` names the last commit that has Electron's shell. `git show <that commit>:<path>` reads any deleted file.
+
 ## Start a feature
 
 1. Cut the branch from `main`: `git switch -c <name> main`. Cut it from `extensions` only if it builds on the extensions.
@@ -19,16 +29,16 @@ One section per task. Each names the file to edit, the test that judges it, the 
 
 A PR meant for upstream is a separate branch from `main` that carries none of the fork's own files (see `docs/decisions.md`). Open one only when Dom asks.
 
-## Run the app while developing
+## Run mMac while developing
 
-Run `npm run dev:isolated`. It keeps Desktop's preferences, bridge token and recent projects in `~/Library/Application Support/muse-desktop-dev`. Restart it after a change to `src/main/` or `src/preload/`. Renderer changes reload by themselves.
+Build and open mMac as "Change mMac or its backend" says. mMac keeps its preferences, bridge folder and recent projects in `~/Library/Application Support/mMac`, and its bridge token in the login Keychain. Quit and reopen mMac after a change to `src/`, so it starts a new backend. Rebuild it after a change to `mac/`.
 
 Two features still write to Muse's real config in `~/.config/muse/`. Each changes only its own entries:
 
 - A worktree conversation adds its project to `~/.config/muse/trust.json`.
 - Settings → MCP servers edits the `mcpServers` entries in `~/.config/muse/settings.json`.
 
-Back up both files before you test either feature against your real Muse. The test suites never touch them: unit tests use temporary folders, and the integration script and e2e launches point `HOME` and `MUSE_HOME`, and nearly always `XDG_CONFIG_HOME`, at a temporary folder (see `docs/decisions.md`, Rejected and deferred).
+Back up both files before you test either feature against your real Muse. The test suites never touch them: unit tests use temporary folders, and the integration and headless scripts and the UI tests point `HOME`, `MUSE_HOME` and `XDG_CONFIG_HOME` at a temporary folder.
 
 ## Change the Muse connection or a session command
 
@@ -39,46 +49,46 @@ Back up both files before you test either feature against your real Muse. The te
 
 ## Change diff review
 
-- Edit: `src/main/git.ts` and `src/renderer/src/components/Inspector.tsx`. In mMac, edit `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift` (`DiffLine`), `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift` and `mac/mMac/ChangesView.swift`.
-- Test: `tests/unit/git-revert.test.ts`. For mMac, also `tests/unit/headless-backend.test.ts`, `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorRulesTests.swift` and `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorTests.swift`.
-- Prove: the first test in `tests/e2e/extensions.spec.ts`. For mMac, `testTheInspectorReviewsChangesAgainstTheFakeBackend` in `mac/mMacUITests/MMacUITests.swift`.
+- Edit: `src/main/git.ts` for Git, and `src/headless/revert-hunk.ts` for the guarded Revert hunk. In mMac, edit `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift` (`DiffLine`), `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift` and `mac/mMac/ChangesView.swift`.
+- Test: `tests/unit/git-revert.test.ts`, `tests/unit/headless-revert-hunk.test.ts`, `tests/unit/headless-backend.test.ts`, `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorRulesTests.swift` and `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorTests.swift`.
+- Prove: `testTheInspectorReviewsChangesAgainstTheFakeBackend` in `mac/mMacUITests/MMacUITests.swift`.
 
 ## Change worktree conversations
 
 - Edit: `src/main/worktrees.ts`, `src/main/muse-config.ts` and `src/shared/worktree.ts`. Worktree sessions start in `src/main/muse-host.ts`. In mMac, a worktree conversation starts in `mac/Packages/MuseKit/Sources/MuseKit/Workspace+Actions.swift`, from the toggle in `mac/mMac/ComposerView.swift`. Merge and Remove are in `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift` and `mac/mMac/ChangesView.swift`.
 - Test: `tests/unit/worktrees.test.ts`. For mMac, also `tests/unit/headless-backend.test.ts`, `mac/Packages/MuseKit/Tests/MuseKitTests/WorkspaceInspectorTests.swift` and `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorTests.swift`.
-- Prove: the worktree check in `npm run test:integration` and the worktree test in `tests/e2e/extensions.spec.ts`. For mMac, `testTheInspectorReviewsChangesAgainstTheFakeBackend`.
+- Prove: the worktree check in `npm run test:integration`, and `testTheInspectorReviewsChangesAgainstTheFakeBackend`.
 - Read first: discovery §4. Never write outside `<project>/.muse/worktrees/`. Keep every other key in `~/.config/muse/trust.json`.
 
-## Change the MCP servers tab
+## Change the MCP servers pane
 
-- Edit: `src/main/mcp-config.ts` and `src/renderer/src/components/McpSettings.tsx`.
-- Test: `tests/unit/mcp-config.test.ts`.
-- Prove: the MCP check in `npm run test:integration`, which runs `muse mcp login` against the entries Desktop writes.
+- Edit: `src/main/mcp-config.ts`. In mMac, edit `mac/Packages/MuseKit/Sources/MuseKit/SettingsRules.swift` (the form), `mac/Packages/MuseKit/Sources/MuseKit/SettingsModel.swift` and `mac/mMac/McpPane.swift`.
+- Test: `tests/unit/mcp-config.test.ts`, `tests/unit/headless-backend.test.ts`, `mac/Packages/MuseKit/Tests/MuseKitTests/SettingsRulesTests.swift` and `mac/Packages/MuseKit/Tests/MuseKitTests/SettingsModelTests.swift`.
+- Prove: the MCP check in `npm run test:integration`, which runs `muse mcp login` against the entries the backend writes, and `testSettingsAgainstTheFakeBackend`.
 - Read first: discovery §3. Keep `schema_version: 1`. Write `enabled: false`, never `disabled` or `transport`.
 
 ## Change a bridge
 
-- Edit: `src/main/agent-api.ts` for jobs, `src/main/bridge-files.ts` for the folder bridge and `src/main/bridge-mcp.ts` for the MCP bridge.
-- Test: `tests/unit/agent-api.test.ts`, `tests/unit/bridge-files.test.ts` and `tests/unit/bridge-mcp.test.ts`.
-- Prove: the bridge check in `npm run test:integration` and the two bridge tests in `tests/e2e/extensions.spec.ts`.
+- Edit: `src/main/agent-api.ts` for jobs, `src/main/bridge-files.ts` for the folder bridge `src/main/bridge-mcp.ts` for the MCP bridge, and `src/headless/bridges.ts` for mMac's start, stop and status.
+- Test: `tests/unit/agent-api.test.ts`, `tests/unit/bridge-files.test.ts`, `tests/unit/bridge-mcp.test.ts` and `tests/unit/headless-bridges.test.ts`.
+- Prove: the bridge check in `npm run test:integration`, and `npm run test:headless`.
 - Read first: `docs/bridge.md`. Update it in the same change when a request field or a tool changes.
 
 ## Change mMac or its backend
 
-- Edit: `src/headless/backend.ts` for a backend method (the process itself is `src/headless/server.ts`), `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift client, `mac/Packages/MuseKit/` for logic (Markdown, the transcript and sidebar rules, the `Workspace` store), and `mac/mMac/` for views. The inspector's rules (diff rows, file kinds, breadcrumbs, change labels, Git badges and activity rows) are in `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift`. Its store is `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift`. `src/headless/login-env.sh` answers `discoverCli`'s login-shell read from the environment mMac passed. `src/headless/server.ts` points `SHELL` at it when `MMAC_LOGIN_SHELL` is set, and `src/headless/login-env.ts` checks that it is there. Keep it executable. The Settings window's backend parts are `src/headless/bridges.ts` (both bridges), `src/headless/terminal.ts` (Terminal for `muse mcp login`) and `src/headless/revert-hunk.ts` (the guarded Revert hunk). Its rules are in `mac/Packages/MuseKit/Sources/MuseKit/SettingsRules.swift`, its store is `mac/Packages/MuseKit/Sources/MuseKit/SettingsModel.swift`, and the token store is `mac/Packages/MuseKit/Sources/MuseKit/BridgeTokenStore.swift`. Its panes are `mac/mMac/SettingsView.swift` and the four pane files beside it.
-- Test: `tests/unit/headless-backend.test.ts`, `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts`, `tests/unit/headless-login-env.test.ts`, `tests/unit/headless-bridges.test.ts`, `tests/unit/headless-terminal.test.ts`, `tests/unit/headless-revert-hunk.test.ts`, `swift test` for both packages (`mac/Packages/MuseBackend/Tests/` and `mac/Packages/MuseKit/Tests/`), and the UI tests in `mac/mMacUITests/`.
+- Edit: `src/headless/backend.ts` for a backend method (the process itself is `src/headless/server.ts`), `src/headless/wire.ts` for a message shape, `mac/Packages/MuseBackend/` for the Swift client, `mac/Packages/MuseKit/` for logic (Markdown, the transcript and sidebar rules, the `Workspace` store), and `mac/mMac/` for views. The inspector's rules (diff rows, file kinds, breadcrumbs, change labels, Git badges and activity rows) are in `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift`. Its store is `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift`. `src/headless/login-env.sh` answers `discoverCli`'s login-shell read from the environment mMac passed. `src/headless/server.ts` points `SHELL` at it when `MMAC_LOGIN_SHELL` is set, and `src/headless/login-env.ts` checks that it is there. Keep it executable. The Settings window's backend parts are `src/headless/bridges.ts` (both bridges), `src/headless/terminal.ts` (Terminal for `muse mcp login`) and `src/headless/revert-hunk.ts` (the guarded Revert hunk). Its rules are in `mac/Packages/MuseKit/Sources/MuseKit/SettingsRules.swift`, its store is `mac/Packages/MuseKit/Sources/MuseKit/SettingsModel.swift`, and the token store is `mac/Packages/MuseKit/Sources/MuseKit/BridgeTokenStore.swift`. Its panes are `mac/mMac/SettingsView.swift` and the four pane files beside it. The M4a features' backend parts are `src/headless/attachments.ts` (attachments and their parts) and `src/headless/export.ts` (the Markdown format). Their rules are in `mac/Packages/MuseKit/Sources/MuseKit/CommandMenu.swift`, `mac/Packages/MuseKit/Sources/MuseKit/ComposerRules.swift` and `mac/Packages/MuseKit/Sources/MuseKit/Voice.swift`, and their stores in the `mac/Packages/MuseKit/Sources/MuseKit/Workspace+Conversations.swift`, `mac/Packages/MuseKit/Sources/MuseKit/Workspace+Attachments.swift` and `mac/Packages/MuseKit/Sources/MuseKit/Workspace+Commands.swift` extensions beside `mac/Packages/MuseKit/Sources/MuseKit/Workspace.swift`.
+- Test: `tests/unit/headless-backend.test.ts`, `tests/unit/headless-wire.test.ts`, `tests/unit/headless-parity.test.ts`, `tests/unit/headless-login-env.test.ts`, `tests/unit/headless-bridges.test.ts`, `tests/unit/headless-terminal.test.ts`, `tests/unit/headless-revert-hunk.test.ts`, `tests/unit/headless-attachments.test.ts`, `tests/unit/headless-export.test.ts`, `swift test` for both packages (`mac/Packages/MuseBackend/Tests/` and `mac/Packages/MuseKit/Tests/`), and the UI tests in `mac/mMacUITests/`.
 - Prove: `npm run test:headless`, both `swift test` runs and the `xcodebuild test` run in "Prove a change".
 - Read first: `docs/superpowers/specs/2026-10-21-mac-app-design.md`.
 
-Electron's exact strings, call shapes and edge cases for each feature are in `docs/superpowers/plans/2026-10-21-mmac-m1-electron-survey.md`. Match them unless `docs/decisions.md` records a difference.
+Electron's exact strings, call shapes and edge cases are in `docs/superpowers/plans/2026-10-21-mmac-m1-electron-survey.md` and, for the M4a features, `docs/superpowers/plans/2026-10-22-mmac-m4a-survey.md`. Match them unless `docs/decisions.md` records a difference.
 
-To port a method from `src/main/index.ts`:
+To add a backend method:
 
-1. Register it with `method('name', …)` in `src/headless/backend.ts`.
+1. Register it with `method('name', …)` in `src/headless/backend.ts`, with zod checks on every argument.
 2. Add a test in `tests/unit/headless-backend.test.ts` with the fake `MuseHost`.
-3. Delete it from `notYet` in `tests/unit/headless-parity.test.ts`.
-4. Add its typed call to `mac/Packages/MuseBackend/Sources/MuseBackend/Methods.swift`.
+3. Add its name to `expected` in `tests/unit/headless-parity.test.ts`.
+4. Add its typed call to `mac/Packages/MuseBackend/Sources/MuseBackend/Methods.swift`, with an encoding test in `mac/Packages/MuseBackend/Tests/MuseBackendTests/`. The parity test fails until the method's name appears in `MuseBackend`.
 
 When a message shape changes, raise `HEADLESS_PROTOCOL` in `src/headless/wire.ts` and `backendProtocol` in `mac/Packages/MuseBackend/Sources/MuseBackend/Messages.swift` together. The parity test fails when they differ.
 
@@ -112,6 +122,14 @@ macOS can ask for your login password first. A test must never type it. `securit
 
 `swift test` for `MuseKit` writes one item with a random service, `com.domalhambra.mmac.test.` and a UUID, and deletes it even when an expectation fails. A run that stops in the middle can leave it. Search for `com.domalhambra.mmac.test` in Keychain Access to find such items.
 
+### Measure mMac's size
+
+Run `mac/scripts/measure-size.sh`. It builds mMac twice: a clean Release build for the disk number, and a Release build with the compilation condition `MMAC_MEASURE` for the memory number. The `MMAC_MEASURE` build keeps the bridge token in memory, keeps its window defaults in the suite `com.domalhambra.mmac.measure` (the script deletes it), and runs the checkout it was built from. So it never reads Dom's Keychain item or changes his defaults. The script checks the build's marker line before it launches it.
+
+Then the script launches that build once, for about 80 seconds, with a temporary home (`HOME`, `CFFIXED_USER_HOME`, `MUSE_HOME`, `XDG_*`, `ZDOTDIR`) and `MMAC_DATA_FOLDER` inside it. `CFFIXED_USER_HOME` moves Application Support but not preferences, which cfprefsd still writes to the real `~/Library/Preferences`, so the build's own suite is what protects Dom's defaults. The Isolation section checks that mMac's real defaults and `~/Library/Application Support/mMac` are unchanged and that no `muse serve` is left. Quit mMac and Muse Desktop first, and leave the window alone while the script runs. It measures Muse Desktop's disk size but never launches it. `--builds-only` builds and checks the markers, and launches nothing.
+
+For Muse Desktop's memory, Dom opens `/Applications/Muse Desktop.app` himself, waits at least 60 seconds, and runs `mac/scripts/measure-size.sh --electron-running`. It finds the app's process tree by its exact executable path, reads its memory, and appends a section to the report. It launches nothing, quits nothing and sends no signal. That number includes Dom's real projects and conversations. The report is `.cache/size/report.txt`. The results and the method are in "Size" in `docs/architecture.md`.
+
 ### Run the UI tests
 
 The UI tests drive the real desktop. Before you run them:
@@ -130,14 +148,10 @@ The scheme keeps screen capture off (`captureScreenshotsAutomatically: false` in
 
 Every launch the UI tests make points `HOME`, `MUSE_HOME` and `XDG_*` at a temporary folder. Under that `HOME`, mMac finds Node through `/etc/paths`, which the login shell still reads, or through the fallback paths in `mac/Packages/MuseBackend/Sources/MuseBackend/Launcher.swift`. A Node that only nvm or fnm puts on your PATH is not found.
 
-## Add an IPC method
-
-Follow `CONTRIBUTING.md`: add a typed method to `src/shared/protocol.ts` and `src/preload/index.ts`, validate at the boundary, and keep Electron privileges in `src/main/`.
-
 ## Update Muse Code or the SDK
 
 1. Update the CLI, or the pinned `@muse-code/sdk` in `package.json`.
-2. Run the gate below, integration and e2e included.
+2. Run the gate below, integration and headless included.
 3. Record the version and the date in `docs/compatibility.md`.
 
 ## Record a decision
@@ -150,24 +164,21 @@ Every Markdown file under `docs/` needs a row in `docs/README.md`. Quote repo pa
 
 ## Prove a change
 
-Run all of these, in this order. The e2e run rewrites `docs/screenshots/*.png`, so restore them before you commit.
+Run all of these, in this order.
 
 ```sh
 npm run typecheck
 npm test
-npm run build
 npm run format:check
 MUSE_BIN="$(command -v muse)" npm run test:integration
 MUSE_BIN="$(command -v muse)" npm run test:headless
-MUSE_BIN="$(command -v muse)" npm run test:e2e
-git checkout -- docs/screenshots
 swift test --package-path mac/Packages/MuseBackend --scratch-path .cache/swift
 swift test --package-path mac/Packages/MuseKit --scratch-path .cache/swift-kit
 (cd mac && xcodegen generate) && TEST_RUNNER_MUSE_BIN="$(command -v muse)" xcodebuild test -project mac/mMac.xcodeproj -scheme mMac -configuration Debug -derivedDataPath .cache/mmac -destination 'platform=macOS' -collect-test-diagnostics never
 ```
 
-`xcodebuild test` builds the app and runs the UI tests. It needs macOS Automation Mode, an unlocked screen and no full-screen app in front. See "Run the UI tests" above.
+`npm run build` runs the typecheck too. It stays for old habits, and the gate does not repeat it.
 
-The first e2e run on a new machine can time out while Playwright downloads Electron. Run it again.
+`xcodebuild test` builds the app and runs the UI tests. It needs macOS Automation Mode, an unlocked screen and no full-screen app in front. See "Run the UI tests" above. A session that must not open windows runs `xcodebuild build-for-testing` in its place, and says so.
 
 Only the last command needs Xcode and XcodeGen. `swift test` needs only the Swift toolchain. All three write their build output to the gitignored .cache folder at the repo root.
