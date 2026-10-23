@@ -176,6 +176,30 @@ private func exportArgs(_ backend: ScriptedBackend) -> [JSONValue]? {
   #expect(backend.messages.isEmpty)
 }
 
+@MainActor @Test func anExportForAConversationNoLongerOpenSendsNothing() async throws {
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    guard case .string(let sessionId)? = args.first else { return [reply(id, "null")] }
+    return switch method {
+    case "open": [reply(id, viewJSON(sessionJSON(sessionId)))]
+    case "export": [reply(id, #""/x/out.md""#)]
+    default: [reply(id, "null")]
+    }
+  }
+  await workspace.open("s1")
+  await workspace.open("s2")
+  #expect(await workspace.exportConversation(to: URL(fileURLWithPath: "/x/out.md"), sessionId: "s1") == false)
+  #expect(exportArgs(backend) == nil)
+  #expect(workspace.errorMessage == nil)
+  #expect(workspace.notice == nil)
+}
+
+@MainActor @Test func anExportForTheOpenConversationWrites() async throws {
+  let (workspace, backend) = await makeWorkspace(script: conversationScript(SavedPreferences()))
+  await workspace.open("s1")
+  #expect(await workspace.exportConversation(to: URL(fileURLWithPath: "/x/out.md"), sessionId: "s1"))
+  #expect(exportArgs(backend)?.first == "s1")
+}
+
 @MainActor @Test func everyNoticeCounts() async {
   let (workspace, _) = await makeWorkspace()
   workspace.showNotice("Done.")

@@ -6,10 +6,11 @@ import UniformTypeIdentifiers
 /// "Export as Markdown": a save panel as a sheet on the window, then the backend writes the file.
 @MainActor
 enum ExportPanel {
-  /// Exports the open conversation. Cancel does nothing; success shows the toast.
+  /// Exports the open conversation. Cancel does nothing; success shows the toast. When another
+  /// conversation opened while the panel showed, nothing is exported.
   static func run(_ workspace: Workspace) async {
     guard let session = workspace.view?.session, let url = await chooseFile(for: session) else { return }
-    _ = await workspace.exportConversation(to: url)
+    _ = await workspace.exportConversation(to: url, sessionId: session.sessionId)
   }
 
   private static func chooseFile(for session: Session) async -> URL? {

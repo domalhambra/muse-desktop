@@ -156,21 +156,20 @@ struct SidebarView: View {
         ForEach(section.sessions) { session in
           SessionRow(
             session: session, showProject: workspace.project.isEmpty,
-            pinned: workspace.isPinned(session.sessionId)
+            pinned: workspace.isPinned(session.sessionId),
+            // A click on the row the arrow keys moved to: the selection does not change, so the
+            // binding is not set. An ordinary click clears `highlighted` on mouse-down first, so
+            // it does not open twice.
+            open: {
+              guard highlighted == session.sessionId else { return }
+              highlighted = nil
+              Task { await workspace.open(session.sessionId) }
+            }
           ) {
             Task { await workspace.togglePin(session.sessionId) }
           }
           .tag(session.sessionId)
           .contentShape(.rect)
-          // A click on the row the arrow keys moved to: the selection does not change, so the
-          // binding is not set. An ordinary click clears `highlighted` on mouse-down first, so
-          // it does not open twice.
-          .simultaneousGesture(
-            TapGesture().onEnded {
-              guard highlighted == session.sessionId else { return }
-              highlighted = nil
-              Task { await workspace.open(session.sessionId) }
-            })
           .contextMenu { rowMenu(session) }
         }
       }
@@ -283,6 +282,8 @@ struct SessionRow: View {
   let session: Session
   let showProject: Bool
   var pinned = false
+  /// A click on the row outside the pin button.
+  var open: () -> Void = {}
   /// The hover button's action.
   var togglePin: () -> Void = {}
   /// While the pointer is over the row, the pin button replaces the time, as in Electron.
@@ -290,33 +291,10 @@ struct SessionRow: View {
 
   var body: some View {
     HStack(spacing: 8) {
-      // As Electron: a pinned row shows its pin, even while it runs.
-      if pinned {
-        Image(systemName: "pin.fill").font(.caption).foregroundStyle(.themeSecondary).accessibilityLabel("Pinned")
-      } else if session.status == "running" {
-        ProgressView().controlSize(.mini).accessibilityLabel("Working")
-      } else {
-        Image(systemName: "bubble.left").foregroundStyle(.themeSecondary).accessibilityHidden(true)
-      }
-      VStack(alignment: .leading, spacing: 2) {
-        Text(SessionTitle.of(session)).lineLimit(1)
-        // Electron names the session's own folder, so a worktree shows its worktree's name.
-        if showProject, let root = session.workspaceRoot, !root.isEmpty {
-          Text(ProjectPath.name(of: root))
-            .font(.caption)
-            .foregroundStyle(.themeSecondary)
-            .lineLimit(1)
-        }
-      }
-      Spacer(minLength: 4)
-      if ProjectPath.isWorktree(session) {
-        Text("worktree")
-          .font(.caption2)
-          .padding(.horizontal, 5)
-          .padding(.vertical, 1)
-          .background(.quaternary, in: Capsule())
-          .help(session.worktree?.path ?? session.workspaceRoot ?? "")
-      }
+      // Everything but the pin button takes the row's click, so pinning never opens the row.
+      HStack(spacing: 8) { content }
+        .contentShape(.rect)
+        .simultaneousGesture(TapGesture().onEnded(open))
       if hovering {
         Button(action: togglePin) {
           Image(systemName: pinned ? "pin.slash" : "pin")
@@ -325,18 +303,51 @@ struct SessionRow: View {
         .help(pinned ? "Unpin conversation" : "Pin conversation")
         .accessibilityLabel("\(pinned ? "Unpin" : "Pin") \(SessionTitle.of(session))")
         .accessibilityIdentifier("pin-button")
-      } else {
-        TimelineView(.everyMinute) { context in
-          Text(RelativeTime.text(SidebarSections.activity(session), now: context.date))
-            .font(.caption)
-            .foregroundStyle(.themeSecondary)
-            .monospacedDigit()
-        }
       }
     }
     .onHover { hovering = $0 }
     .help(SessionTitle.of(session))
     // VoiceOver reaches the pin without hovering.
     .accessibilityAction(named: pinned ? "Unpin conversation" : "Pin conversation", togglePin)
+  }
+
+  /// The icon, the title, the project, the worktree badge, and the time unless the pin button
+  /// replaces it.
+  @ViewBuilder private var content: some View {
+    // As Electron: a pinned row shows its pin, even while it runs.
+    if pinned {
+      Image(systemName: "pin.fill").font(.caption).foregroundStyle(.themeSecondary).accessibilityLabel("Pinned")
+    } else if session.status == "running" {
+      ProgressView().controlSize(.mini).accessibilityLabel("Working")
+    } else {
+      Image(systemName: "bubble.left").foregroundStyle(.themeSecondary).accessibilityHidden(true)
+    }
+    VStack(alignment: .leading, spacing: 2) {
+      Text(SessionTitle.of(session)).lineLimit(1)
+      // Electron names the session's own folder, so a worktree shows its worktree's name.
+      if showProject, let root = session.workspaceRoot, !root.isEmpty {
+        Text(ProjectPath.name(of: root))
+          .font(.caption)
+          .foregroundStyle(.themeSecondary)
+          .lineLimit(1)
+      }
+    }
+    Spacer(minLength: 4)
+    if ProjectPath.isWorktree(session) {
+      Text("worktree")
+        .font(.caption2)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1)
+        .background(.quaternary, in: Capsule())
+        .help(session.worktree?.path ?? session.workspaceRoot ?? "")
+    }
+    if !hovering {
+      TimelineView(.everyMinute) { context in
+        Text(RelativeTime.text(SidebarSections.activity(session), now: context.date))
+          .font(.caption)
+          .foregroundStyle(.themeSecondary)
+          .monospacedDigit()
+      }
+    }
   }
 }

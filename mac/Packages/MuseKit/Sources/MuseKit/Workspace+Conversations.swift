@@ -49,10 +49,12 @@ extension Workspace {
   }
 
   /// Exports the open conversation to `url`, chosen in the save panel. The backend writes
-  /// Electron's format, mode 0600. Success shows the notice and returns true.
+  /// Electron's format, mode 0600. Success shows the notice and returns true. With `sessionId`,
+  /// the conversation the person chose to export: when another one is open by the time the panel
+  /// closes, nothing is written and no error shows.
   @discardableResult
-  public func exportConversation(to url: URL) async -> Bool {
-    guard let session = view?.session else { return false }
+  public func exportConversation(to url: URL, sessionId: String? = nil) async -> Bool {
+    guard let session = view?.session, sessionId == nil || session.sessionId == sessionId else { return false }
     do {
       _ = try await client.export(
         sessionId: session.sessionId, to: url, fallbackTitle: ExportName.fallbackTitle(for: session))
