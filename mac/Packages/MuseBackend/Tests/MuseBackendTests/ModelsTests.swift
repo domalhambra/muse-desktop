@@ -214,6 +214,26 @@ let fullViewJSON = #"""
   #expect(!PreferencesPatch(theme: "muse").touchesBridges)
 }
 
+@Test func pinsAndArchivesDecodeWithEmptyDefaultsAndTravelInAPatch() throws {
+  let empty = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
+  #expect(empty.pinnedSessionIds.isEmpty)
+  #expect(empty.archivedSessionIds.isEmpty)
+  let saved = try JSONDecoder().decode(
+    Preferences.self, from: Data(#"{"pinnedSessionIds":["a","b"],"archivedSessionIds":["c"]}"#.utf8))
+  #expect(saved.pinnedSessionIds == ["a", "b"])
+  #expect(saved.archivedSessionIds == ["c"])
+  #expect(saved == Preferences(pinnedSessionIds: ["a", "b"], archivedSessionIds: ["c"]))
+  let pin = try JSONSerialization.jsonObject(with: JSONEncoder().encode(PreferencesPatch(pinnedSessionIds: ["a"])))
+    as? [String: Any]
+  #expect(pin?.keys.sorted() == ["pinnedSessionIds"])
+  #expect(pin?["pinnedSessionIds"] as? [String] == ["a"])
+  // An empty list is sent: restoring the last archived conversation saves [].
+  let archive = try JSONSerialization.jsonObject(
+    with: JSONEncoder().encode(PreferencesPatch(archivedSessionIds: []))) as? [String: Any]
+  #expect(archive?.keys.sorted() == ["archivedSessionIds"])
+  #expect(!PreferencesPatch(pinnedSessionIds: ["a"], archivedSessionIds: ["b"]).touchesBridges)
+}
+
 @Test func mcpShapesRoundTrip() throws {
   let list = try JSONDecoder().decode(
     McpServerList.self,

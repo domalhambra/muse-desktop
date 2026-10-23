@@ -383,12 +383,17 @@ public struct Preferences: Codable, Equatable, Sendable {
   public var bridgeFilesEnabled = false
   public var bridgeMcpEnabled = false
   public var bridgeMcpPort = 7735
+  /// Pinned conversations, in the order they were pinned.
+  public var pinnedSessionIds: [String] = []
+  /// Conversations archived in mMac only. The CLI session is never told.
+  public var archivedSessionIds: [String] = []
 
   public init(
     cliPath: String = "", recentProjects: [String] = [], trustedProjects: [String] = [],
     reasoningEffort: String = "high", theme: String = "muse", fontSize: String = "comfortable",
     reduceMotion: Bool = false, notifyOnCompletion: Bool = false, bridgeFilesEnabled: Bool = false,
-    bridgeMcpEnabled: Bool = false, bridgeMcpPort: Int = 7735
+    bridgeMcpEnabled: Bool = false, bridgeMcpPort: Int = 7735, pinnedSessionIds: [String] = [],
+    archivedSessionIds: [String] = []
   ) {
     self.cliPath = cliPath
     self.recentProjects = recentProjects
@@ -401,6 +406,8 @@ public struct Preferences: Codable, Equatable, Sendable {
     self.bridgeFilesEnabled = bridgeFilesEnabled
     self.bridgeMcpEnabled = bridgeMcpEnabled
     self.bridgeMcpPort = bridgeMcpPort
+    self.pinnedSessionIds = pinnedSessionIds
+    self.archivedSessionIds = archivedSessionIds
   }
 
   public init(from decoder: any Decoder) throws {
@@ -417,6 +424,8 @@ public struct Preferences: Codable, Equatable, Sendable {
     bridgeFilesEnabled = try c.decodeIfPresent(Bool.self, forKey: .bridgeFilesEnabled) ?? d.bridgeFilesEnabled
     bridgeMcpEnabled = try c.decodeIfPresent(Bool.self, forKey: .bridgeMcpEnabled) ?? d.bridgeMcpEnabled
     bridgeMcpPort = try c.decodeIfPresent(Int.self, forKey: .bridgeMcpPort) ?? d.bridgeMcpPort
+    pinnedSessionIds = try c.decodeIfPresent([String].self, forKey: .pinnedSessionIds) ?? d.pinnedSessionIds
+    archivedSessionIds = try c.decodeIfPresent([String].self, forKey: .archivedSessionIds) ?? d.archivedSessionIds
   }
 }
 
@@ -431,11 +440,16 @@ public struct PreferencesPatch: Encodable, Equatable, Sendable {
   public var bridgeFilesEnabled: Bool?
   public var bridgeMcpEnabled: Bool?
   public var bridgeMcpPort: Int?
+  /// The whole list. Electron's patch replaces the array too.
+  public var pinnedSessionIds: [String]?
+  /// The whole list.
+  public var archivedSessionIds: [String]?
 
   public init(
     cliPath: String? = nil, reasoningEffort: String? = nil, theme: String? = nil, fontSize: String? = nil,
     reduceMotion: Bool? = nil, notifyOnCompletion: Bool? = nil, bridgeFilesEnabled: Bool? = nil,
-    bridgeMcpEnabled: Bool? = nil, bridgeMcpPort: Int? = nil
+    bridgeMcpEnabled: Bool? = nil, bridgeMcpPort: Int? = nil, pinnedSessionIds: [String]? = nil,
+    archivedSessionIds: [String]? = nil
   ) {
     self.cliPath = cliPath
     self.reasoningEffort = reasoningEffort
@@ -446,6 +460,8 @@ public struct PreferencesPatch: Encodable, Equatable, Sendable {
     self.bridgeFilesEnabled = bridgeFilesEnabled
     self.bridgeMcpEnabled = bridgeMcpEnabled
     self.bridgeMcpPort = bridgeMcpPort
+    self.pinnedSessionIds = pinnedSessionIds
+    self.archivedSessionIds = archivedSessionIds
   }
 
   /// True when the patch changes a bridge, so the bridge status needs a new read.

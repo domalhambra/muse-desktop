@@ -50,6 +50,9 @@ public final class Workspace {
   public var projectBadge: GitStatus? { project.isEmpty ? nil : projectGit[project] }
   /// Start the next new conversation in its own Muse-created Git worktree.
   public var startInWorktree = false
+  /// The sidebar lists archived conversations instead of the others. Not saved, as in Electron;
+  /// `startNew()` turns it off.
+  public var showArchived = false
   /// Called for every `session` event, with the status that conversation had in the event before
   /// it (nil for the first one this Workspace sees). The app posts the completion notice from it.
   @ObservationIgnored public var turnFinished: (@MainActor (Session, _ previous: String?) -> Void)?
@@ -77,6 +80,11 @@ public final class Workspace {
   public var mode: SendMode = .queue
   public internal(set) var submitting = false
   public var errorMessage: String?
+  /// The success toast's text. The app shows it for 4 seconds, then sets it to nil. Errors stay in
+  /// `errorMessage`.
+  public var notice: String?
+  /// Bumped by every `showNotice(_:)`, so the same text twice restarts the app's timer.
+  public private(set) var noticeCount = 0
   public internal(set) var decidingApprovals: Set<String> = []
   public internal(set) var answeringQuestions: Set<String> = []
   public internal(set) var storedOutput: [String: String] = [:]
@@ -94,6 +102,8 @@ public final class Workspace {
   private var refreshDelay: Task<Void, Never>?
   /// The pause before a `sessions-changed` event refreshes history. Electron waits 250 ms.
   private let refreshDebounce: Duration
+  /// The last pin or archive toggle. The next one waits for it, then reads `preferences`.
+  @ObservationIgnored var preferenceToggles: Task<Bool, Never>?
 
   /// `drafts` are an earlier Workspace's, so a backend restart keeps what the person typed, and
   /// `reopen` is the conversation that was open then.
@@ -122,7 +132,9 @@ public final class Workspace {
   }
 
   public var sections: [SidebarSection] {
-    SidebarSections.build(sessions, project: project, now: .now)
+    SidebarSections.build(
+      sessions, project: project, pinned: preferences.pinnedSessionIds,
+      archived: preferences.archivedSessionIds, showArchived: showArchived, now: .now)
   }
   public var isConnected: Bool { status.isReady }
   public var isRunning: Bool { view?.session.status == "running" }
@@ -349,6 +361,8 @@ public final class Workspace {
     openingSessionId = nil
     view = nil
     mode = .queue
+    // As Electron's startNew: back to the normal list.
+    showArchived = false
     clearStoredOutput()
   }
 
@@ -413,5 +427,11 @@ public final class Workspace {
   /// Runs one backend call and shows its error, if any.
   func run(_ work: () async throws -> Void) async {
     do { try await work() } catch { errorMessage = error.localizedDescription }
+  }
+
+  /// Shows a success toast, as Electron's `showSuccess`.
+  public func showNotice(_ text: String) {
+    notice = text
+    noticeCount += 1
   }
 }

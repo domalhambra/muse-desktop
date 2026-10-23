@@ -84,22 +84,37 @@ public struct SidebarSection: Identifiable, Equatable, Sendable {
   public var id: String { title }
 }
 
-/// The conversation list, as Electron's `App.tsx` builds it (pinning and archiving arrive in M4).
+/// The conversation list, as Electron's `App.tsx` builds it (`visibleSessions`, `groupedSessions`).
 public enum SidebarSections {
+  /// The group pinned conversations form, in the normal view and in the archived view.
+  public static let pinnedTitle = "Pinned"
+
+  /// Keeps a conversation when it matches the project filter, is not a subagent or reminder, and
+  /// is archived exactly when `showArchived` is on. Pinned conversations come first, then the rest
+  /// by last activity, newest first.
   public static func build(
-    _ sessions: [Session], project: String, now: Date, calendar: Calendar = .current
+    _ sessions: [Session], project: String, pinned: [String] = [], archived: [String] = [],
+    showArchived: Bool = false, now: Date, calendar: Calendar = .current
   ) -> [SidebarSection] {
     let root = project.isEmpty ? nil : ProjectPath.root(of: project)
+    let pinned = Set(pinned)
+    let archived = Set(archived)
     let shown = sessions
       .filter { $0.kind != "subagent" && $0.kind != "reminder" }
+      .filter { archived.contains($0.sessionId) == showArchived }
       .filter { session in
         guard let root else { return true }
         return session.workspaceRoot.map(ProjectPath.root(of:)) == root
       }
-      .sorted { activity($0) > activity($1) }
+      .sorted { first, second in
+        let (firstPinned, secondPinned) = (pinned.contains(first.sessionId), pinned.contains(second.sessionId))
+        if firstPinned != secondPinned { return firstPinned }
+        return activity(first) > activity(second)
+      }
     var sections: [SidebarSection] = []
     for session in shown {
-      let title = group(session, now: now, calendar: calendar)
+      // Pinned wins over the date, in the archived view too.
+      let title = pinned.contains(session.sessionId) ? pinnedTitle : group(session, now: now, calendar: calendar)
       if sections.last?.title == title {
         sections[sections.count - 1] = SidebarSection(title: title, sessions: sections[sections.count - 1].sessions + [session])
       } else {

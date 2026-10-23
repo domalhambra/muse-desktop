@@ -63,6 +63,50 @@ private func session(_ id: String, root: String? = "/p", hoursAgo: Double, kind:
   #expect(ids == ["main", "tree"])
 }
 
+@Test func pinnedConversationsComeFirstInTheirOwnGroup() {
+  let sessions = [
+    session("today", hoursAgo: 1),
+    session("old-pin", hoursAgo: 24 * 30),
+    session("new-pin", hoursAgo: 2),
+    session("week", hoursAgo: 24 * 4),
+  ]
+  let sections = SidebarSections.build(
+    sessions, project: "", pinned: ["old-pin", "new-pin"], now: now, calendar: calendar)
+  #expect(sections.map(\.title) == ["Pinned", "Today", "Previous 7 days"])
+  #expect(sections.flatMap { $0.sessions.map(\.sessionId) } == ["new-pin", "old-pin", "today", "week"])
+}
+
+@Test func archivedConversationsShowOnlyInTheArchivedViewAndPinnedStillWins() {
+  let sessions = [
+    session("open", hoursAgo: 1),
+    session("archived", hoursAgo: 2),
+    session("archived-pin", hoursAgo: 24 * 30),
+  ]
+  let archived = ["archived", "archived-pin"]
+  let normal = SidebarSections.build(
+    sessions, project: "", pinned: ["archived-pin"], archived: archived, now: now, calendar: calendar)
+  #expect(normal.flatMap { $0.sessions.map(\.sessionId) } == ["open"])
+  let archive = SidebarSections.build(
+    sessions, project: "", pinned: ["archived-pin"], archived: archived, showArchived: true, now: now,
+    calendar: calendar)
+  #expect(archive.map(\.title) == ["Pinned", "Today"])
+  #expect(archive.flatMap { $0.sessions.map(\.sessionId) } == ["archived-pin", "archived"])
+}
+
+@Test func subagentAndReminderSessionsStayOutWhenPinnedOrArchived() {
+  let sessions = [session("sub", hoursAgo: 1, kind: "subagent"), session("rem", hoursAgo: 1, kind: "reminder")]
+  #expect(SidebarSections.build(sessions, project: "", pinned: ["sub", "rem"], now: now, calendar: calendar).isEmpty)
+  #expect(
+    SidebarSections.build(
+      sessions, project: "", archived: ["sub", "rem"], showArchived: true, now: now, calendar: calendar
+    ).isEmpty)
+}
+
+@Test func anEmptyArchiveHasNoSections() {
+  let sessions = [session("open", hoursAgo: 1)]
+  #expect(SidebarSections.build(sessions, project: "", showArchived: true, now: now, calendar: calendar).isEmpty)
+}
+
 @Test func relativeTimes() {
   #expect(RelativeTime.text(iso(now.addingTimeInterval(-20)), now: now) == "Now")
   #expect(RelativeTime.text(iso(now.addingTimeInterval(-5 * 60)), now: now) == "5m")
