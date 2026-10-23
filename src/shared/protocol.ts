@@ -128,6 +128,15 @@ export const effortSchema = z.enum([
 ])
 export type ReasoningEffort = z.infer<typeof effortSchema>
 
+/** Muse's approval modes. Closed: a client selects one, it never defines one (msp.d.ts, `ApprovalMode`). */
+export const approvalModeSchema = z.enum([
+  'allowAll',
+  'promptUnmatched',
+  'onRequest',
+  'denyUnmatched',
+])
+export type ApprovalMode = z.infer<typeof approvalModeSchema>
+
 const preferenceFields = {
   theme: z.enum(['muse', 'daylight', 'moonlight', 'grove', 'plush', 'system']),
   backgroundIntensity: z.number().min(0).max(100),

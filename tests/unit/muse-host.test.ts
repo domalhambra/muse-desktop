@@ -229,6 +229,43 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('sets the approval mode and keeps the session current from the reply and the event', async () => {
+    const events: AppEvent[] = []
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    await host.create('/project')
+    wire.command.mockImplementation(async (method: string) => {
+      if (method === 'session/setApprovalMode')
+        return {
+          applyOutcome: 'completed',
+          effectiveMode: { mode: 'onRequest', source: 'approvalReconfigure' },
+        }
+      return method === 'session/start' || method === 'session/resume' ? result() : {}
+    })
+    await expect(host.setApprovalMode('s1', 'onRequest')).resolves.toBe('onRequest')
+    expect(wire.command).toHaveBeenLastCalledWith(
+      'session/setApprovalMode',
+      { sessionId: 's1', mode: 'onRequest' },
+      { maxAttempts: 1 },
+    )
+    expect(host.getSession('s1').approvalMode?.mode).toBe('onRequest')
+    notify('session/approvalModeChanged', { mode: 'denyUnmatched', source: 'replay' })
+    expect(host.getSession('s1').approvalMode?.mode).toBe('denyUnmatched')
+    await host.close()
+  })
+
+  it('approval mode: a changed event for an unknown session is ignored', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    wire.receive({
+      method: 'session/approvalModeChanged',
+      params: { sessionId: 'other', mode: 'allowAll' },
+    })
+    expect(host.getSession('s1').approvalMode).toBeUndefined()
+    await host.close()
+  })
+
   it('dispatches compaction through the CLI without rewriting the conversation', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')

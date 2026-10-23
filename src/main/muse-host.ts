@@ -8,6 +8,7 @@ import {
   sessionSchema,
   worktreeEntrySchema,
   type AppEvent,
+  type ApprovalMode,
   type ConnectionStatus,
   type MuseSession,
   type QuestionAnswer,
@@ -382,6 +383,29 @@ export class MuseHost {
     this.schedule(sessionId)
   }
 
+  /**
+   * Selects an approval mode for the session. Muse applies it to its next action; an action
+   * already awaiting approval is not re-decided (msp.d.ts, `session/setApprovalMode`).
+   */
+  async setApprovalMode(sessionId: string, mode: ApprovalMode) {
+    await this.resume(sessionId)
+    const result = z
+      .object({
+        applyOutcome: z.string(),
+        effectiveMode: z.object({ mode: z.string() }).passthrough(),
+      })
+      .parse(
+        await this.connection.command(
+          'session/setApprovalMode',
+          { sessionId, mode },
+          { maxAttempts: 1 },
+        ),
+      )
+    this.requireSession(sessionId).view.session.approvalMode = result.effectiveMode
+    this.schedule(sessionId)
+    return result.effectiveMode.mode
+  }
+
   async approve(sessionId: string, approvalId: string, choiceId: string) {
     await this.resume(sessionId)
     const approval = this.requireSession(sessionId).view.approvals.find(
@@ -575,6 +599,11 @@ export class MuseHost {
         input: usage.promptTokens,
         output: usage.outputTokens,
         total: usage.totalTokens,
+      }
+    } else if (method === 'session/approvalModeChanged') {
+      live.view.session.approvalMode = {
+        ...(live.view.session.approvalMode ?? {}),
+        mode: z.string().parse(params.mode),
       }
     } else if (method === 'view/gap') {
       void this.recover(sessionId).catch((error: unknown) => {
