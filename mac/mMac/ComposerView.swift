@@ -2,6 +2,7 @@ import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The composer, as Electron's `Composer.tsx`.
 struct ComposerView: View {
@@ -27,6 +28,8 @@ struct ComposerView: View {
   @State private var mentionOwner: ObjectIdentifier?
   /// Bumped after a popup rewrites the draft, so the text area takes focus with the cursor at the end.
   @State private var cursorRequest = 0
+  /// A file drag is over the composer.
+  @State private var dragging = false
 
   var body: some View {
     @Bindable var sheets = controller.sheets
@@ -36,21 +39,30 @@ struct ComposerView: View {
     let mentionRows = showsPopups && commands.isEmpty ? (mentionMenu?.rows(for: workspace.draft) ?? []) : []
     VStack(alignment: .leading, spacing: 8) {
       if workspace.isRunning { runningBar }
+      if !workspace.attachments.isEmpty { AttachmentChips(workspace: workspace) }
       ComposerTextView(
         text: $workspace.draft, height: $inputHeight, placeholder: placeholder,
         placeholderColor: NSColor(appearance.colors.muted),
         isEnabled: workspace.openingSessionId == nil, focusRequest: workspace.composerFocusRequest,
-        cursorRequest: cursorRequest, onSubmit: submit, onPopupKey: popupKey
+        cursorRequest: cursorRequest, onSubmit: submit, onPopupKey: popupKey,
+        onDropFiles: { urls in Task { await workspace.drop(urls) } },
+        onDragChange: { dragging = $0 },
+        onPasteFiles: { urls in Task { await workspace.attach(urls) } },
+        onPasteImage: { data in Task { await workspace.attachPasted(data, type: UTType.png.identifier) } }
       )
       .frame(height: inputHeight)
       .padding(10)
       .background(appearance.colors.input, in: RoundedRectangle(cornerRadius: 8))
+      // Electron's `is-dragging` ring.
+      .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(appearance.colors.accent, lineWidth: dragging ? 2 : 0))
       .overlay(alignment: .top) {
         popup(commands: commands, mentionRows: mentionRows)
           // Above the field, 10 points clear, as Electron's `.slash-menu`.
           .alignmentGuide(.top) { $0[.bottom] + 10 }
       }
       HStack(spacing: 10) {
+        AttachButton(workspace: workspace)
+        Divider().frame(height: 16)
         Picker("Model", selection: modelSelection) {
           if !workspace.models.contains(where: { $0.modelId == workspace.modelId }) {
             Text(workspace.modelId.isEmpty ? "CLI default" : workspace.modelId).tag(workspace.modelId)
@@ -112,6 +124,13 @@ struct ComposerView: View {
       }
     }
     .padding(12)
+    // A drop outside the text lands here; the text view takes its own through `onDropFiles`.
+    .dropDestination(for: URL.self) { urls, _ in
+      let files = urls.filter(\.isFileURL)
+      guard !files.isEmpty else { return false }
+      Task { await workspace.drop(files) }
+      return true
+    } isTargeted: { dragging = $0 }
     .onChange(of: workspace.draft) {
       commandIndex = 0
       mentionIndex = 0

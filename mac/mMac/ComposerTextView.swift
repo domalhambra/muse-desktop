@@ -21,6 +21,14 @@ struct ComposerTextView: NSViewRepresentable {
   let onSubmit: () -> Void
   /// A popup's key. Returns true when the popup took it.
   var onPopupKey: (SlashKey) -> Bool = { _ in false }
+  /// Files or folders dropped on the text, for the drop plan.
+  var onDropFiles: ([URL]) -> Void = { _ in }
+  /// A file drag entered (true) or left (false) the text.
+  var onDragChange: (Bool) -> Void = { _ in }
+  /// Files copied in Finder, pasted.
+  var onPasteFiles: ([URL]) -> Void = { _ in }
+  /// Image data pasted with no text, as PNG. The composer passes it to `attachPasted` as `public.png`.
+  var onPasteImage: (Data) -> Void = { _ in }
 
   static let maxHeight: CGFloat = 200
   static let font = NSFont.preferredFont(forTextStyle: .body)
@@ -62,6 +70,10 @@ struct ComposerTextView: NSViewRepresentable {
       coordinator?.parent.onPopupKey(key) ?? false
     }
     textView.onWidthChange = { [weak coordinator = context.coordinator] in coordinator?.measureLater() }
+    textView.onDropFiles = { [weak coordinator = context.coordinator] urls in coordinator?.parent.onDropFiles(urls) }
+    textView.onDragChange = { [weak coordinator = context.coordinator] over in coordinator?.parent.onDragChange(over) }
+    textView.onPasteFiles = { [weak coordinator = context.coordinator] urls in coordinator?.parent.onPasteFiles(urls) }
+    textView.onPasteImage = { [weak coordinator = context.coordinator] data in coordinator?.parent.onPasteImage(data) }
 
     let scroll = NSScrollView()
     scroll.drawsBackground = false
@@ -85,6 +97,10 @@ struct ComposerTextView: NSViewRepresentable {
     textView.onSubmit = nil
     textView.onPopupKey = nil
     textView.onWidthChange = nil
+    textView.onDropFiles = nil
+    textView.onDragChange = nil
+    textView.onPasteFiles = nil
+    textView.onPasteImage = nil
   }
 
   func updateNSView(_ scroll: NSScrollView, context: Context) {
@@ -188,7 +204,80 @@ final class ComposerNSTextView: NSTextView {
   var onSubmit: (() -> Void)?
   var onPopupKey: ((SlashKey) -> Bool)?
   var onWidthChange: (() -> Void)?
+  var onDropFiles: (([URL]) -> Void)?
+  var onDragChange: ((Bool) -> Void)?
+  var onPasteFiles: (([URL]) -> Void)?
+  var onPasteImage: ((Data) -> Void)?
   private var focusedOnce = false
+
+  /// The file URLs on a pasteboard: files and folders, never web links.
+  private static func fileURLs(_ pasteboard: NSPasteboard) -> [URL] {
+    pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+  }
+
+  /// The pasteboard's image as PNG: PNG as it is, and TIFF (a screenshot, Preview) converted, since
+  /// the backend reads an image's kind from its extension.
+  private static func pngData(_ pasteboard: NSPasteboard) -> Data? {
+    if let png = pasteboard.data(forType: .png) { return png }
+    guard let tiff = pasteboard.data(forType: .tiff), let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+    return bitmap.representation(using: .png, properties: [:])
+  }
+
+  /// File URLs too, so a file dropped on the text reaches `performDragOperation` below instead of
+  /// passing by. NSTextView reads this when it registers its drag types.
+  override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+    super.acceptableDragTypes + [.fileURL]
+  }
+
+  // A dropped file goes to the drop plan; NSTextView would insert its path as text. Text drags
+  // behave as before.
+  override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+    guard isEditable, !Self.fileURLs(sender.draggingPasteboard).isEmpty else { return super.draggingEntered(sender) }
+    onDragChange?(true)
+    return .copy
+  }
+
+  override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+    guard isEditable, !Self.fileURLs(sender.draggingPasteboard).isEmpty else { return super.draggingUpdated(sender) }
+    return .copy
+  }
+
+  override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+    onDragChange?(false)
+    super.draggingExited(sender)
+  }
+
+  override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+    guard isEditable, !Self.fileURLs(sender.draggingPasteboard).isEmpty else {
+      return super.prepareForDragOperation(sender)
+    }
+    return true
+  }
+
+  override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+    let urls = Self.fileURLs(sender.draggingPasteboard)
+    guard isEditable, !urls.isEmpty else { return super.performDragOperation(sender) }
+    onDragChange?(false)
+    onDropFiles?(urls)
+    return true
+  }
+
+  /// Files copied in Finder attach. An image with no text attaches as a PNG. Text pastes as before.
+  override func paste(_ sender: Any?) {
+    let pasteboard = NSPasteboard.general
+    if isEditable, let onPasteFiles {
+      let urls = Self.fileURLs(pasteboard)
+      if !urls.isEmpty {
+        onPasteFiles(urls)
+        return
+      }
+    }
+    if isEditable, let onPasteImage, pasteboard.string(forType: .string) == nil, let png = Self.pngData(pasteboard) {
+      onPasteImage(png)
+      return
+    }
+    super.paste(sender)
+  }
 
   var lineHeight: CGFloat {
     let font = font ?? ComposerTextView.font

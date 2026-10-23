@@ -124,6 +124,12 @@ enum SheetAlert {
     await show(panel, preferringKey: preferringKey) ? panel.url : nil
   }
 
+  /// Runs a multi-select open panel as `run(_:preferringKey:)` does. Returns every chosen file,
+  /// or none on Cancel.
+  static func runMultiple(_ panel: NSOpenPanel) async -> [URL] {
+    await show(panel, preferringKey: false) ? panel.urls : []
+  }
+
   /// Shows `panel` as `run(_:preferringKey:)` describes. True when the person chose.
   private static func show(_ panel: NSSavePanel, preferringKey: Bool) async -> Bool {
     let response =
