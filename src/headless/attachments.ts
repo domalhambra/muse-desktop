@@ -27,10 +27,12 @@ const mediaTypes: Record<string, string> = {
 
 const EXPIRED = 'An attachment expired. Select it again.'
 
-/** Errors a file that vanished or cannot be read raises; the person never sees their text. */
+/**
+ * Any fs error that carries a string code (ENOENT, EACCES, EPERM, EISDIR, ENOTDIR, ELOOP, ENXIO
+ * and the rest): the person never sees its text, which holds the path.
+ */
 function unreadable(error: unknown) {
-  const code = (error as { code?: unknown } | null)?.code
-  return code === 'ENOENT' || code === 'EACCES' || code === 'EISDIR'
+  return typeof (error as { code?: unknown } | null)?.code === 'string'
 }
 
 /**
@@ -45,10 +47,17 @@ async function inspect(path: string, read: boolean) {
     const info = await handle.stat()
     if (!info.isFile() || info.size > MAX_FILE) return undefined
     if (!read) return { size: info.size, data: Buffer.alloc(0) }
-    const data = await handle.readFile()
-    // The file may have grown after the stat.
-    if (data.length > MAX_FILE) return undefined
-    return { size: info.size, data }
+    // At most one byte past the limit, so a file that grew hugely after the stat cannot fill
+    // memory before it is refused.
+    const buffer = Buffer.alloc(MAX_FILE + 1)
+    let length = 0
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+      if (!bytesRead) break
+      length += bytesRead
+    }
+    if (length > MAX_FILE) return undefined
+    return { size: info.size, data: buffer.subarray(0, length) }
   } finally {
     await handle.close()
   }

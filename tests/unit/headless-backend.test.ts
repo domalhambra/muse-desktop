@@ -1108,6 +1108,29 @@ describe('headless backend, M4a attachments', () => {
     )
   })
 
+  it('maps any fs error with a code, such as ENOTDIR, to the friendly messages', async () => {
+    const { call } = await trusted()
+    const file = await writeTemp('plain.txt', 'a')
+    const through = join(file, 'inside.txt')
+    await expect(call('attachments', [through])).rejects.toThrow(
+      'inside.txt must be a file smaller than 2 MB.',
+    )
+    // The same code at send time: the file's parent turned into a regular file.
+    await mkdir(join(dir, 'box'))
+    const [chosen] = (await call('attachments', [
+      await writeTemp('box/a.txt', 'a'),
+    ])) as Attachment[]
+    await rm(join(dir, 'box'), { recursive: true })
+    await writeFile(join(dir, 'box'), 'now a file')
+    let text = ''
+    try {
+      await call('send', { ...message, attachments: [chosen.id] })
+    } catch (error) {
+      text = (error as Error).message
+    }
+    expect(text).toBe('An attachment expired. Select it again.')
+  })
+
   it('refuses a FIFO without blocking', async () => {
     const { call } = await trusted()
     const fifo = join(dir, 'pipe')
