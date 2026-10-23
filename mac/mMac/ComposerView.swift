@@ -45,7 +45,7 @@ struct ComposerView: View {
       ComposerTextView(
         text: $workspace.draft, height: $inputHeight, placeholder: placeholder,
         placeholderColor: NSColor(appearance.colors.muted),
-        isEnabled: workspace.openingSessionId == nil, focusRequest: workspace.composerFocusRequest,
+        isEnabled: workspace.composerIsEditable, focusRequest: workspace.composerFocusRequest,
         cursorRequest: cursorRequest, onSubmit: submit, onPopupKey: popupKey,
         onDropFiles: { urls in Task { await workspace.drop(urls) } },
         onDragChange: { draggingOverText = $0 },
@@ -133,6 +133,7 @@ struct ComposerView: View {
     // A drop outside the text lands here; the text view takes its own through `onDropFiles`.
     // File URLs only, so a web link dragged over the composer neither lights the ring nor drops.
     .onDrop(of: [.fileURL], isTargeted: $draggingOverComposer) { providers in
+      guard workspace.composerIsEditable else { return false }
       Task {
         var urls: [URL] = []
         for provider in providers {
@@ -193,8 +194,9 @@ struct ComposerView: View {
     }
   }
 
-  /// No popup and no popup keys while a window sheet shows: the sheet has the keys then.
-  private var showsPopups: Bool { !controller.sheets.anyShown }
+  /// No popup and no popup keys while a window sheet shows (the sheet has the keys then), or while
+  /// a conversation opens (the composer is read-only then).
+  private var showsPopups: Bool { !controller.sheets.anyShown && workspace.composerIsEditable }
 
   /// The @ mention at the end of the draft. Only with a project, as in Electron.
   private var draftMention: Mention? {

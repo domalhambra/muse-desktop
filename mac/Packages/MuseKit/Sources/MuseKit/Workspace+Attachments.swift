@@ -45,9 +45,14 @@ extension Workspace {
     pastedFiles.remember(chip.id, file: file)
   }
 
+  /// Whether the composer takes typing, popup choices and drops. Not while a conversation opens:
+  /// the draft's key is about to change, so text added now could land in the wrong draft.
+  public var composerIsEditable: Bool { openingSessionId == nil }
+
   /// A drop on the composer: files become chips, a folder inside the project becomes a mention at
   /// the end of the draft, and a folder outside it shows the folder error.
   public func drop(_ urls: [URL]) async {
+    guard composerIsEditable else { return }
     let plan = DropPlan.classify(urls, project: project)
     if !plan.mentions.isEmpty {
       draft = plan.appendingMentions(to: draft)

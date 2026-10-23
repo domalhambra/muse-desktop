@@ -309,3 +309,30 @@ private func files(_ names: String...) -> [URL] { names.map { URL(fileURLWithPat
   workspace.startNew()
   #expect(workspace.attachments.map(\.name) == ["a.txt"])
 }
+
+@MainActor @Test func theComposerTakesNoDropWhileAConversationOpens() async throws {
+  // `open` gets no answer until the test pushes one.
+  let (workspace, backend) = await makeWorkspace(script: attachmentScript { method, _, _ in
+    method == "open" ? [] : nil
+  })
+  #expect(workspace.composerIsEditable)
+  workspace.draft = "Look at"
+  let focus = workspace.composerFocusRequest
+  let opening = Task { await workspace.open("s1") }
+  try await eventually { workspace.openingSessionId == "s1" }
+  #expect(!workspace.composerIsEditable)
+  await workspace.drop(files("a.txt"))
+  #expect(workspace.attachments.isEmpty)
+  #expect(!backend.messages.contains { $0["method"] == "attachments" })
+  #expect(workspace.draft == "Look at")
+  #expect(workspace.composerFocusRequest == focus)
+  guard case .number(let id)? = backend.messages.last(where: { $0["method"] == "open" })?["id"] else {
+    Issue.record("No open request")
+    return
+  }
+  backend.push(reply(Int(id), viewJSON(sessionJSON("s1"))))
+  await opening.value
+  #expect(workspace.composerIsEditable)
+  await workspace.drop(files("a.txt"))
+  #expect(workspace.attachments.map(\.name) == ["a.txt"])
+}
