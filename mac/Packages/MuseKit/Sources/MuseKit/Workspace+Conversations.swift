@@ -22,7 +22,9 @@ extension Workspace {
   @discardableResult
   public func toggleArchive(_ sessionId: String) async -> Bool {
     guard await toggle(sessionId, in: .archived) else { return false }
-    if view?.session.sessionId == sessionId { startNew() }
+    // A click on another conversation made while the save ran is pending in `openingSessionId`;
+    // it must not be undone.
+    if (openingSessionId ?? view?.session.sessionId) == sessionId { startNew() }
     return true
   }
 
@@ -82,7 +84,8 @@ public enum ExportName {
   }
 
   /// Electron's `title.replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 80) + '.md'`, except that the cut
-  /// never splits a surrogate pair.
+  /// never splits a surrogate pair. A stem left empty or blank after the cleanup becomes "Muse
+  /// conversation", and the stem is trimmed (Electron would give ".md" or a name with edge spaces).
   public static func defaultFileName(for session: Session) -> String {
     var kept = String.UnicodeScalarView()
     var units = 0
@@ -92,7 +95,8 @@ public enum ExportName {
       kept.append(scalar)
       units += width
     }
-    return String(kept) + ".md"
+    let stem = String(kept).trimmingCharacters(in: .whitespacesAndNewlines)
+    return (stem.isEmpty ? "Muse conversation" : stem) + ".md"
   }
 
   /// Letters (`\p{L}`), numbers (`\p{N}`), space, `_` and `-`.

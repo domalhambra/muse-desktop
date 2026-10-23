@@ -383,7 +383,7 @@ public struct Preferences: Codable, Equatable, Sendable {
   public var bridgeFilesEnabled = false
   public var bridgeMcpEnabled = false
   public var bridgeMcpPort = 7735
-  /// Pinned conversations, in the order they were pinned.
+  /// Pinned conversations. The sidebar orders them by last activity, not by pin order.
   public var pinnedSessionIds: [String] = []
   /// Conversations archived in mMac only. The CLI session is never told.
   public var archivedSessionIds: [String] = []

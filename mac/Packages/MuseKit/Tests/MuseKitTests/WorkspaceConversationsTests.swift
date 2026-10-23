@@ -187,14 +187,18 @@ private func exportArgs(_ backend: ScriptedBackend) -> [JSONValue]? {
 @Test func theDefaultFileNameKeepsLettersDigitsSpacesUnderscoresAndHyphens() {
   // The survey's worked example.
   let example = Session(sessionId: "s", updatedAt: "x", name: #"Fix: the "bug" / ok 🎉"#)
-  #expect(ExportName.defaultFileName(for: example) == "Fix the bug  ok .md")
+  #expect(ExportName.defaultFileName(for: example) == "Fix the bug  ok.md")
   #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", title: "A.b/c_d-e")) == "Abc_d-e.md")
   // Name wins over title.
   #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "N", title: "T")) == "N.md")
   // Unicode letters and digits stay: \p{L} and \p{N}.
   #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "Ünïcödé 名前 ٣")) == "Ünïcödé 名前 ٣.md")
-  // An all-symbol title gives ".md", as in Electron.
-  #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "🎉!!")) == ".md")
+  // A title the cleanup empties or leaves blank falls back to "Muse conversation" (Electron gives ".md").
+  #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "🎉!!")) == "Muse conversation.md")
+  #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "   ")) == "Muse conversation.md")
+  #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: " 🎉 ")) == "Muse conversation.md")
+  // Edge spaces are trimmed.
+  #expect(ExportName.defaultFileName(for: Session(sessionId: "s", updatedAt: "x", name: "!! Hi !!")) == "Hi.md")
 }
 
 @Test func theTitleFallsBackToTheFirstPromptThenMuseConversation() {
@@ -218,4 +222,45 @@ private func exportArgs(_ backend: ScriptedBackend) -> [JSONValue]? {
   #expect(ExportName.defaultFileName(for: pair) == String(repeating: "a", count: 79) + ".md")
   let fits = Session(sessionId: "s", updatedAt: "x", name: String(repeating: "a", count: 78) + "𝐀")
   #expect(ExportName.defaultFileName(for: fits) == String(repeating: "a", count: 78) + "𝐀.md")
+}
+
+@MainActor @Test func anArchiveNeverUndoesAClickOnAnotherConversation() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [] // held: the test answers
+    case "preferences": []
+    default: [reply(id, "null")]
+    }
+  }
+  func id(_ name: String) -> Int? {
+    backend.messages.compactMap { m -> Int? in
+      guard m["method"] == .string(name), case .number(let n)? = m["id"] else { return nil }
+      return Int(n)
+    }.last
+  }
+  let openA = Task { await workspace.open("A") }
+  try await eventually { id("open") != nil }
+  backend.push(reply(id("open")!, viewJSON(sessionJSON("A"))))
+  await openA.value
+  let archive = Task { await workspace.toggleArchive("A") }
+  try await eventually { id("preferences") != nil }
+  let openB = Task { await workspace.open("B") }
+  try await eventually { workspace.openingSessionId == "B" }
+  backend.push(reply(id("preferences")!, #"{"recentProjects":["/p"],"archivedSessionIds":["A"]}"#))
+  #expect(await archive.value)
+  backend.push(reply(id("open")!, viewJSON(sessionJSON("B"))))
+  await openB.value
+  #expect(workspace.view?.session.sessionId == "B")
+}
+
+@MainActor @Test func aFailedToggleDoesNotStickTheChain() async throws {
+  let calls = Counter()
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    guard method == "preferences" else { return [reply(id, "null")] }
+    return calls.next() == 1
+      ? [failure(id, "EACCES")] : [reply(id, #"{"recentProjects":["/p"],"pinnedSessionIds":["b"]}"#)]
+  }
+  #expect(await workspace.togglePin("a") == false)
+  #expect(await workspace.togglePin("b"))
+  #expect(workspace.preferences.pinnedSessionIds == ["b"])
 }

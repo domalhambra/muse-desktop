@@ -109,7 +109,8 @@ public enum SidebarSections {
       .sorted { first, second in
         let (firstPinned, secondPinned) = (pinned.contains(first.sessionId), pinned.contains(second.sessionId))
         if firstPinned != secondPinned { return firstPinned }
-        return activity(first) > activity(second)
+        let (a, b) = (activity(first), activity(second))
+        return a != b ? a > b : first.sessionId < second.sessionId
       }
     var sections: [SidebarSection] = []
     for session in shown {

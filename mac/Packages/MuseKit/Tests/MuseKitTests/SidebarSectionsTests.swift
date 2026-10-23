@@ -124,3 +124,10 @@ private func session(_ id: String, root: String? = "/p", hoursAgo: Double, kind:
   #expect(RelativeTime.date("2026-10-21T12:00:00-07:00") == now)
   #expect(RelativeTime.date("2026-10-21") == nil)
 }
+
+@Test func equalActivityTimesKeepAStableOrder() {
+  let sessions = [session("b", hoursAgo: 1), session("c", hoursAgo: 1), session("a", hoursAgo: 1)]
+  let ids = SidebarSections.build(sessions, project: "", now: now, calendar: calendar).flatMap { $0.sessions.map(\.sessionId) }
+  #expect(ids == ["a", "b", "c"])
+  #expect(SidebarSections.build(sessions.reversed(), project: "", now: now, calendar: calendar).flatMap { $0.sessions.map(\.sessionId) } == ids)
+}
