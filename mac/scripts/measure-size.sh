@@ -26,7 +26,13 @@
 # - Both apps run with HOME, CFFIXED_USER_HOME, MUSE_HOME, XDG_CONFIG_HOME, XDG_DATA_HOME,
 #   XDG_STATE_HOME and ZDOTDIR in a temporary folder, MUSE_DESKTOP_TEST_PROVIDER=echo and
 #   MUSE_NO_AUTO_UPDATE=1. HOME alone does not move ~/Library for a Cocoa or Electron app.
-#   CFFIXED_USER_HOME does, and the script proves it on a probe before any launch.
+#   CFFIXED_USER_HOME does, and the script proves it on two probes before any launch: Application
+#   Support moves, and a preferences write (the throwaway domain com.domalhambra.mmac.probe) lands
+#   in the temporary Library/Preferences, not the real one.
+# - The script reads mMac's real defaults (com.domalhambra.mmac) and Muse Desktop's
+#   (org.musedesktop.app) before and after, and only reads them. mMac's isolation checks run
+#   before Muse Desktop launches; if one fails, Muse Desktop is not launched.
+# - Whatever the script launched is stopped, and the temporary home removed, on any exit.
 # - /Applications/Muse Desktop.app is only read and run. The script launches it only when its
 #   Info.plist sets SUAllowsAutomaticUpdates to false, so Sparkle cannot install an update without
 #   a click, and it compares the bundle's dates and build number before and after.
@@ -43,6 +49,8 @@ readonly electron_bin="$electron_app/Contents/MacOS/Muse Desktop"
 readonly marker="mMac measurement build: the bridge token stays in memory."
 readonly suite=com.domalhambra.mmac.measure
 readonly domain=com.domalhambra.mmac
+readonly electron_domain=org.musedesktop.app
+readonly probe_domain=com.domalhambra.mmac.probe
 readonly idle=60
 readonly settle=20
 # The packages that src/headless, src/shared and src/main import. tsx joins them: mMac starts the
@@ -57,7 +65,12 @@ report=$out/report.txt
 release_app=$repository/.cache/mmac-rel/Build/Products/Release/mMac.app
 measure_app=$repository/.cache/mmac-measure/Build/Products/Release/mMac.app
 builds_only=0
-[[ ${1:-} == --builds-only ]] && builds_only=1
+if (( $# == 1 )) && [[ $1 == --builds-only ]]; then
+  builds_only=1
+elif (( $# != 0 )); then
+  print -u2 "Usage: $0 [--builds-only]"
+  exit 2
+fi
 launched=()
 failed=0
 T=""
@@ -66,7 +79,6 @@ cd "$repository"
 
 fail() {
   print -u2 -- "$*"
-  cleanup
   exit 1
 }
 
@@ -85,16 +97,25 @@ tree_of() {
 }
 
 # Stops whatever the script launched and is still running, and removes the temporary home.
+# Runs on every exit; safe to run twice.
+cleaned=0
 cleanup() {
+  (( cleaned )) && return 0
+  cleaned=1
   local p
   for p in $launched; do
     alive $p && kill -TERM $(tree_of $p) 2>/dev/null
   done
+  launched=()
   [[ -n $T && -d $T ]] && rm -rf "$T"
-  defaults delete $suite 2>/dev/null
+  if defaults domains 2>/dev/null | tr -d ' ' | tr ',' '\n' | grep -qxF $suite; then
+    defaults delete $suite 2>/dev/null
+  fi
+  return 0
 }
 
-trap 'print -u2 "Interrupted. Stopping what the script launched."; cleanup; exit 130' INT TERM
+trap cleanup EXIT
+trap 'print -u2 "Interrupted. Stopping what the script launched."; exit 130' HUP INT TERM
 
 # --- Builds -------------------------------------------------------------------------------------
 
@@ -128,15 +149,15 @@ muse_bin=$(command -v muse) || fail "muse is not on PATH. The runs need the inst
 pgrep -x mMac > /dev/null && fail "mMac is running. Quit it, then run the script again."
 pgrep -f "$electron_bin" > /dev/null && fail "Muse Desktop is running. Quit it, then run the script again."
 
-# Writes mMac's real defaults, or "(domain absent)", as mac/scripts/ui-tests.sh does. Read only.
-export_defaults() {
+# Writes a domain's real defaults, or "(domain absent)", as mac/scripts/ui-tests.sh does. Read only.
+export_defaults() { # domain
   local domains
   domains=$(defaults domains) || return 1
-  if ! print -r -- $domains | tr -d ' ' | tr ',' '\n' | grep -qxF $domain; then
+  if ! print -r -- $domains | tr -d ' ' | tr ',' '\n' | grep -qxF $1; then
     print "(domain absent)"
     return 0
   fi
-  defaults export $domain -
+  defaults export $1 -
 }
 
 bundle_state() {
@@ -144,7 +165,9 @@ bundle_state() {
   /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$electron_app/Contents/Info.plist"
 }
 
-export_defaults > "$out/defaults-before.plist" || fail "mMac's defaults could not be read. Nothing was launched."
+export_defaults $domain > "$out/defaults-before.plist" || fail "mMac's defaults could not be read. Nothing was launched."
+export_defaults $electron_domain > "$out/electron-defaults-before.plist" \
+  || fail "Muse Desktop's defaults could not be read. Nothing was launched."
 bundle_state > "$out/electron-bundle-before.txt"
 pgrep -f 'serve --trust-workspace' | LC_ALL=C sort > "$out/serve-before.txt"
 pgrep -f 'Sparkle|Autoupdate' | LC_ALL=C sort > "$out/sparkle-before.txt"
@@ -159,6 +182,22 @@ probe=$(CFFIXED_USER_HOME="$T/probe" HOME="$T/probe" /usr/bin/osascript -l JavaS
   'ObjC.import("Foundation"); $.NSSearchPathForDirectoriesInDomains($.NSApplicationSupportDirectory, $.NSUserDomainMask, true).objectAtIndex(0).js')
 [[ -n $probe && ${probe:A} == "$T/probe/Library/Application Support" ]] \
   || fail "CFFIXED_USER_HOME did not move Application Support (got '$probe'). Nothing was launched."
+
+# The second probe: under CFFIXED_USER_HOME, a preferences write must land in the temporary
+# Library/Preferences, and nothing may appear in the real one.
+real_probe_plist=$HOME/Library/Preferences/$probe_domain.plist
+[[ -e $real_probe_plist ]] && fail "$real_probe_plist exists before the probe. Nothing was launched."
+mkdir -p "$T/probe/Library/Preferences"
+CFFIXED_USER_HOME="$T/probe" HOME="$T/probe" defaults write $probe_domain probe -string yes \
+  || fail "The preferences probe could not write. Nothing was launched."
+probe_value=$(CFFIXED_USER_HOME="$T/probe" HOME="$T/probe" defaults read $probe_domain probe 2>/dev/null)
+sleep 2
+if [[ -e $real_probe_plist ]]; then
+  defaults delete $probe_domain 2>/dev/null
+  fail "A preferences write under CFFIXED_USER_HOME reached $real_probe_plist (deleted again). Nothing was launched."
+fi
+[[ $probe_value == yes && -e $T/probe/Library/Preferences/$probe_domain.plist ]] \
+  || fail "A preferences write under CFFIXED_USER_HOME did not land in $T/probe/Library/Preferences. Nothing was launched."
 
 # One app's environment, one assignment per line.
 home_env() { # home folder
@@ -236,6 +275,7 @@ quit_tree() {
     failed=1
   else
     print "  $name quit with SIGTERM and left no process." >> "$memory"
+    launched=(${launched:#$root})
   fi
 }
 
@@ -253,25 +293,17 @@ alive $mmac_pid || fail "mMac ended before the measurement. See $out/mmac.log."
 grep -qF -- "$marker" "$out/mmac.log" || fail "mMac did not print the measurement marker. See $out/mmac.log."
 backend=$(pgrep -P $mmac_pid -f 'headless/server.ts' | head -n 1)
 [[ -n $backend ]] || fail "mMac's backend is not running after $idle seconds. See $out/mmac.log."
-node_bin=$(ps -o comm= -p $backend)
+# The backend's executable, as an absolute path: lsof's first txt entry, else ps and PATH.
+node_bin=$(lsof -a -p $backend -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
+if [[ $node_bin != /* ]]; then
+  node_bin=$(ps -o comm= -p $backend)
+  [[ $node_bin == /* ]] || node_bin=$(command -v ${node_bin:t})
+fi
+[[ $node_bin == /* && -x $node_bin ]] || fail "The backend's Node binary could not be found (got '$node_bin')."
 measure_tree "mMac: app and backend" $mmac_pid
 quit_tree mMac $mmac_pid
 
-print "== Muse Desktop: /Applications, $idle seconds idle"
-electron_home=$T/electron
-user_data="$electron_home/Library/Application Support/muse-desktop"
-mkdir -p "$user_data"
-printf '{"cliPath":"%s"}\n' "$muse_bin" > "$user_data/preferences.json"
-touch "$T/electron-launch"
-env "${(f)$(home_env $electron_home)}" "$electron_bin" > "$out/electron.log" 2>&1 &
-electron_pid=$!
-launched+=($electron_pid)
-sleep $idle
-alive $electron_pid || fail "Muse Desktop ended before the measurement. See $out/electron.log."
-measure_tree "Muse Desktop: app and helpers" $electron_pid
-quit_tree "Muse Desktop" $electron_pid
-
-# --- Checks after the launches ------------------------------------------------------------------
+# --- mMac's isolation, before Muse Desktop launches ---------------------------------------------
 
 isolation=$out/isolation.txt
 : > "$isolation"
@@ -295,12 +327,39 @@ no_new_pids() { # pattern, file of PIDs from before
   [[ -z $(LC_ALL=C comm -13 "$2" <(print -r -- $now) | grep -v '^$') ]]
 }
 
-export_defaults > "$out/defaults-after.plist"
+export_defaults $domain > "$out/defaults-after-mmac.plist"
+check "after mMac: nothing new in ~/Library/Application Support/mMac" no_newer_files "$HOME/Library/Application Support/mMac"
+check "after mMac: mMac's real defaults ($domain) are unchanged" same_file "$out/defaults-before.plist" "$out/defaults-after-mmac.plist"
+check "after mMac: no muse serve process is left" no_new_pids 'serve --trust-workspace' "$out/serve-before.txt"
+if (( failed )); then
+  cat "$isolation" >&2
+  fail "mMac's isolation checks failed. Muse Desktop was not launched."
+fi
+
+print "== Muse Desktop: /Applications, $idle seconds idle"
+electron_home=$T/electron
+user_data="$electron_home/Library/Application Support/muse-desktop"
+mkdir -p "$user_data"
+printf '{"cliPath":"%s"}\n' "$muse_bin" > "$user_data/preferences.json"
+touch "$T/electron-launch"
+env "${(f)$(home_env $electron_home)}" "$electron_bin" > "$out/electron.log" 2>&1 &
+electron_pid=$!
+launched+=($electron_pid)
+sleep $idle
+alive $electron_pid || fail "Muse Desktop ended before the measurement. See $out/electron.log."
+measure_tree "Muse Desktop: app and helpers" $electron_pid
+quit_tree "Muse Desktop" $electron_pid
+
+# --- Checks after the launches ------------------------------------------------------------------
+
+export_defaults $domain > "$out/defaults-after.plist"
+export_defaults $electron_domain > "$out/electron-defaults-after.plist"
 bundle_state > "$out/electron-bundle-after.txt"
 check "Muse Desktop wrote to its temporary data folder" some_newer_files "$user_data" "$T/electron-launch"
 check "nothing new in ~/Library/Application Support/mMac" no_newer_files "$HOME/Library/Application Support/mMac"
 check "nothing new in ~/Library/Application Support/muse-desktop" no_newer_files "$HOME/Library/Application Support/muse-desktop"
 check "mMac's real defaults ($domain) are unchanged" same_file "$out/defaults-before.plist" "$out/defaults-after.plist"
+check "Muse Desktop's real defaults ($electron_domain) are unchanged" same_file "$out/electron-defaults-before.plist" "$out/electron-defaults-after.plist"
 check "Muse Desktop.app has the same dates and build number" same_file "$out/electron-bundle-before.txt" "$out/electron-bundle-after.txt"
 check "no muse serve process is left" no_new_pids 'serve --trust-workspace' "$out/serve-before.txt"
 check "no Sparkle process started" no_new_pids 'Sparkle|Autoupdate' "$out/sparkle-before.txt"
@@ -412,5 +471,4 @@ production_kib=$(print -r -- $production | packages_kib)
 } > "$report"
 
 cat "$report"
-cleanup
 exit $failed
