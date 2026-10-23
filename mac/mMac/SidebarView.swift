@@ -224,16 +224,20 @@ struct SidebarView: View {
     Button(workspace.isPinned(id) ? "Unpin conversation" : "Pin conversation") {
       Task { await workspace.togglePin(id) }
     }
+    .accessibilityIdentifier("row-pin")
     Button(workspace.isArchived(id) ? "Restore conversation" : "Archive in Desktop") {
       Task { await workspace.toggleArchive(id) }
     }
+    .accessibilityIdentifier("row-archive")
     Divider()
     Button("Rename conversation…") {
       Task { if await workspace.ensureOpen(id), let open = workspace.view?.session { controller.sheets.rename(open) } }
     }
+    .accessibilityIdentifier("row-rename")
     Button("Export as Markdown…") {
       Task { if await workspace.ensureOpen(id) { await ExportPanel.run(workspace) } }
     }
+    .accessibilityIdentifier("row-export")
   }
 
   /// On the sidebar's solid color, so rows do not show through it as the list scrolls. A click opens

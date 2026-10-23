@@ -119,6 +119,7 @@ struct ComposerView: View {
         .buttonStyle(.borderless)
         .disabled(!canSend)
         .accessibilityLabel(workspace.isRunning ? "Send follow-up" : "Send message")
+        .accessibilityIdentifier("send-button")
         .help(workspace.isRunning ? "Send follow-up" : "Send message")
       }
       // On its own line, so a long note does not squeeze the row.

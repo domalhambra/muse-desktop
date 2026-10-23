@@ -40,6 +40,7 @@ struct ConversationView: View {
             Label("Conversation actions", systemImage: "ellipsis.circle")
           }
           .help("Conversation actions")
+          .accessibilityIdentifier("conversation-actions")
         }
       }
     }
@@ -54,18 +55,22 @@ struct ConversationView: View {
   @ViewBuilder private func conversationActions(_ session: Session) -> some View {
     let id = session.sessionId
     Button("Rename conversation…") { controller.sheets.rename(session) }
+      .accessibilityIdentifier("conversation-rename")
     Button(workspace.isPinned(id) ? "Unpin conversation" : "Pin conversation") {
       Task { await workspace.togglePin(id) }
     }
+    .accessibilityIdentifier("conversation-pin")
     Button("Export as Markdown…", systemImage: "square.and.arrow.down") {
       Task { await ExportPanel.run(workspace) }
     }
+    .accessibilityIdentifier("conversation-export")
     Button(
       workspace.isArchived(id) ? "Restore conversation" : "Archive in Desktop",
       systemImage: workspace.isArchived(id) ? "arrow.uturn.backward" : "archivebox"
     ) {
       Task { await workspace.toggleArchive(id) }
     }
+    .accessibilityIdentifier("conversation-archive")
   }
 }
 

@@ -79,6 +79,7 @@ struct AttachmentChip: View {
       .buttonStyle(.borderless)
       .disabled(!canRemove)
       .accessibilityLabel("Remove \(attachment.name)")
+      .accessibilityIdentifier("attachment-remove-\(attachment.id)")
       .help("Remove \(attachment.name)")
     }
     .font(.callout)
@@ -89,7 +90,7 @@ struct AttachmentChip: View {
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.15)))
     .accessibilityElement(children: .contain)
-    .accessibilityIdentifier("attachment-chip")
+    .accessibilityIdentifier("attachment-chip-\(attachment.id)")
   }
 }
 

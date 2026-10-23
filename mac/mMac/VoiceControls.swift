@@ -67,6 +67,7 @@ struct VoiceStatusPill: View {
       }
       .buttonStyle(.borderless)
       .accessibilityLabel(VoiceSession.cancelLabel)
+      .accessibilityIdentifier("voice-cancel")
       .help(VoiceSession.cancelLabel)
     }
     .padding(.horizontal, 10)
