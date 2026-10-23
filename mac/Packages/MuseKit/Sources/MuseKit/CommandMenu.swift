@@ -64,7 +64,7 @@ public enum CommandMenu {
         shortcut: "⌘ ,", action: .openSettings),
     ]
     let conversations = sessions
-      .filter { $0.kind != "subagent" && $0.kind != "reminder" && !hidden.contains($0.sessionId) }
+      .filter { !SidebarSections.hiddenKinds.contains($0.kind ?? "") && !hidden.contains($0.sessionId) }
       .sorted { first, second in
         // Ties break on the id, as the sidebar does, so the order is stable.
         let (a, b) = (SidebarSections.activity(first), SidebarSections.activity(second))

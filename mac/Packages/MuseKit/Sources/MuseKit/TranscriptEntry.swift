@@ -8,12 +8,14 @@ public enum TranscriptEntry: Identifiable, Equatable, Sendable {
   case reasoning(TranscriptItem)
   case tool(TranscriptItem)
   case shell(TranscriptItem)
+  case sideChat(TranscriptItem)
   /// Three or more completed tools in a row.
   case toolGroup([TranscriptItem])
 
   public var id: String {
     switch self {
-    case .user(let item), .agent(let item), .reasoning(let item), .tool(let item), .shell(let item): item.itemId
+    case .user(let item), .agent(let item), .reasoning(let item), .tool(let item), .shell(let item),
+      .sideChat(let item): item.itemId
     case .toolGroup(let items): "group-\(items.first?.itemId ?? "empty")"
     }
   }
@@ -39,6 +41,9 @@ public enum TranscriptEntry: Identifiable, Equatable, Sendable {
       case "userShell":
         flush()
         entries.append(.shell(item))
+      case "sideChat":
+        flush()
+        entries.append(.sideChat(item))
       default:
         if item.status == "completed" {
           run.append(item)

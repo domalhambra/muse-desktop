@@ -116,9 +116,9 @@ public enum SlashKeyAction: Equatable, Sendable {
   case submit
 }
 
-/// The ten composer commands, in Electron's menu order (src/renderer/src/commands.ts).
+/// The eleven composer commands, in Electron's menu order (src/renderer/src/commands.ts).
 public enum ComposerCommand: String, CaseIterable, Sendable, Identifiable {
-  case clear, new, voice, model, effort, compact, rename, stop, settings, help
+  case clear, new, voice, model, effort, compact, rename, stop, settings, help, btw
 
   public var id: String { rawValue }
   public var name: String { rawValue }
@@ -135,6 +135,7 @@ public enum ComposerCommand: String, CaseIterable, Sendable, Identifiable {
     case .stop: "Stop Muse\u{2019}s active turn"
     case .settings: "Open desktop settings"
     case .help: "Open the guide and CLI compatibility information"
+    case .btw: "Ask a side question that leaves this conversation untouched"
     }
   }
 

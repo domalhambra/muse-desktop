@@ -89,6 +89,9 @@ public enum SidebarSections {
   /// The group pinned conversations form, in the normal view and in the archived view.
   public static let pinnedTitle = "Pinned"
 
+  /// Session kinds that never show in the sidebar or in ⌘K.
+  public static let hiddenKinds: Set<String> = ["subagent", "reminder", "sideChat"]
+
   /// Keeps a conversation when it matches the project filter, is not a subagent or reminder, and
   /// is archived exactly when `showArchived` is on. Pinned conversations come first, then the rest
   /// by last activity, newest first.
@@ -100,7 +103,7 @@ public enum SidebarSections {
     let pinned = Set(pinned)
     let archived = Set(archived)
     let shown = sessions
-      .filter { $0.kind != "subagent" && $0.kind != "reminder" }
+      .filter { !hiddenKinds.contains($0.kind ?? "") }
       .filter { archived.contains($0.sessionId) == showArchived }
       .filter { session in
         guard let root else { return true }

@@ -83,7 +83,7 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
 
 @Test func theTenCommandsKeepElectronsOrderAndDescriptions() {
   #expect(ComposerCommand.allCases.map(\.name) == [
-    "clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help",
+    "clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help", "btw",
   ])
   #expect(ComposerCommand.allCases.map(\.description) == [
     "Start a new conversation; keep saved history",
@@ -96,11 +96,12 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
     "Stop Muse\u{2019}s active turn",
     "Open desktop settings",
     "Open the guide and CLI compatibility information",
+    "Ask a side question that leaves this conversation untouched",
   ])
 }
 
 @Test func theMenuOpensOnlyForASlashAndLettersOnTheWholeDraft() {
-  #expect(ComposerCommand.menu(for: "/").count == 10)
+  #expect(ComposerCommand.menu(for: "/").count == 11)
   #expect(ComposerCommand.menu(for: "/mo") == [.model])
   #expect(ComposerCommand.menu(for: "/Model") == [.model])
   #expect(ComposerCommand.menu(for: "/MO") == [.model])

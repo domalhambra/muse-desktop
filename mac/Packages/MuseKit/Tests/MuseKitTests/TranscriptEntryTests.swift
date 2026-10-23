@@ -149,3 +149,14 @@ private func message(_ id: String, _ kind: String = "agentMessage") -> Transcrip
   #expect(ToolPresentation.shellFooter(TranscriptItem(itemId: "r", kind: "userShell", status: "inProgress")) == "Running")
   #expect(ToolPresentation.shellFooter(TranscriptItem(itemId: "f", kind: "userShell", status: "failed", exitCode: 2)) == "failed · exit 2")
 }
+
+@Test func aSideChatItemIsOneRow() {
+  let item = TranscriptItem(itemId: "sc", kind: "sideChat", status: "completed", sideSessionId: "side-1")
+  let entries = TranscriptEntry.build([tool("1"), item, tool("2")])
+  #expect(entries.map(\.id) == ["1", "sc", "2"])
+  guard case .sideChat(let row) = entries[1] else {
+    Issue.record("Expected a side chat row")
+    return
+  }
+  #expect(row.sideSessionId == "side-1")
+}
