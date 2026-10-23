@@ -12,12 +12,16 @@ extension Workspace {
   func send(text: String, from startKey: String) async -> SendOutcome {
     // As Electron's submit: a message can be attachments alone.
     let chips = attachments
-    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !chips.isEmpty, !submitting else {
+    guard !JSWhitespace.trim(text).isEmpty || !chips.isEmpty, !submitting else {
       return .notSent
     }
     if view == nil, project.isEmpty { return .needsProject }
     submitting = true
-    defer { submitting = false }
+    sendingAttachmentIds = Set(chips.map(\.id))
+    defer {
+      submitting = false
+      sendingAttachmentIds = []
+    }
     // Taken now, as Electron's submit takes them when called: startNew resets the mode.
     let (mode, effort) = (self.mode, self.effort)
     let worktree = startInWorktree && canStartInWorktree

@@ -59,12 +59,14 @@ public struct DropPlan: Equatable, Sendable {
     let root = project.isEmpty
       ? nil : URL(filePath: project, directoryHint: .isDirectory).resolvingSymlinksInPath().path
     for url in urls where url.isFileURL {
-      let isFolder = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? url.hasDirectoryPath
+      // Resolved first, so a link to a folder is a folder.
+      let resolved = url.resolvingSymlinksInPath()
+      let isFolder = (try? resolved.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? url.hasDirectoryPath
       guard isFolder else {
         plan.files.append(url)
         continue
       }
-      let path = url.resolvingSymlinksInPath().path
+      let path = resolved.path
       if let root, path.hasPrefix(root + "/") {
         plan.mentions.append("@\(path.dropFirst(root.count + 1))/")
       } else {

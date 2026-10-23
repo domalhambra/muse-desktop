@@ -64,3 +64,17 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
   #expect(!JSWhitespace.endsWithWhitespace("a"))
   #expect(!JSWhitespace.endsWithWhitespace(""))
 }
+
+@Test func aSymbolicLinkToAFolderIsAFolder() throws {
+  let (base, project, outside) = try dropFolders()
+  defer { try? FileManager.default.removeItem(at: base) }
+  let inside = base.appending(path: "link-in")
+  let out = base.appending(path: "link-out")
+  try FileManager.default.createSymbolicLink(
+    at: inside, withDestinationURL: project.appending(path: "src", directoryHint: .isDirectory))
+  try FileManager.default.createSymbolicLink(at: out, withDestinationURL: outside)
+  let plan = DropPlan.classify([inside, out], project: project.path)
+  #expect(plan.files.isEmpty)
+  #expect(plan.mentions == ["@src/"])
+  #expect(plan.error == DropPlan.folderError)
+}

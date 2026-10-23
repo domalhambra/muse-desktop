@@ -98,6 +98,10 @@ public final class Workspace {
   public internal(set) var attachments: [Attachment] = []
   /// Pasted images on disk until their chip is sent or removed. The folder goes with the Workspace.
   let pastedFiles = PastedFiles()
+  /// The chip ids of the send in flight. The backend reads each id while it builds the message, so
+  /// a chip in this set cannot be removed until the send ends. The chip view disables its ×.
+  public internal(set) var sendingAttachmentIds: Set<String> = []
+  public func isSending(_ attachmentId: String) -> Bool { sendingAttachmentIds.contains(attachmentId) }
   /// Counts `open` and `startNew` calls. An action that awaits the backend compares it after the
   /// await, so a reply for a conversation the person has left does not change the one shown.
   private(set) var openSequence = 0

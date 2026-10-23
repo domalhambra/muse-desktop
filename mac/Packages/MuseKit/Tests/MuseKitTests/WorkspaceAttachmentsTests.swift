@@ -216,3 +216,58 @@ private func files(_ names: String...) -> [URL] { names.map { URL(fileURLWithPat
   #expect(workspace.errorMessage == "Drop files, or a folder inside this project.")
   #expect(workspace.draft == "Look at @src/")
 }
+
+@MainActor @Test func aFailedRemovalShowsItsMessage() async throws {
+  let (workspace, _) = await makeWorkspace(script: attachmentScript { method, _, id in
+    method == "remove-attachment" ? [failure(id, "Muse is not running.")] : nil
+  })
+  await workspace.attach(files("a.txt"))
+  await workspace.removeAttachment("a1")
+  #expect(workspace.errorMessage == "Muse is not running.")
+  #expect(workspace.attachments.isEmpty)
+}
+
+@MainActor @Test func aChipInASendInFlightCannotBeRemovedAndOneAddedMeanwhileStays() async throws {
+  let (workspace, backend) = await makeWorkspace(script: attachmentScript { method, _, _ in
+    method == "send" ? [] : nil
+  })
+  await workspace.open("s1")
+  await workspace.attach(files("a.txt"))
+  let sending = Task { await workspace.send() }
+  try await eventually { backend.messages.contains { $0["method"] == "send" } }
+  #expect(workspace.isSending("a1"))
+  await workspace.removeAttachment("a1")
+  #expect(workspace.attachments.map(\.id) == ["a1"])
+  #expect(!backend.messages.contains { $0["method"] == "remove-attachment" })
+  // A chip added during the send is not part of it: it can go, and it stays if left.
+  await workspace.attach(files("b.txt"))
+  #expect(!workspace.isSending("a2"))
+  let sendIds = backend.messages.compactMap { message -> Int? in
+    guard message["method"] == "send", case .number(let id)? = message["id"] else { return nil }
+    return Int(id)
+  }
+  let sendId = try #require(sendIds.first)
+  backend.push(reply(sendId, "null"))
+  #expect(await sending.value == .sent)
+  #expect(workspace.attachments.map(\.id) == ["a2"])
+  #expect(workspace.sendingAttachmentIds.isEmpty)
+}
+
+@MainActor @Test func aFolderErrorSurvivesALaterAttachError() async throws {
+  let base = FileManager.default.temporaryDirectory
+    .appending(path: "mmac-drop-\(UUID().uuidString)", directoryHint: .isDirectory)
+  defer { try? FileManager.default.removeItem(at: base) }
+  let project = base.appending(path: "project", directoryHint: .isDirectory)
+  let outside = base.appending(path: "outside", directoryHint: .isDirectory)
+  try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+  try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+  let file = project.appending(path: "big.bin")
+  try Data("x".utf8).write(to: file)
+  let (workspace, _) = await makeWorkspace(
+    preferences: Preferences(recentProjects: [project.path]),
+    script: attachmentScript { method, _, id in
+      method == "attachments" ? [failure(id, "big.bin must be a file smaller than 2 MB.")] : nil
+    })
+  await workspace.drop([file, outside])
+  #expect(workspace.errorMessage == "big.bin must be a file smaller than 2 MB.\nDrop files, or a folder inside this project.")
+}

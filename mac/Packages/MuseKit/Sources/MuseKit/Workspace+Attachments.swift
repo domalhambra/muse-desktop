@@ -17,6 +17,8 @@ extension Workspace {
 
   /// Removes a chip at once, then tells the backend, as Electron does. A pasted image's file goes too.
   public func removeAttachment(_ id: String) async {
+    // A chip in a send in flight stays: the backend is reading it.
+    guard !sendingAttachmentIds.contains(id) else { return }
     attachments.removeAll { $0.id == id }
     pastedFiles.forget([id])
     await run { try await self.client.removeAttachment(id) }
@@ -51,8 +53,11 @@ extension Workspace {
       draft = plan.appendingMentions(to: draft)
       composerFocusRequest += 1
     }
-    if let error = plan.error { errorMessage = error }
     if !plan.files.isEmpty { await attach(plan.files) }
+    // After the attach, so its error does not replace this one. Both show, one per line.
+    if let error = plan.error {
+      errorMessage = [errorMessage, error].compactMap { $0 }.joined(separator: "\n")
+    }
   }
 
   /// The extension the backend reads as an image (`png`, `jpg`, `gif`, `webp`), or nil.
