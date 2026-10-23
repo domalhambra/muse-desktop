@@ -122,16 +122,23 @@ private struct InspectorCommand: View {
 }
 
 /// View → Command Menu. ⌘K only opens it, as in Electron: a second press while it shows does nothing.
+/// It waits while another sheet is up on the main window: the Rename sheet disables the item, and
+/// AppKit's panels and alerts (an export or open panel, an Ask), which SwiftUI cannot observe, make
+/// the press do nothing.
 private struct CommandMenuCommand: View {
   let controller: AppController
 
   var body: some View {
     Button("Command Menu") {
+      let main = NSApp.windows.first(where: { $0.isVisible && MMacApp.isMainWindow($0) })
+      guard main?.attachedSheet == nil else { return }
       controller.showMainWindow()
+      // A result left from a sheet that closed without running it must not run on the next close.
+      controller.sheets.chosen = nil
       controller.sheets.commandMenu = true
     }
     .keyboardShortcut("k")
-    .disabled(controller.workspace == nil)
+    .disabled(controller.workspace == nil || controller.sheets.renaming)
   }
 }
 

@@ -32,6 +32,9 @@ struct CommandMenuView: View {
     .frame(width: 580)
     .background(appearance.colors.dialog)
     .onChange(of: query) { selected = 0 }
+    // A backend event can shrink the list while the sheet shows; keep the highlight on a row, so
+    // Return opens the row that looks highlighted.
+    .onChange(of: entries.count) { _, count in selected = min(selected, max(count - 1, 0)) }
     .onExitCommand(perform: close)
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Search")
