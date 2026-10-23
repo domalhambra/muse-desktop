@@ -4,24 +4,26 @@ Every document under `docs/`, with when to read it. The router is `CLAUDE.md` at
 
 ## This repo
 
-| Document                                                      | Read when                                                                                                                       |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `architecture.md`                                             | You need the shape of the app, the module map, or which file owns a behavior. Upstream's file, with the fork's sections added.  |
-| `changing-things.md`                                          | You are about to change anything: one section per task, plus the gate. The fork's own file.                                     |
-| `decisions.md`                                                | Something looks like a past decision, or you are about to reverse one. The fork's own file.                                     |
-| `bridge.md`                                                   | You are using or changing the folder bridge or the MCP bridge, or teaching the Muse app to use them.                            |
-| `compatibility.md`                                            | You update Muse Code or the SDK, or need a known limit.                                                                         |
-| `design.md`                                                   | You change themes, layout or copy. Upstream's file.                                                                             |
-| `releasing.md`                                                | You need upstream's signing and release process. The fork does not release. Upstream's file.                                    |
-| `release-readiness.md`                                        | You need what upstream verified for 0.2.0. Upstream's file.                                                                     |
-| `superpowers/plans/2026-10-20-discovery.md`                   | You need a Muse CLI fact behind the extensions, or a place where the build differs from the plan.                               |
-| `superpowers/specs/2026-10-20-documentation-layout-design.md` | You change how this repo is documented.                                                                                         |
-| `superpowers/specs/2026-10-21-mac-app-design.md`              | You work on mMac, the SwiftUI app in `mac/`, or its headless backend. Approved. M0 to M3 are built. M3's live run moves to M4.  |
-| `superpowers/plans/2026-10-21-mmac-m0.md`                     | You check M0, mMac's spike: the headless backend, `MuseBackend` and a bare window. Built 2026-10-21. Ends with what M1 carries. |
-| `superpowers/plans/2026-10-21-mmac-m1.md`                     | You build or check M1, mMac's core loop. Built 2026-10-21. Ends with what M2 carries.                                           |
-| `superpowers/plans/2026-10-21-mmac-m1-electron-survey.md`     | You need Electron's exact strings, calls or edge cases for a mMac feature.                                                      |
-| `superpowers/plans/2026-10-21-mmac-m2.md`                     | You build or check M2, mMac's inspector. Built 2026-10-21. Ends with what M3 carries.                                           |
-| `superpowers/plans/2026-10-22-mmac-m3.md`                     | You build or check M3, mMac's Settings window. Built 2026-10-22. Ends with what M4 carries, the live run included.              |
+| Document                                                      | Read when                                                                                                                                                |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `architecture.md`                                             | You need the shape of the app, the module map, or which file owns a behavior. Upstream's file, with the fork's sections added.                           |
+| `changing-things.md`                                          | You are about to change anything: one section per task, plus the gate. The fork's own file.                                                              |
+| `decisions.md`                                                | Something looks like a past decision, or you are about to reverse one. The fork's own file.                                                              |
+| `bridge.md`                                                   | You are using or changing the folder bridge or the MCP bridge, or teaching the Muse app to use them.                                                     |
+| `compatibility.md`                                            | You update Muse Code or the SDK, or need a known limit.                                                                                                  |
+| `design.md`                                                   | You change themes, layout or copy. Upstream's file.                                                                                                      |
+| `releasing.md`                                                | You need upstream's signing and release process. The fork does not release. Upstream's file.                                                             |
+| `release-readiness.md`                                        | You need what upstream verified for 0.2.0. Upstream's file.                                                                                              |
+| `superpowers/plans/2026-10-20-discovery.md`                   | You need a Muse CLI fact behind the extensions, or a place where the build differs from the plan.                                                        |
+| `superpowers/specs/2026-10-20-documentation-layout-design.md` | You change how this repo is documented.                                                                                                                  |
+| `superpowers/specs/2026-10-21-mac-app-design.md`              | You work on mMac, the SwiftUI app in `mac/`, or its headless backend. Approved. M0 to M3 are built. M3's live run moves to M4.                           |
+| `superpowers/plans/2026-10-21-mmac-m0.md`                     | You check M0, mMac's spike: the headless backend, `MuseBackend` and a bare window. Built 2026-10-21. Ends with what M1 carries.                          |
+| `superpowers/plans/2026-10-21-mmac-m1.md`                     | You build or check M1, mMac's core loop. Built 2026-10-21. Ends with what M2 carries.                                                                    |
+| `superpowers/plans/2026-10-21-mmac-m1-electron-survey.md`     | You need Electron's exact strings, calls or edge cases for a mMac feature.                                                                               |
+| `superpowers/plans/2026-10-21-mmac-m2.md`                     | You build or check M2, mMac's inspector. Built 2026-10-21. Ends with what M3 carries.                                                                    |
+| `superpowers/plans/2026-10-22-mmac-m3.md`                     | You build or check M3, mMac's Settings window. Built 2026-10-22. Ends with what M4 carries, the live run included.                                       |
+| `superpowers/specs/2026-10-22-mmac-m4a-design.md`             | You build or check M4a: the last seven parity features, the size measurement, the parity check and the removal of Electron's shell. Approved 2026-10-22. |
+| `superpowers/plans/2026-10-22-mmac-m4a-survey.md`             | You need Electron's exact strings, calls or limits for ⌘K, pins and archives, export, composer commands, attachments, voice or the open-in actions.      |
 
 The extensions plan itself was attached to the cloud session's first message and was never committed. The discovery record holds every difference from it.
 
