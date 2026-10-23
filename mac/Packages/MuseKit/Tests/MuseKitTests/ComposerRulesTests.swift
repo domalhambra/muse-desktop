@@ -206,3 +206,10 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
   #expect(MentionRule.keyAction(.escape, index: 0, count: 3) == .dismiss)
   #expect(MentionRule.keyAction(.enter, index: 0, count: 0) == .pass)
 }
+
+@Test func theFourModesKeepMusesOrderAndNames() {
+  #expect(ApprovalMode.allCases.map(\.rawValue) == ["allowAll", "promptUnmatched", "onRequest", "denyUnmatched"])
+  #expect(ApprovalMode.allCases.map(\.label) == ["Allow all", "Prompt unmatched", "On request", "Deny unmatched"])
+  #expect(ApprovalMode.label(for: "onRequest") == "On request")
+  #expect(ApprovalMode.label(for: "futureMode") == "futureMode")
+}

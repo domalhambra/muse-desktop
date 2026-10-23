@@ -180,6 +180,23 @@ extension Workspace {
     }
   }
 
+  /// The open conversation's approval mode, or empty with none open. Muse owns it per session.
+  public var approvalMode: String { view?.session.approvalMode?.mode ?? "" }
+
+  /// Picks an approval mode for the open conversation. Muse applies it to its next action. The
+  /// reply's effective mode shows at once, unless the person opened another conversation
+  /// meanwhile; `approvalModeChanged` events keep it current after that.
+  public func chooseApprovalMode(_ mode: String) async {
+    guard let sessionId = view?.session.sessionId else { return }
+    let sequence = openSequence
+    await run {
+      let effective = try await self.client.setApprovalMode(sessionId: sessionId, mode: mode)
+      if sequence == self.openSequence, self.view?.session.sessionId == sessionId {
+        self.view?.session.approvalMode = ApprovalModeState(mode: effective)
+      }
+    }
+  }
+
   /// Saves preference fields. The backend's reply, and its `preferences` event, carry the whole set.
   @discardableResult
   public func save(_ patch: PreferencesPatch) async -> Bool {

@@ -197,6 +197,28 @@ public enum ComposerCommand: String, CaseIterable, Sendable, Identifiable {
   }
 }
 
+/// Muse's four approval modes, in the SDK's order (`ApprovalMode` in msp.d.ts). Closed: a client
+/// selects one; it never defines one. The labels are Muse's own names as words, by Dom's decision.
+public enum ApprovalMode: String, CaseIterable, Sendable, Identifiable {
+  case allowAll, promptUnmatched, onRequest, denyUnmatched
+
+  public var id: String { rawValue }
+
+  public var label: String {
+    switch self {
+    case .allowAll: "Allow all"
+    case .promptUnmatched: "Prompt unmatched"
+    case .onRequest: "On request"
+    case .denyUnmatched: "Deny unmatched"
+    }
+  }
+
+  /// The label for a raw mode name. A mode this list does not know shows as its name.
+  public static func label(for rawValue: String) -> String {
+    ApprovalMode(rawValue: rawValue)?.label ?? rawValue
+  }
+}
+
 /// An `@` mention at the end of the draft.
 public struct Mention: Equatable, Sendable {
   /// The draft before the `@`.
