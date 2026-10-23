@@ -293,3 +293,19 @@ private func files(_ names: String...) -> [URL] { names.map { URL(fileURLWithPat
   #expect(await workspace.send() == .sent)
   #expect(backend.messages.contains { $0["method"] == "send" })
 }
+
+@MainActor @Test func chipsBelongToTheComposerAndOutliveAConversationSwitch() async throws {
+  let (workspace, _) = await makeWorkspace(
+    script: attachmentScript { method, args, id in
+      guard method == "open", case .string(let sessionId)? = args.first else { return nil }
+      return [reply(id, viewJSON(sessionJSON(sessionId)))]
+    })
+  await workspace.attach(files("a.txt"))
+  #expect(workspace.attachments.map(\.name) == ["a.txt"])
+  await workspace.open("s1")
+  #expect(workspace.attachments.map(\.name) == ["a.txt"])
+  await workspace.open("s2")
+  #expect(workspace.attachments.map(\.name) == ["a.txt"])
+  workspace.startNew()
+  #expect(workspace.attachments.map(\.name) == ["a.txt"])
+}

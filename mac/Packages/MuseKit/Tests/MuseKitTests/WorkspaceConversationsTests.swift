@@ -288,3 +288,20 @@ private func exportArgs(_ backend: ScriptedBackend) -> [JSONValue]? {
   #expect(await workspace.togglePin("b"))
   #expect(workspace.preferences.pinnedSessionIds == ["b"])
 }
+
+@MainActor @Test func anArchivedConversationStaysArchivedWhenAnEventShowsNewActivity() async throws {
+  let list = #"{"sessions":[\#(sessionJSON("a", updatedAt: "2026-10-21T10:00:00Z")),\#(sessionJSON("b", updatedAt: "2026-10-21T09:00:00Z"))],"nextCursor":null}"#
+  let (workspace, _) = await makeWorkspace(
+    preferences: Preferences(recentProjects: ["/p"], archivedSessionIds: ["b"])
+  ) { method, _, id in method == "sessions" ? [reply(id, list)] : [] }
+  await workspace.refreshSessions()
+  // A new message in the archived conversation arrives as a session event.
+  let update = viewJSON(sessionJSON("b", status: "running", updatedAt: "2026-10-21T11:00:00Z", firstUserPrompt: "New"))
+  workspace.apply(.session(try decodeView(update)))
+  #expect(workspace.sessions.first { $0.sessionId == "b" }?.status == "running")
+  #expect(workspace.preferences.archivedSessionIds == ["b"])
+  #expect(workspace.isArchived("b"))
+  #expect(workspace.sections.flatMap { $0.sessions.map(\.sessionId) } == ["a"])
+  workspace.showArchived = true
+  #expect(workspace.sections.flatMap { $0.sessions.map(\.sessionId) } == ["b"])
+}
