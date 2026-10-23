@@ -7,10 +7,12 @@ extension Workspace {
   /// Sends the draft. With no conversation open, it creates one in the current project first.
   public func send() async -> SendOutcome { await send(text: draft, from: draftKey) }
 
-  /// Sends `text`, written under the draft key `startKey`. A cancelled caller still waits for the
-  /// backend's answer, and `submitting` stays true until it comes.
+  /// Sends `text` and the attachment chips, written under the draft key `startKey`. A cancelled
+  /// caller still waits for the backend's answer, and `submitting` stays true until it comes.
   func send(text: String, from startKey: String) async -> SendOutcome {
-    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !submitting else {
+    // As Electron's submit: a message can be attachments alone.
+    let chips = attachments
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !chips.isEmpty, !submitting else {
       return .notSent
     }
     if view == nil, project.isEmpty { return .needsProject }
@@ -54,12 +56,14 @@ extension Workspace {
       if sequence == openSequence, view?.session.sessionId == sessionId {
         // Show the message at once. The next session event replaces the whole list. Muse cannot
         // have echoed it yet, so there is no copy to look for; a check would only hide a repeated
-        // reply such as "yes".
+        // reply such as "yes". With chips it shows the backend's display text, so a message of
+        // chips alone is not an empty bubble.
         let id = "optimistic-\(UUID().uuidString)"
         shownId = id
+        let display = chips.isEmpty ? text : ([text] + chips.map { "[Attached: \($0.name)]" }).joined(separator: "\n")
         view?.items.append(
           TranscriptItem(
-            itemId: id, kind: "userMessage", status: "completed", text: text, displayText: text,
+            itemId: id, kind: "userMessage", status: "completed", text: text, displayText: display,
             recordedAt: Date.now.ISO8601Format()))
         previousStatus = view?.session.status
         view?.session.status = "running"
@@ -74,10 +78,15 @@ extension Workspace {
       // the stop cut off has put its text back before the event stream ends the backend. Nothing
       // enforces it.
       let client = self.client
+      let ids = chips.map(\.id)
       let request = Task.detached {
-        try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode)
+        try await client.send(sessionId: sessionId, text: text, effort: effort, mode: mode, attachments: ids)
       }
       try await request.value
+      // The backend forgot these ids. Chips added during the send stay.
+      let sent = Set(ids)
+      attachments.removeAll { sent.contains($0.id) }
+      pastedFiles.forget(ids)
       return .sent
     } catch {
       let stillShown = sequence == openSequence && sentId != nil && view?.session.sessionId == sentId
@@ -86,7 +95,8 @@ extension Workspace {
         // Only while the status is still the one set above; a session event may have replaced it.
         if let previousStatus, view?.session.status == "running" { view?.session.status = previousStatus }
       }
-      // The draft goes back where it was written: the conversation's own, or the new one's.
+      // The draft goes back where it was written: the conversation's own, or the new one's. The
+      // chips stay, so the person can try again.
       let restoreKey = stillShown ? (sentId ?? startKey) : startKey
       if (drafts[restoreKey] ?? "").isEmpty { drafts[restoreKey] = text }
       errorMessage = error.localizedDescription

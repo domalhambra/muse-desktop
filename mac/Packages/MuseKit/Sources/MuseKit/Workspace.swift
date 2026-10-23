@@ -93,6 +93,11 @@ public final class Workspace {
   let client: BackendClient
   /// Unsent text by `draftKey`. AppController passes them to the next backend's Workspace.
   public internal(set) var drafts: [String: String] = [:]
+  /// The composer's attachment chips: one list beside the draft, not per conversation, as in
+  /// Electron. Their ids belong to this backend, so AppController does not pass them on.
+  public internal(set) var attachments: [Attachment] = []
+  /// Pasted images on disk until their chip is sent or removed. The folder goes with the Workspace.
+  let pastedFiles = PastedFiles()
   /// Counts `open` and `startNew` calls. An action that awaits the backend compares it after the
   /// await, so a reply for a conversation the person has left does not change the one shown.
   private(set) var openSequence = 0
