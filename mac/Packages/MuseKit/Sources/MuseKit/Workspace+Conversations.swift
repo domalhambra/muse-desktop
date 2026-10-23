@@ -123,3 +123,49 @@ extension Workspace {
     return view?.session.sessionId == sessionId
   }
 }
+
+// The side chat and the child session sheets.
+extension Workspace {
+  /// Opens a side session seeded from the open conversation, for a question that must not join it.
+  public func openSideChat() async {
+    guard let sessionId = view?.session.sessionId, !sideOpening else { return }
+    sideOpening = true
+    defer { sideOpening = false }
+    let sequence = openSequence
+    await run {
+      let side = try await self.client.sideChat(sessionId)
+      if sequence == self.openSequence { self.sideView = side }
+    }
+  }
+
+  /// Reopens a side session a `sideChat` row names.
+  public func reopenSideChat(_ sideSessionId: String) async {
+    guard !sideOpening else { return }
+    sideOpening = true
+    defer { sideOpening = false }
+    let sequence = openSequence
+    await run {
+      let side = try await self.client.open(sideSessionId)
+      if sequence == self.openSequence { self.sideView = side }
+    }
+  }
+
+  /// Sends a question to the side session: queued, with the current effort, no attachments.
+  public func sendToSide(_ text: String) async {
+    guard let sessionId = sideView?.session.sessionId, !JSWhitespace.trim(text).isEmpty else { return }
+    await run { try await self.client.send(sessionId: sessionId, text: text, effort: self.effort, mode: .queue) }
+  }
+
+  public func closeSideChat() { sideView = nil }
+
+  /// Opens a subagent's session read-only. `open` subscribes without claiming it.
+  public func openChild(_ sessionId: String) async {
+    let sequence = openSequence
+    await run {
+      let child = try await self.client.open(sessionId)
+      if sequence == self.openSequence { self.childView = child }
+    }
+  }
+
+  public func closeChild() { childView = nil }
+}

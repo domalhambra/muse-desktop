@@ -558,3 +558,91 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   #expect(workspace.drafts["new:/p"] == nil)
   #expect(workspace.view?.items.map(\.text) == ["hi"])
 }
+
+@MainActor @Test func aModePickTravelsTheReplySetsTheLabelAndAnEventUpdatesIt() async throws {
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1")))]
+    // Muse may answer with another mode than the one asked for: the reply wins.
+    case "set-approval-mode": [reply(id, #""promptUnmatched""#)]
+    default: []
+    }
+  }
+  #expect(workspace.approvalMode == "")
+  await workspace.open("s1")
+  await workspace.chooseApprovalMode("onRequest")
+  #expect(requests(backend).contains([.string("set-approval-mode"), .array([.string("s1"), .string("onRequest")])]))
+  #expect(workspace.approvalMode == "promptUnmatched")
+  var changed = try decodeView(viewJSON(sessionJSON("s1")))
+  changed.session.approvalMode = ApprovalModeState(mode: "denyUnmatched")
+  workspace.apply(.session(changed))
+  #expect(workspace.approvalMode == "denyUnmatched")
+}
+
+@MainActor @Test func aModeReplyForAConversationThePersonLeftIsDropped() async throws {
+  // The pick's reply is pushed by hand after the person opens another conversation. Request ids
+  // count from 1 per client: open("s1") is 1, the pick is 2, open("s2") is 3.
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "open":
+      guard case .string(let sessionId)? = args.first else { return [] }
+      return [reply(id, viewJSON(sessionJSON(sessionId)))]
+    default: return []
+    }
+  }
+  await workspace.open("s1")
+  let pick = Task { await workspace.chooseApprovalMode("onRequest") }
+  try await eventually { requests(backend).contains { $0[0] == .string("set-approval-mode") } }
+  await workspace.open("s2")
+  backend.push(reply(2, #""onRequest""#))
+  await pick.value
+  #expect(workspace.view?.session.sessionId == "s2")
+  #expect(workspace.approvalMode == "")
+}
+
+@MainActor @Test func aShellCommandTravelsAndClearsTheDraftAndAFailureKeepsIt() async throws {
+  let calls = Counter()
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1")))]
+    case "shell": calls.next() == 1 ? [reply(id, "null")] : [failure(id, "Muse is not connected. Reconnect in Settings.")]
+    default: []
+    }
+  }
+  workspace.draft = "!echo hi"
+  await workspace.runShell("echo hi")
+  #expect(workspace.errorMessage == Workspace.needsConversation)
+  #expect(workspace.draft == "!echo hi")
+  workspace.errorMessage = nil
+  await workspace.open("s1")
+  workspace.draft = "!echo hi"
+  await workspace.runShell("echo hi")
+  #expect(requests(backend).contains([.string("shell"), .array([.string("s1"), .string("echo hi")])]))
+  #expect(workspace.draft == "")
+  workspace.draft = "!false"
+  await workspace.runShell("false")
+  #expect(workspace.errorMessage == "Muse is not connected. Reconnect in Settings.")
+  #expect(workspace.draft == "!false")
+}
+
+@MainActor @Test func openNeighborOpensTheNextVisibleRow() async throws {
+  let (workspace, _) = await makeWorkspace { method, args, id in
+    switch method {
+    case "sessions":
+      return [reply(id, #"{"sessions":[\#(sessionJSON("s1", updatedAt: "2026-10-23T11:00:00Z")),\#(sessionJSON("s2", updatedAt: "2026-10-23T10:00:00Z"))],"nextCursor":null}"#)]
+    case "open":
+      guard case .string(let sessionId)? = args.first else { return [] }
+      return [reply(id, viewJSON(sessionJSON(sessionId)))]
+    default: return []
+    }
+  }
+  await workspace.refreshSessions()
+  await workspace.openNeighbor(forward: true)
+  #expect(workspace.view?.session.sessionId == "s1")
+  await workspace.openNeighbor(forward: true)
+  #expect(workspace.view?.session.sessionId == "s2")
+  await workspace.openNeighbor(forward: true)
+  #expect(workspace.view?.session.sessionId == "s2")
+  await workspace.openNeighbor(forward: false)
+  #expect(workspace.view?.session.sessionId == "s1")
+}

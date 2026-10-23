@@ -143,11 +143,11 @@ The gate is "Prove a change" in `docs/changing-things.md`, unchanged, plus the n
 
 Each milestone is one PR from its own branch into the fork's `extensions` branch, cut after `mac-m4a` merges. Dom merges.
 
-| Milestone             | Holds                                                                   | Done when                                                                                                                    |
-| --------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| M4b                   | The proof of M2 to M4a: the UI tests three times, the live isolated run | Already planned in `2026-10-22-mmac-m4a.md`. Comes first.                                                                    |
-| M5a: session controls | Features 1 to 8                                                         | Both `swift test` runs, the host, backend and parity tests, and the echo and fake-backend UI tests pass three runs in a row. |
-| M5b: services         | Features 9 and 10                                                       | The two Vitest suites, their MuseKit tests and the fake-backend UI steps pass.                                               |
+| Milestone             | Holds                                                                   | Done when                                                                                                                                                  |
+| --------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M4b                   | The proof of M2 to M4a: the UI tests three times, the live isolated run | Already planned in `2026-10-22-mmac-m4a.md`. Comes first.                                                                                                  |
+| M5a: session controls | Features 1 to 8                                                         | Built 2026-10-23 (`mac-m5a`). Both `swift test` runs, the host, backend and parity tests, and the echo and fake-backend UI tests pass three runs in a row. |
+| M5b: services         | Features 9 and 10                                                       | The two Vitest suites, their MuseKit tests and the fake-backend UI steps pass.                                                                             |
 
 Recommended order inside M5a, by value over cost: permission modes, session shell, the context card with the changes indicator and the Tasks pane, side chat, keyboard parity, the file context menu, the subagent list, the preview pane. Inside M5b: scheduled tasks first.
 

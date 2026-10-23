@@ -6,6 +6,7 @@ const wire = vi.hoisted(() => ({
   command: vi.fn(),
   close: vi.fn(),
   initializeResult: { experimentalApi: true } as Record<string, unknown>,
+  initializeOptions: {} as Record<string, unknown>,
   receive: (_notification: { method: string; params: Record<string, unknown> }) => {},
 }))
 const trust = vi.hoisted(() => ({ record: vi.fn(async () => true) }))
@@ -20,19 +21,22 @@ vi.mock('@muse-code/sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@muse-code/sdk')>()),
   spawnMspConnection: () => ({
     close: wire.close,
-    initialize: async () => ({
-      close: wire.close,
-      initializeResult: wire.initializeResult,
-      connection: {
-        request: wire.request,
-        command: wire.command,
-        closed: new Promise(() => {}),
-        onNotification: (callback: typeof wire.receive) => {
-          wire.receive = callback
+    initialize: async (options: Record<string, unknown>) => {
+      wire.initializeOptions = options
+      return {
+        close: wire.close,
+        initializeResult: wire.initializeResult,
+        connection: {
+          request: wire.request,
+          command: wire.command,
+          closed: new Promise(() => {}),
+          onNotification: (callback: typeof wire.receive) => {
+            wire.receive = callback
+          },
+          onProtocolError: () => {},
         },
-        onProtocolError: () => {},
-      },
-    }),
+      }
+    },
   }),
 }))
 import { MuseHost } from '../../src/main/muse-host'
@@ -226,6 +230,122 @@ describe('Muse protocol boundary', () => {
         : { events: [], nextCursor: 'same' },
     )
     await expect(host.open('s1')).rejects.toThrow('repeated transcript cursor')
+    await host.close()
+  })
+
+  it('sets the approval mode and keeps the session current from the reply and the event', async () => {
+    const events: AppEvent[] = []
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    await host.create('/project')
+    wire.command.mockImplementation(async (method: string) => {
+      if (method === 'session/setApprovalMode')
+        return {
+          applyOutcome: 'completed',
+          effectiveMode: { mode: 'onRequest', source: 'approvalReconfigure' },
+        }
+      return method === 'session/start' || method === 'session/resume' ? result() : {}
+    })
+    await expect(host.setApprovalMode('s1', 'onRequest')).resolves.toBe('onRequest')
+    expect(wire.command).toHaveBeenLastCalledWith(
+      'session/setApprovalMode',
+      { sessionId: 's1', mode: 'onRequest' },
+      { maxAttempts: 1 },
+    )
+    expect(host.getSession('s1').approvalMode?.mode).toBe('onRequest')
+    notify('session/approvalModeChanged', { mode: 'denyUnmatched', source: 'replay' })
+    expect(host.getSession('s1').approvalMode?.mode).toBe('denyUnmatched')
+    await host.close()
+  })
+
+  it('approval mode: a changed event for an unknown session is ignored', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    wire.receive({
+      method: 'session/approvalModeChanged',
+      params: { sessionId: 'other', mode: 'allowAll' },
+    })
+    expect(host.getSession('s1').approvalMode).toBeUndefined()
+    await host.close()
+  })
+
+  it('folds context usage into the view, with and without a window', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/contextUsage', { usedTokens: 4200, windowTokens: 10000, pressure: 'normal' })
+    expect(host.getView('s1').context).toEqual({ used: 4200, window: 10000, pressure: 'normal' })
+    notify('session/contextUsage', { usedTokens: 9900, pressure: 'blocked' })
+    expect(host.getView('s1').context).toEqual({
+      used: 9900,
+      window: undefined,
+      pressure: 'blocked',
+    })
+    await host.close()
+  })
+
+  it('replaces the todo list wholesale and clears it on an empty list', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/todoListChanged', {
+      items: [
+        {
+          text: 'Clean the build folder',
+          status: 'inProgress',
+          activeForm: 'Cleaning the build folder',
+        },
+        { text: 'Run the tests', status: 'pending' },
+      ],
+      revision: 1,
+      sourceTool: 'TodoWrite',
+    })
+    expect(host.getView('s1').todos?.map((todo) => todo.text)).toEqual([
+      'Clean the build folder',
+      'Run the tests',
+    ])
+    notify('session/todoListChanged', { items: [], revision: 2, sourceTool: 'TodoWrite' })
+    expect(host.getView('s1').todos).toEqual([])
+    await host.close()
+  })
+
+  it('opens a side chat as a loaded session of its own', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    wire.command.mockImplementation(async (method: string) => {
+      if (method === 'session/sideChat')
+        return { ...result(), session: { ...session, sessionId: 'side-1', kind: 'sideChat' } }
+      return method === 'session/start' || method === 'session/resume' ? result() : {}
+    })
+    const side = await host.sideChat('s1')
+    expect(side.session.sessionId).toBe('side-1')
+    expect(wire.command).toHaveBeenCalledWith(
+      'session/sideChat',
+      { sessionId: 's1' },
+      { maxAttempts: 1 },
+    )
+    // Loaded: a send goes straight out, with no resume first.
+    wire.command.mockClear()
+    await host.send('side-1', [{ type: 'text', text: 'hi' }], 'high', 'queue', 'hi')
+    expect(wire.command.mock.calls.map((call) => call[0])).toEqual(['turn/start'])
+    await host.close()
+  })
+
+  it('runs a shell command in the session and asks for the userShell capability', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    await host.runShell('s1', 'echo hi')
+    expect(wire.command).toHaveBeenLastCalledWith(
+      'session/userShell',
+      { sessionId: 's1', commandText: 'echo hi' },
+      { maxAttempts: 1 },
+    )
+    expect(wire.initializeOptions).toMatchObject({
+      capabilities: { requestedCapabilities: ['sessionListStream', 'userShell'] },
+    })
     await host.close()
   })
 

@@ -384,3 +384,48 @@ import Testing
   workspace.projectGit["/p"] = GitStatus(branch: "main", changes: [], isRepository: true)
   #expect(workspace.canStartInWorktree)
 }
+
+@MainActor @Test func aSideChatOpensFeedsAndClosesBesideTheMainConversation() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1")))]
+    case "side-chat": [reply(id, viewJSON(#"{"sessionId":"side-1","workspaceRoot":"/p","createdAt":"2026-10-23T00:00:00Z","updatedAt":"2026-10-23T00:00:00Z","status":"idle","activeTurnId":null,"modelId":null,"turnCount":0,"kind":"sideChat"}"#))]
+    case "send": [reply(id, "null")]
+    default: []
+    }
+  }
+  await workspace.open("s1")
+  await workspace.openSideChat()
+  #expect(workspace.sideView?.session.sessionId == "side-1")
+  #expect(workspace.view?.session.sessionId == "s1")
+  await workspace.sendToSide("Why that file?")
+  let send = requests(backend).first { $0[0] == .string("send") }
+  guard case .array(let args)? = send?[1], case .object(let body)? = args.first else {
+    Issue.record("No send")
+    return
+  }
+  #expect(body["sessionId"] == .string("side-1"))
+  #expect(body["text"] == .string("Why that file?"))
+  #expect(body["attachments"] == .array([]))
+  var running = try decodeView(viewJSON(#"{"sessionId":"side-1","workspaceRoot":"/p","createdAt":"2026-10-23T00:00:00Z","updatedAt":"2026-10-23T00:00:00Z","status":"running","activeTurnId":null,"modelId":null,"turnCount":0,"kind":"sideChat"}"#))
+  running.items = [TranscriptItem(itemId: "a", kind: "agentMessage", status: "completed", text: "Because.")]
+  workspace.apply(.session(running))
+  #expect(workspace.sideView?.items.first?.text == "Because.")
+  #expect(workspace.view?.items.isEmpty == true)
+  workspace.closeSideChat()
+  #expect(workspace.sideView == nil)
+  await workspace.openSideChat()
+  workspace.startNew()
+  #expect(workspace.sideView == nil)
+}
+
+@MainActor @Test func btwNeedsAnOpenConversationAndOpensTheSide() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "open" ? [reply(id, viewJSON(sessionJSON("s1")))] : []
+  }
+  #expect(await workspace.run(ParsedCommand(name: "btw", argument: "")) == nil)
+  #expect(workspace.errorMessage == Workspace.needsConversation)
+  workspace.errorMessage = nil
+  await workspace.open("s1")
+  #expect(await workspace.run(ParsedCommand(name: "btw", argument: "")) == .sideChat)
+}

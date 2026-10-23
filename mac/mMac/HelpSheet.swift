@@ -20,6 +20,12 @@ struct HelpSheet: View {
     Shortcut(keys: "⌘O", action: "Open a project"),
     Shortcut(keys: "⌘,", action: "Open Settings"),
     Shortcut(keys: "⌥⌘I", action: "Show or hide the project inspector"),
+    Shortcut(keys: "⌘⇧] ⌘⇧[", action: "Next or previous conversation"),
+    Shortcut(keys: "Esc", action: "Stop Muse\u{2019}s turn, from the composer"),
+    Shortcut(keys: "⌘;", action: "Open a side chat"),
+    Shortcut(keys: "⌘⇧I ⌘⇧E ⌘⇧M", action: "Open the Model, Effort and Mode menus"),
+    Shortcut(keys: "!", action: "Run a shell command in the project folder"),
+    Shortcut(keys: "⌘/", action: "Show this sheet"),
   ]
 
   var body: some View {

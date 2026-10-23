@@ -41,6 +41,7 @@ private func session(
     session("kept", minutesAgo: 1),
     session("sub", minutesAgo: 2, kind: "subagent"),
     session("rem", minutesAgo: 3, kind: "reminder"),
+    session("side", minutesAgo: 3, kind: "sideChat"),
     session("archived", minutesAgo: 4),
   ]
   let entries = CommandMenu.entries(sessions: sessions, archived: ["archived"], query: "")

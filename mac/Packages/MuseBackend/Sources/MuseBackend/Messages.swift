@@ -1,7 +1,7 @@
 import Foundation
 
 /// The backend protocol version. It must equal `HEADLESS_PROTOCOL` in `src/headless/wire.ts`.
-public let backendProtocol = 1
+public let backendProtocol = 2
 
 public enum BackendError: Error, Equatable, LocalizedError {
   /// The backend's own message. It is written for the person using mMac.

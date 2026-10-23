@@ -136,17 +136,35 @@ The UI tests drive the real desktop. Before you run them:
 
 - Turn on macOS Automation Mode once: run `automationmodetool enable-automationmode-without-authentication` in Terminal. Leave out `sudo`. With `sudo`, it asks for root's password.
 - Unlock the screen, and put no app full-screen in front.
-- Expect a prompt after a rebuild. The build is signed ad hoc, and the checkout is under `~/Documents`, so macOS can ask again whether mMac may use the Documents folder. The first run after a rebuild can need you at the keyboard.
+- Expect a prompt after a rebuild. The build is signed ad hoc, and the checkout is under `~/Documents`, so macOS can ask again whether mMac may use the Documents folder. The first run after a rebuild can need you at the keyboard. A worktree outside `~/Documents` (for example `~/mmac-m5a`, where the M5a worktree lives) avoids the prompt.
 
 The echo test pastes its first message through the general pasteboard, then restores every item the pasteboard held. Do not copy anything while it runs.
 
 Debug builds keep the window's user defaults, such as `inspectorShown`, in the suite that `MMAC_DEFAULTS_SUITE` names. The UI tests set it to `com.domalhambra.mmac.uitests`, and mMac empties it at launch. With the variable set, mMac also turns off window restoration and AppKit's frame autosave for both windows and the sidebar split (`mac/mMac/WindowStateGuard.swift`). Your own mMac defaults stay unchanged. AppKit's open panel still writes a few keys of its own (see `docs/decisions.md`, 2026-10-22). Every UI-test launch also sets `MMAC_TOKEN_STORE=memory`, `-ApplePersistenceIgnoreState YES` and `-NSQuitAlwaysKeepsWindows NO`.
 
-To run the UI tests several times and check the real defaults, run `mac/scripts/ui-tests.sh` with the number of runs, such as `mac/scripts/ui-tests.sh 3`. The default is 3. The script runs each pass under `caffeinate` with a 15-minute limit, stops at the first failed run, and compares the `com.domalhambra.mmac` defaults before and after. It only reads that domain. Its logs go to the `ui-tests` folder in `.cache/`. Warning: on a timeout or Ctrl-C, it stops every mMac built in the `mmac` folder in `.cache/`, a test's or not, and the test runner and the fake backend. Quit your own build from that folder before you run the script.
+The M5a UI test is `testM5aAgainstTheFakeBackend`: permission modes, the `!` shell, the changes badge, the context gauge, the Tasks, Agents and Preview tabs, the file context menu (it saves and restores the pasteboard), side chat and ⌘⇧] / ⌘⇧[. To run the UI tests several times and check the real defaults, run `mac/scripts/ui-tests.sh` with the number of runs, such as `mac/scripts/ui-tests.sh 3`. The default is 3. The script runs each pass under `caffeinate` with a 15-minute limit, stops at the first failed run, and compares the `com.domalhambra.mmac` defaults before and after. It only reads that domain. Its logs go to the `ui-tests` folder in `.cache/`. Warning: on a timeout or Ctrl-C, it stops every mMac built in the `mmac` folder in `.cache/`, a test's or not, and the test runner and the fake backend. Quit your own build from that folder before you run the script.
 
 The scheme keeps screen capture off (`captureScreenshotsAutomatically: false` in `mac/project.yml`). Keep it off: a recording captures whatever else is on the screen.
 
 Every launch the UI tests make points `HOME`, `MUSE_HOME` and `XDG_*` at a temporary folder. Under that `HOME`, mMac finds Node through `/etc/paths`, which the login shell still reads, or through the fallback paths in `mac/Packages/MuseBackend/Sources/MuseBackend/Launcher.swift`. A Node that only nvm or fnm puts on your PATH is not found.
+
+## Add a Muse call
+
+- Edit: `src/main/muse-host.ts` (the call), `src/shared/protocol.ts` (a closed enum or schema, when Muse has one), `src/headless/backend.ts` (the method), `mac/Packages/MuseBackend/Sources/MuseBackend/Methods.swift` (the typed call) and `mac/Packages/MuseBackend/Sources/MuseBackend/Models.swift` (the reply's shape).
+- Test: `tests/unit/muse-host.test.ts`, `tests/unit/headless-backend.test.ts`, `tests/unit/headless-parity.test.ts`, and the decode tests in `mac/Packages/MuseBackend/Tests/`.
+- Prove: the gate in "Prove a change". A new method raises the protocol number (see "Change mMac or its backend").
+
+## Change the composer's pickers
+
+- Edit: `mac/mMac/ComposerView.swift`. A picker that must not widen the detail column's minimum uses `.fixedSize(horizontal: false, vertical: true)`: five fixed-size pickers push the inspector out of the window.
+- Test: `mac/Packages/MuseKit/Tests/MuseKitTests/ComposerRulesTests.swift` for the rule, and the fake-backend UI test for the pick.
+- Prove: `testM5aAgainstTheFakeBackend`.
+
+## Add an inspector tab
+
+- Edit: `Inspector.Tab` in `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift`, the segment and the case in `mac/mMac/InspectorView.swift`, and the rule in `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift`. Keep the segments' total inside the column: the picker shares the column's width (`.frame(maxWidth: .infinity)`), and the column caps at 400 in `mac/mMac/RootView.swift`.
+- Test: the rule's test in `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorRulesTests.swift`.
+- Prove: the fake-backend UI test that opens the tab.
 
 ## Update Muse Code or the SDK
 

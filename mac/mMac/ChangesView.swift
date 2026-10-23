@@ -36,6 +36,7 @@ struct ChangesView: View {
             }
             .buttonStyle(.plain)
             .help(change.path)
+            .filePathMenu(change.path, workspace: workspace)
             // A button reads its label as one string, so it says the colour-coded status in words.
             .accessibilityLabel(
               "\(ChangeLabel.name(change.path)), \(ChangeLabel.folder(change.path)), \(ChangeLabel.spoken(change))")
@@ -203,6 +204,7 @@ struct DiffPane: View {
           Label(path, systemImage: "chevron.left").lineLimit(1).truncationMode(.head)
         }
         .buttonStyle(.borderless)
+        .filePathMenu(path, workspace: workspace)
         .accessibilityLabel("Back to the changed files")
         .accessibilityValue(path)
         .help("Back to the changed files")

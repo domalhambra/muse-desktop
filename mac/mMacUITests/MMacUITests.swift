@@ -158,6 +158,18 @@ final class MMacUITests: XCTestCase {
     app.radioButtons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
   }
 
+  /// Clicks an inspector tab until it reports selected, as a segment click can land while the
+  /// inspector column is still settling open.
+  private func selectTab(_ app: XCUIApplication, _ title: String, file: StaticString = #filePath, line: UInt = #line) {
+    let segment = tab(app, title)
+    for _ in 0..<3 {
+      segment.click()
+      let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == 1"), object: segment)
+      if XCTWaiter().wait(for: [selected], timeout: 2) == .completed { return }
+    }
+    XCTFail("\(title) never became the selected inspector tab", file: file, line: line)
+  }
+
   /// The Settings window. SwiftUI names it by identifier; its title follows the pane shown.
   private func settingsWindow(_ app: XCUIApplication) -> XCUIElement {
     app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
@@ -583,5 +595,124 @@ final class MMacUITests: XCTestCase {
     waitForValue(composer, "A draft to keep")
 
     quit(app)
+  }
+
+  func testM5aAgainstTheFakeBackend() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    let app = try launchFake(log: log)
+    openFakeConversation(app)
+
+    // Permission modes: the picker shows the fake's mode, and a pick travels.
+    let mode = app.descendants(matching: .any)["mode-picker"]
+    XCTAssertTrue(mode.waitForExistence(timeout: 5))
+    mode.click()
+    app.menuItems["On request"].click()
+
+    // The session shell: `!echo hi` becomes a shell row.
+    let composer = self.composer(app)
+    composer.click()
+    composer.typeText("!echo hi")
+    composer.typeKey(.return, modifierFlags: [])
+    let shellRow = app.descendants(matching: .any)
+      .matching(NSPredicate(format: "label CONTAINS %@", "$ echo hi")).firstMatch
+    XCTAssertTrue(shellRow.waitForExistence(timeout: 10))
+
+    // The changes badge opens the inspector on Changes.
+    let badge = app.buttons["changes-badge"]
+    XCTAssertTrue(badge.waitForExistence(timeout: 5))
+    XCTAssertEqual(badge.label, "Changes +12 \u{2212}1")
+    badge.click()
+    let toggle = app.buttons["Toggle project inspector"]
+    waitForValue(toggle, "Shown")
+    // As the inspector test: fill the screen, so the six segments are inside the window.
+    app.menuBars.menuBarItems["Window"].click()
+    app.menuBars.menuItems["Zoom"].click()
+    // A segmented segment reports its selection as its value, not as `isSelected`.
+    let changesSelected = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "value == 1"), object: tab(app, "Changes"))
+    XCTAssertEqual(XCTWaiter().wait(for: [changesSelected], timeout: 5), .completed)
+
+    // The context gauge, the Tasks tab and the Agents tab.
+    XCTAssertTrue(app.staticTexts["Context 42%"].waitForExistence(timeout: 5))
+    selectTab(app, "Tasks")
+    let task = app.descendants(matching: .any)
+      .matching(NSPredicate(format: "label CONTAINS %@", "Cleaning the build folder")).firstMatch
+    XCTAssertTrue(task.waitForExistence(timeout: 10))
+    selectTab(app, "Agents")
+    let agent = app.descendants(matching: .any)
+      .matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "Count the files", "120 tokens")).firstMatch
+    XCTAssertTrue(agent.waitForExistence(timeout: 10))
+    agent.click()
+    XCTAssertTrue(app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10))
+    app.buttons["child-close"].click()
+
+    // The Preview tab loads a page from disk and shows its title.
+    selectTab(app, "Preview")
+    let field = app.textFields["preview-url"]
+    XCTAssertTrue(field.waitForExistence(timeout: 5))
+    field.click()
+    field.typeText("file://" + repository.appending(path: "mac/Fixtures/preview.html").path)
+    field.typeKey(.return, modifierFlags: [])
+    XCTAssertTrue(app.staticTexts["Fixture page"].waitForExistence(timeout: 15))
+
+    // The file context menu: Copy › Relative path. The pasteboard is Dom's; it goes back after.
+    selectTab(app, "Files")
+    let board = NSPasteboard.general
+    let saved = (board.pasteboardItems ?? []).map { item in
+      item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+    }
+    addTeardownBlock { @MainActor in
+      let board = NSPasteboard.general
+      board.clearContents()
+      let items = saved.map { entries in
+        let item = NSPasteboardItem()
+        for (type, data) in entries { item.setData(data, forType: type) }
+        return item
+      }
+      if !items.isEmpty { board.writeObjects(items) }
+    }
+    let notes = app.buttons["notes.md"]
+    XCTAssertTrue(notes.waitForExistence(timeout: 10))
+    notes.rightClick()
+    // The row's context menu, not the menu bar's Edit menu, which also has a Copy item: the
+    // context menu opens last, so its Copy is the last match.
+    let copies = app.menuItems.matching(NSPredicate(format: "title == %@", "Copy"))
+    XCTAssertTrue(copies.firstMatch.waitForExistence(timeout: 5))
+    copies.element(boundBy: copies.count - 1).click()
+    let relative = app.menuItems.matching(NSPredicate(format: "title == %@", "Relative path")).firstMatch
+    XCTAssertTrue(relative.waitForExistence(timeout: 10))
+    relative.click()
+    XCTAssertEqual(board.string(forType: .string), "notes.md")
+
+    // Side chat: ⌘; opens the sheet on the fake's side session; Close dismisses it.
+    app.typeKey(";", modifierFlags: .command)
+    XCTAssertTrue(app.staticTexts["The side says hello."].waitForExistence(timeout: 10))
+    let question = app.textFields["side-chat-field"]
+    question.click()
+    question.typeText("Why that file?")
+    question.typeKey(.return, modifierFlags: [])
+    app.buttons["side-chat-close"].click()
+    XCTAssertTrue(app.staticTexts["The side says hello."].waitForNonExistence(timeout: 10))
+
+    // Keyboard parity: ⌘⇧] opens the next conversation, ⌘⇧[ comes back.
+    app.typeKey("]", modifierFlags: [.command, .shift])
+    XCTAssertTrue(app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10))
+    app.typeKey("[", modifierFlags: [.command, .shift])
+    XCTAssertTrue(shellRow.waitForExistence(timeout: 10))
+
+    // Off again, so the run leaves the real defaults as they were.
+    app.typeKey("i", modifierFlags: [.command, .option])
+    waitForValue(toggle, "Hidden")
+    quit(app)
+
+    let entries = try Self.logged(log)
+    assertLogged(entries, ["method": "set-approval-mode", "args": ["fake-1", "onRequest"]])
+    assertLogged(entries, ["method": "shell", "args": ["fake-1", "echo hi"]])
+    assertLogged(entries, ["method": "side-chat", "args": ["fake-1"]])
+    assertLogged(entries, ["method": "open", "args": ["fake-2"]])
+    XCTAssertTrue(
+      entries.contains {
+        $0["method"] as? String == "send" && (($0["args"] as? [Any])?.first as? [String: Any])?["sessionId"] as? String == "fake-side"
+      })
   }
 }

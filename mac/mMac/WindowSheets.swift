@@ -14,6 +14,10 @@ final class WindowSheets {
   var commandMenu = false
   /// The Help sheet that /help opens.
   var help = false
+  /// The side chat sheet (⌘;).
+  var sideChat = false
+  /// The child session sheet (a subagent, from the Agents tab).
+  var child = false
   /// The result chosen in the ⌘K sheet. The window runs it once the sheet has closed, so a panel
   /// it opens attaches to the window, not to the closing sheet.
   var chosen: CommandMenuAction?
@@ -30,5 +34,5 @@ final class WindowSheets {
   }
 
   /// True while one of these sheets shows on the main window.
-  var anyShown: Bool { renaming || commandMenu || help }
+  var anyShown: Bool { renaming || commandMenu || help || sideChat || child }
 }

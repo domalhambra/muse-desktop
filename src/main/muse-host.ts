@@ -6,8 +6,10 @@ import {
   modelSchema,
   questionSchema,
   sessionSchema,
+  todoItemSchema,
   worktreeEntrySchema,
   type AppEvent,
+  type ApprovalMode,
   type ConnectionStatus,
   type MuseSession,
   type QuestionAnswer,
@@ -85,7 +87,7 @@ export class MuseHost {
             clientInfo: { name: 'muse_desktop', title: 'Muse Desktop', version: '0.2.0' },
             capabilities: {
               userInputDialogs: true,
-              requestedCapabilities: ['sessionListStream'],
+              requestedCapabilities: ['sessionListStream', 'userShell'],
               experimentalApi: true,
             },
           }),
@@ -382,6 +384,57 @@ export class MuseHost {
     this.schedule(sessionId)
   }
 
+  /**
+   * Selects an approval mode for the session. Muse applies it to its next action; an action
+   * already awaiting approval is not re-decided (msp.d.ts, `session/setApprovalMode`).
+   */
+  async setApprovalMode(sessionId: string, mode: ApprovalMode) {
+    await this.resume(sessionId)
+    const result = z
+      .object({
+        applyOutcome: z.string(),
+        effectiveMode: z.object({ mode: z.string() }).passthrough(),
+      })
+      .parse(
+        await this.connection.command(
+          'session/setApprovalMode',
+          { sessionId, mode },
+          { maxAttempts: 1 },
+        ),
+      )
+    this.requireSession(sessionId).view.session.approvalMode = result.effectiveMode
+    this.schedule(sessionId)
+    return result.effectiveMode.mode
+  }
+
+  /**
+   * A side session seeded from `sessionId`: a place for a question that must not join the main
+   * conversation. Muse returns the new session's resume envelope (msp.d.ts, `session/sideChat`),
+   * so it is hydrated loaded, like a created session. The caller shows it; it never joins the
+   * sidebar (its kind is `sideChat`).
+   */
+  async sideChat(sessionId: string): Promise<SessionView> {
+    await this.resume(sessionId)
+    const result = sessionResultSchema.parse(
+      await this.connection.command('session/sideChat', { sessionId }, { maxAttempts: 1 }),
+    )
+    const live = await this.hydrate(result, true)
+    return this.view(live)
+  }
+
+  /**
+   * Runs a shell command in the session's folder, the TUI's `!` escape (msp.d.ts,
+   * `session/userShell`). The result arrives as a `userShell` item through the item events.
+   */
+  async runShell(sessionId: string, commandText: string) {
+    await this.resume(sessionId)
+    await this.connection.command(
+      'session/userShell',
+      { sessionId, commandText },
+      { maxAttempts: 1 },
+    )
+  }
+
   async approve(sessionId: string, approvalId: string, choiceId: string) {
     await this.resume(sessionId)
     const approval = this.requireSession(sessionId).view.approvals.find(
@@ -575,6 +628,26 @@ export class MuseHost {
         input: usage.promptTokens,
         output: usage.outputTokens,
         total: usage.totalTokens,
+      }
+    } else if (method === 'session/contextUsage') {
+      const usage = z
+        .object({
+          usedTokens: z.number(),
+          windowTokens: z.number().optional(),
+          pressure: z.string(),
+        })
+        .parse(params)
+      live.view.context = {
+        used: usage.usedTokens,
+        window: usage.windowTokens,
+        pressure: usage.pressure,
+      }
+    } else if (method === 'session/todoListChanged') {
+      live.view.todos = z.array(todoItemSchema).parse(params.items)
+    } else if (method === 'session/approvalModeChanged') {
+      live.view.session.approvalMode = {
+        ...(live.view.session.approvalMode ?? {}),
+        mode: z.string().parse(params.mode),
       }
     } else if (method === 'view/gap') {
       void this.recover(sessionId).catch((error: unknown) => {

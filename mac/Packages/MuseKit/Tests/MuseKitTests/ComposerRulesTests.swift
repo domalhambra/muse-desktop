@@ -83,7 +83,7 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
 
 @Test func theTenCommandsKeepElectronsOrderAndDescriptions() {
   #expect(ComposerCommand.allCases.map(\.name) == [
-    "clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help",
+    "clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help", "btw",
   ])
   #expect(ComposerCommand.allCases.map(\.description) == [
     "Start a new conversation; keep saved history",
@@ -96,11 +96,12 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
     "Stop Muse\u{2019}s active turn",
     "Open desktop settings",
     "Open the guide and CLI compatibility information",
+    "Ask a side question that leaves this conversation untouched",
   ])
 }
 
 @Test func theMenuOpensOnlyForASlashAndLettersOnTheWholeDraft() {
-  #expect(ComposerCommand.menu(for: "/").count == 10)
+  #expect(ComposerCommand.menu(for: "/").count == 11)
   #expect(ComposerCommand.menu(for: "/mo") == [.model])
   #expect(ComposerCommand.menu(for: "/Model") == [.model])
   #expect(ComposerCommand.menu(for: "/MO") == [.model])
@@ -205,4 +206,19 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
   #expect(MentionRule.keyAction(.enter, index: 2, count: 3) == .choose(2))
   #expect(MentionRule.keyAction(.escape, index: 0, count: 3) == .dismiss)
   #expect(MentionRule.keyAction(.enter, index: 0, count: 0) == .pass)
+}
+
+@Test func theFourModesKeepMusesOrderAndNames() {
+  #expect(ApprovalMode.allCases.map(\.rawValue) == ["allowAll", "promptUnmatched", "onRequest", "denyUnmatched"])
+  #expect(ApprovalMode.allCases.map(\.label) == ["Allow all", "Prompt unmatched", "On request", "Deny unmatched"])
+  #expect(ApprovalMode.label(for: "onRequest") == "On request")
+  #expect(ApprovalMode.label(for: "futureMode") == "futureMode")
+}
+
+@Test func aBangDraftIsAShellCommandAndABangInsideTextIsNot() {
+  #expect(ShellRule.command(in: "!echo hi") == "echo hi")
+  #expect(ShellRule.command(in: "  ! ls -la  ") == "ls -la")
+  #expect(ShellRule.command(in: "!") == nil)
+  #expect(ShellRule.command(in: "Say hi!") == nil)
+  #expect(ShellRule.command(in: "") == nil)
 }

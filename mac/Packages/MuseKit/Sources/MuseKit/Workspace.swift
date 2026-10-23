@@ -72,6 +72,12 @@ public final class Workspace {
   /// event meanwhile (history loading saves the recent projects) leaves the reading to that one.
   private var beginsRunning = 0
   public internal(set) var view: SessionView?
+  /// The side session shown in the side chat sheet, or nil. A side session is Muse's: seeded from
+  /// the open conversation, and never part of it.
+  public internal(set) var sideView: SessionView?
+  public internal(set) var sideOpening = false
+  /// A subagent's session, shown read-only in a sheet from the Agents tab, or nil.
+  public internal(set) var childView: SessionView?
   /// The conversation being opened, for a spinner.
   public private(set) var openingSessionId: String?
   public internal(set) var models: [MuseModel] = []
@@ -279,6 +285,8 @@ public final class Workspace {
         }
         view = next
       }
+      if next.session.sessionId == sideView?.session.sessionId { sideView = next }
+      if next.session.sessionId == childView?.session.sessionId { childView = next }
       if let index = sessions.firstIndex(where: { $0.sessionId == next.session.sessionId }) {
         // Only on a change: every streamed update sends a session event, and the sidebar
         // rebuilds its sections whenever `sessions` is written.
@@ -369,6 +377,8 @@ public final class Workspace {
     openSequence += 1
     openingSessionId = nil
     view = nil
+    sideView = nil
+    childView = nil
     mode = .queue
     // As Electron's startNew: back to the normal list.
     showArchived = false
@@ -413,6 +423,7 @@ public final class Workspace {
       let opened = try await client.open(sessionId)
       guard sequence == openSequence else { return }
       if opened.session.sessionId != view?.session.sessionId { clearStoredOutput() }
+      if opened.session.sessionId != view?.session.sessionId { sideView = nil; childView = nil }
       view = opened
       // As Electron: a conversation without a folder shows all projects, so it stays visible.
       project = opened.session.workspaceRoot ?? ""

@@ -19,6 +19,8 @@ public enum CommandEffect: Equatable, Sendable {
   case modelPicker
   /// `/effort` with no level: open the Reasoning effort picker.
   case effortPicker
+  /// `/btw`: open the side chat sheet.
+  case sideChat
 }
 
 // Running a composer command, as Electron's `submit` in src/renderer/src/App.tsx does.
@@ -60,6 +62,9 @@ extension Workspace {
       return nil
     case .help:
       return .help
+    case .btw:
+      guard view != nil else { throw WorkspaceError(Self.needsConversation) }
+      return .sideChat
     case .settings:
       return .settings
     case .voice:

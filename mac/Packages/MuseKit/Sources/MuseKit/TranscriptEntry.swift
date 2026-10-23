@@ -7,12 +7,15 @@ public enum TranscriptEntry: Identifiable, Equatable, Sendable {
   case agent(TranscriptItem)
   case reasoning(TranscriptItem)
   case tool(TranscriptItem)
+  case shell(TranscriptItem)
+  case sideChat(TranscriptItem)
   /// Three or more completed tools in a row.
   case toolGroup([TranscriptItem])
 
   public var id: String {
     switch self {
-    case .user(let item), .agent(let item), .reasoning(let item), .tool(let item): item.itemId
+    case .user(let item), .agent(let item), .reasoning(let item), .tool(let item), .shell(let item),
+      .sideChat(let item): item.itemId
     case .toolGroup(let items): "group-\(items.first?.itemId ?? "empty")"
     }
   }
@@ -35,6 +38,12 @@ public enum TranscriptEntry: Identifiable, Equatable, Sendable {
       case "reasoning":
         flush()
         entries.append(.reasoning(item))
+      case "userShell":
+        flush()
+        entries.append(.shell(item))
+      case "sideChat":
+        flush()
+        entries.append(.sideChat(item))
       default:
         if item.status == "completed" {
           run.append(item)
@@ -168,6 +177,16 @@ public enum ToolPresentation {
   public static func patch(_ item: TranscriptItem) -> String? {
     guard let patch = item.patchSummary else { return nil }
     return "+\(patch.added) \u{2212}\(patch.removed)"
+  }
+
+  /// A shell row's footer: the status, the exit code and the duration, with what the item lacks
+  /// left out. "Running" while in progress.
+  public static func shellFooter(_ item: TranscriptItem) -> String {
+    guard item.status != "inProgress" else { return "Running" }
+    var parts = [item.status]
+    if let code = item.exitCode { parts.append("exit \(code)") }
+    if let duration = item.durationMs { parts.append("\(fixed1(duration / 1000))s") }
+    return parts.joined(separator: " · ")
   }
 
   public static func footer(_ item: TranscriptItem) -> String {

@@ -313,6 +313,149 @@ public enum GitBadge {
   }
 }
 
+/// The inspector's context gauge, from `session/contextUsage`, as Desktop's Context card header.
+public enum ContextGauge {
+  public enum Tint: Equatable, Sendable { case normal, warning, blocked }
+
+  /// Used over window, rounded, at most 100. Nil when Muse reports no window.
+  public static func percent(_ usage: ContextUsage) -> Int? {
+    guard let window = usage.window, window > 0 else { return nil }
+    return min(100, Int((Double(usage.used) / Double(window) * 100).rounded()))
+  }
+
+  /// "Context 42%", or the token count when the model has no limit.
+  public static func label(_ usage: ContextUsage) -> String {
+    if let percent = percent(usage) { return "Context \(percent)%" }
+    return "Context \(usage.used.formatted()) tokens"
+  }
+
+  public static func tint(_ usage: ContextUsage) -> Tint {
+    switch usage.pressure {
+    case "warning": .warning
+    case "blocked": .blocked
+    default: .normal
+    }
+  }
+}
+
+/// The toolbar's `+12 −1`: what the open conversation's tools changed, summed over their patch
+/// summaries, as Desktop's Changes card counts the session's edits. Nil with nothing to show.
+public enum ChangesBadge {
+  public static func text(_ items: [TranscriptItem]) -> String? {
+    ToolPresentation.groupPatch(items.filter { $0.retracted != true })
+  }
+}
+
+/// One row of the Tasks tab: the agent's todo list, as Desktop's tasks pane shows it.
+public struct TodoRow: Equatable, Sendable, Identifiable {
+  public let id: Int
+  public let text: String
+  /// `pending`, `inProgress`, `completed` or `cancelled`.
+  public let status: String
+  public let activeForm: String?
+
+  /// An in-progress row shows its present-tense form when the tool gave one.
+  public var title: String { status == "inProgress" ? (activeForm ?? text) : text }
+
+  public static func build(_ todos: [TodoItem]?) -> [TodoRow] {
+    (todos ?? []).enumerated().map { index, todo in
+      TodoRow(id: index, text: todo.text, status: todo.status, activeForm: todo.activeForm)
+    }
+  }
+}
+
+/// An app that can open a file, for the path menu's Open in.
+public struct EditorApp: Equatable, Sendable, Identifiable {
+  public let name: String
+  public let bundleId: String
+  public let url: URL
+  public var id: String { bundleId }
+
+  public init(name: String, bundleId: String, url: URL) {
+    self.name = name
+    self.bundleId = bundleId
+    self.url = url
+  }
+}
+
+/// The path context menu's rules, as Desktop's "Open files in other apps".
+public enum FileMenuRules {
+  /// Finder opens folders, not text; mMac is this app.
+  public static let excludedBundleIds: Set<String> = ["com.apple.finder", "com.domalhambra.mmac"]
+
+  public static func absolute(_ path: String, in project: String) -> URL {
+    URL(fileURLWithPath: project, isDirectory: true).appending(path: path)
+  }
+
+  public static func fileName(_ path: String) -> String {
+    path.split(separator: "/").last.map(String.init) ?? path
+  }
+
+  /// The apps to list, in the order given, without the excluded ones and without a second copy
+  /// of the same app.
+  public static func editors(_ apps: [EditorApp]) -> [EditorApp] {
+    var seen = Set<String>()
+    return apps.filter { !excludedBundleIds.contains($0.bundleId) && seen.insert($0.bundleId).inserted }
+  }
+}
+
+/// One row of the Agents tab: a subagent the open conversation ran, as Desktop's tasks pane lists them.
+public struct AgentRow: Equatable, Sendable, Identifiable {
+  public let id: String
+  public let title: String
+  /// `controlStatus` when Muse gives one (`accepted`, `starting`, `running`, `resultReady`,
+  /// `closing`, `closed`), else the item's status.
+  public let status: String
+  /// Duration and tokens, joined with " · ". Empty when the item has neither.
+  public let detail: String
+  public let childSessionId: String?
+
+  public static func build(_ items: [TranscriptItem]) -> [AgentRow] {
+    items.filter { $0.kind == "subagent" && $0.retracted != true }.map { item in
+      var parts: [String] = []
+      if let duration = item.durationMs { parts.append("\(ToolPresentation.fixed1(duration / 1000))s") }
+      if let usage = item.usage { parts.append("\((usage.inputTokens + usage.outputTokens).formatted()) tokens") }
+      return AgentRow(
+        id: item.itemId,
+        title: ToolPresentation.first(item.objective, item.label, item.role) ?? "Subagent",
+        status: ToolPresentation.first(item.controlStatus) ?? item.status,
+        detail: parts.joined(separator: " · "),
+        childSessionId: item.childSessionId)
+    }
+  }
+
+  /// Whether the row's status means running, done, or neither, for the icon.
+  public var phase: Phase {
+    switch status {
+    case "accepted", "starting", "running", "inProgress": .running
+    case "closed", "resultReady", "completed": .done
+    default: .other
+    }
+  }
+
+  public enum Phase: Equatable, Sendable { case running, done, other }
+}
+
+/// The Preview tab's rules. The tab takes a typed address; it does not detect dev servers.
+public enum PreviewRules {
+  /// A typed address as a URL: a bare host or `host:port` gets `http://`. Only `http`, `https` and
+  /// `file` load. Nil for an empty field, another scheme, or `http://` with no host.
+  public static func url(from text: String) -> URL? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let withScheme = trimmed.contains("://") ? trimmed : "http://" + trimmed
+    guard let url = URL(string: withScheme), let scheme = url.scheme?.lowercased() else { return nil }
+    switch scheme {
+    case "http", "https": return url.host == nil ? nil : url
+    case "file": return url
+    default: return nil
+    }
+  }
+
+  /// The defaults key that remembers a project's last preview address.
+  public static func key(for project: String) -> String { "preview-url:\(project)" }
+}
+
 /// One row of the Activity tab, as Electron's `activityTitle` and the detail line in `Inspector.tsx`.
 public struct ActivityEntry: Equatable, Sendable, Identifiable {
   public let id: String
@@ -331,6 +474,7 @@ public struct ActivityEntry: Equatable, Sendable, Identifiable {
     if item.kind == "reminderChild" {
       return ToolPresentation.first(item.reminderAgentId).map { "Reminder · \($0)" } ?? "Background reminder"
     }
+    if item.kind == "userShell" { return "Shell" }
     if item.kind == "hookRun" { return ToolPresentation.first(item.label) ?? "CLI hook" }
     return ToolPresentation.first(item.tool, item.label) ?? titled(item.kind)
   }
@@ -340,6 +484,7 @@ public struct ActivityEntry: Equatable, Sendable, Identifiable {
       return (item.blocking == true ? "Keeps the turn open · " : "")
         + (item.status == "inProgress" ? "Running" : item.status)
     }
+    if item.kind == "userShell" { return ToolPresentation.first(item.commandText) ?? item.status }
     return ToolPresentation.first(item.statusLine, item.objective, item.fallbackText) ?? item.status
   }
 

@@ -6,6 +6,7 @@ import SwiftUI
 struct ConversationView: View {
   let controller: AppController
   let workspace: Workspace
+  @AppStorage("inspectorShown", store: MMacApp.appStorage) private var inspectorShown = false
 
   var body: some View {
     @Bindable var sheets = controller.sheets
@@ -15,7 +16,7 @@ struct ConversationView: View {
       }
       Group {
         if let view = workspace.view {
-          TranscriptView(workspace: workspace, view: view).id(view.session.sessionId)
+          TranscriptView(controller: controller, workspace: workspace, view: view).id(view.session.sessionId)
         } else if workspace.openingSessionId != nil {
           ProgressView("Loading conversation…")
         } else {
@@ -32,6 +33,18 @@ struct ConversationView: View {
     .navigationSubtitle(
       workspace.project.isEmpty ? "" : ProjectPath.name(of: ProjectPath.root(of: workspace.project)))
     .toolbar {
+      if let view = workspace.view, let badge = ChangesBadge.text(view.items) {
+        ToolbarItem {
+          Button(badge) {
+            inspectorShown = true
+            workspace.inspector.tab = .changes
+          }
+          .monospacedDigit()
+          .help("What Muse changed in this conversation. Opens the inspector on Changes.")
+          .accessibilityLabel("Changes \(badge)")
+          .accessibilityIdentifier("changes-badge")
+        }
+      }
       if let session = workspace.view?.session {
         ToolbarItem {
           Menu {
@@ -47,6 +60,12 @@ struct ConversationView: View {
     // The toolbar, the sidebar's context menu and /rename all raise it.
     .sheet(isPresented: $sheets.renaming) {
       RenameSheet(name: $sheets.newName, workspace: workspace) { controller.sheets.renaming = false }
+    }
+    .sheet(isPresented: $sheets.sideChat) {
+      SideChatSheet(controller: controller, workspace: workspace) { controller.sheets.sideChat = false }
+    }
+    .sheet(isPresented: $sheets.child) {
+      ChildSessionSheet(controller: controller, workspace: workspace) { controller.sheets.child = false }
     }
   }
 
