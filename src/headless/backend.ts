@@ -442,12 +442,16 @@ export function createBackend({
   method('add-project', async (value) => {
     const project = await realpath(pathSchema.parse(value))
     if (!(await stat(project)).isDirectory()) throw new Error('Choose a folder, not a file.')
-    await savePreferences({
-      recentProjects: [
-        project,
-        ...current().recentProjects.filter((entry) => entry !== project),
-      ].slice(0, 30),
-    })
+    await savePreferences(({ recentProjects }) =>
+      recentProjects[0] === project
+        ? {}
+        : {
+            recentProjects: [project, ...recentProjects.filter((entry) => entry !== project)].slice(
+              0,
+              30,
+            ),
+          },
+    )
     return project
   })
 
@@ -471,14 +475,12 @@ export function createBackend({
         }
       }),
     )
-    const recentProjects = [
-      ...new Set([
-        ...current().recentProjects,
-        ...discovered.filter((root): root is string => root !== null),
-      ]),
-    ].slice(0, 30)
-    if (recentProjects.length !== current().recentProjects.length)
-      await savePreferences({ recentProjects })
+    const found = discovered.filter((root): root is string => root !== null)
+    if (found.length > 0)
+      await savePreferences(({ recentProjects }) => {
+        const next = [...new Set([...recentProjects, ...found])].slice(0, 30)
+        return next.length === recentProjects.length ? {} : { recentProjects: next }
+      })
     return result
   })
 

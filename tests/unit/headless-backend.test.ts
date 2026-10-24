@@ -568,6 +568,42 @@ describe('headless backend, M1 methods', () => {
       saved.recentProjects,
     )
   })
+
+  it('keeps an add-project save that is still in flight when a second project is added', async () => {
+    const { call, start, preferencesFile, events } = harness()
+    await start()
+    const a = await folder('a')
+    const b = await folder('b')
+    await Promise.all([call('add-project', a), call('add-project', b)])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.recentProjects].sort()).toEqual([a, b].sort())
+    // Adding the project that is already first writes nothing and emits nothing.
+    const emitted = events.length
+    await call('add-project', saved.recentProjects[0])
+    expect(events).toHaveLength(emitted)
+  })
+
+  it('keeps a discovered-projects save that is still in flight when sessions is read again', async () => {
+    const a = await folder('a')
+    const b = await folder('b')
+    const lists = [[a], [b]]
+    const muse = fakeMuse({
+      list: vi.fn(async () => ({
+        sessions: (lists.shift() ?? []).map((root) => session({ workspaceRoot: root })),
+        nextCursor: null,
+      })),
+    })
+    const { call, start, preferencesFile, events } = harness(muse)
+    await start()
+    await Promise.all([call('sessions'), call('sessions')])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.recentProjects].sort()).toEqual([a, b].sort())
+    // A list that finds no new project writes nothing and emits nothing.
+    const emitted = events.length
+    lists.push([a, b])
+    await call('sessions')
+    expect(events).toHaveLength(emitted)
+  })
 })
 
 /** A Git repository with one commit of `a.txt`. Git's global config is kept out. */
