@@ -282,6 +282,8 @@ export type AppEvent =
   | { type: 'preferences'; preferences: Preferences }
   | { type: 'menu'; action: 'new' | 'open' | 'search' | 'settings' | 'sidebar' }
   | { type: 'error'; message: string }
+  | { type: 'schedule-run-started'; scheduleId: string; name: string; sessionId: string }
+  | { type: 'schedules-changed' }
 
 export const answerSchema = z.object({
   questionId: z.string(),
