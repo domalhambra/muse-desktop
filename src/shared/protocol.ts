@@ -189,6 +189,18 @@ export type Theme = Exclude<Preferences['theme'], 'system'>
 
 /** `session/contextUsage`: counted-once occupancy and the host's pressure level. `window` is absent when the model has no limit. */
 export type ContextUsage = { used: number; window?: number; pressure: string }
+/** `usage/read` and `usage/changed`: the subscription's rolling window and weekly block, as of `observedAt` (epoch ms). Percentages may exceed 100. */
+export const subscriptionLimitsSchema = z.object({
+  observedAt: z.number(),
+  tier: z.string(),
+  window: z.object({ usedPercent: z.number(), resetsAt: z.number(), minutes: z.number() }),
+  weekly: z.object({ usedPercent: z.number(), resetsAt: z.number() }),
+})
+export type SubscriptionLimits = z.infer<typeof subscriptionLimitsSchema>
+/** `cumulative.cost` of `session/tokenUsage`: an estimate. `partial` when a reply had no price. */
+export type SessionCost = { usd: number; partial: boolean }
+/** `TurnError.quota`: which limit stopped the turn, and when it resets (epoch ms). */
+export type QuotaStop = { kind: string; resetsAt: number }
 /** One todo of the agent's list, as `session/todoListChanged` carries it. */
 export const todoItemSchema = z.object({
   text: z.string(),
@@ -205,6 +217,8 @@ export type SessionView = {
   usage?: { input: number; output: number; total: number }
   context?: ContextUsage
   todos?: TodoItem[]
+  cost?: SessionCost
+  quota?: QuotaStop
   error?: string
   historyNotice?: string
 }
@@ -264,6 +278,7 @@ export type AppEvent =
   | { type: 'connection'; status: ConnectionStatus }
   | { type: 'session'; view: SessionView }
   | { type: 'sessions-changed' }
+  | { type: 'usage-changed'; limits: SubscriptionLimits | null }
   | { type: 'preferences'; preferences: Preferences }
   | { type: 'menu'; action: 'new' | 'open' | 'search' | 'settings' | 'sidebar' }
   | { type: 'error'; message: string }
