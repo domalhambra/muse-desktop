@@ -218,6 +218,22 @@ final class MMacUITests: XCTestCase {
     app.descendants(matching: .any).matching(identifier: identifier).firstMatch
   }
 
+  /// Waits up to five seconds for `element` to lie across no edge of `window`, as a column that
+  /// opens settles, and fails with both frames if it never does.
+  private func assertInside(
+    _ element: XCUIElement, _ window: XCUIElement, _ name: String, file: StaticString = #filePath, line: UInt = #line
+  ) {
+    func inside() -> Bool {
+      let frame = element.frame
+      let bounds = window.frame
+      return element.exists && frame.width > 0 && frame.minX >= bounds.minX - 0.5 && frame.maxX <= bounds.maxX + 0.5
+    }
+    let deadline = Date().addingTimeInterval(5)
+    while !inside(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
+    XCTAssertTrue(
+      inside(), "\(name) at \(element.frame) is not inside the window at \(window.frame)", file: file, line: line)
+  }
+
   /// Opens the second fake conversation, which raises no Ask and has no cards.
   private func openSecondConversation(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
     waitUntilConnected(app, file: file, line: line)
@@ -408,6 +424,8 @@ final class MMacUITests: XCTestCase {
     let preview = app.textViews["file-preview"]
     XCTAssertTrue(preview.waitForExistence(timeout: 10))
     XCTAssertTrue((preview.value as? String)?.contains("let b = 3") == true)
+    // The text view has a width to draw in: the live run showed "41 lines" over an empty body.
+    XCTAssertGreaterThan(preview.frame.width, 20, "The preview is \(preview.frame)")
     XCTAssertTrue(app.staticTexts["4 lines"].exists)
     app.buttons["Ask Muse"].firstMatch.click()
     let composer = self.composer(app)
@@ -518,6 +536,9 @@ final class MMacUITests: XCTestCase {
     let command = sheet.textFields["Command"]
     command.click()
     command.typeText("npx")
+    // Each click focused its own field: the text went where it was typed.
+    XCTAssertEqual(name.value as? String, "files")
+    XCTAssertEqual(command.value as? String, "npx")
     let arguments = sheet.textViews["Arguments, one per line"]
     arguments.click()
     // Return in a multi-line field makes a new line; it never presses Add server.
@@ -690,12 +711,20 @@ final class MMacUITests: XCTestCase {
     second.hover()
     let pin = app.buttons["pin-button"]
     XCTAssertTrue(pin.waitForExistence(timeout: 5), app.debugDescription)
+    // On screen, not only in the tree: the live run found the id but saw no button.
+    XCTAssertTrue(pin.isHittable, "The pin button is not hittable: \(pin.frame)")
     XCTAssertEqual(pin.label, "Pin Second fake conversation")
     pin.click()
     waitUntilLogged(log, ["method": "preferences", "args": [["pinnedSessionIds": ["fake-2"]]]])
     // The row moves to the Pinned group and shows the pin icon.
     XCTAssertTrue(app.staticTexts["Pinned"].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.images["Pinned"].waitForExistence(timeout: 5))
+    // A pinned row shows the button too, as Unpin. Off the row first, so the hover is a new one.
+    app.staticTexts["Third fake conversation"].firstMatch.hover()
+    second.hover()
+    let unpin = app.buttons["pin-button"]
+    XCTAssertTrue(unpin.wait(for: \.label, toEqual: "Unpin Second fake conversation", timeout: 5), app.debugDescription)
+    XCTAssertTrue(unpin.isHittable, "The unpin button is not hittable: \(unpin.frame)")
     // The pin did not open the row.
     XCTAssertTrue(try Self.requests(log, "open").isEmpty)
     // The context menu now offers Unpin.
@@ -772,13 +801,20 @@ final class MMacUITests: XCTestCase {
     openSecondConversation(app)
     let composer = self.composer(app)
 
-    // `/` shows the ten commands.
+    // `/` shows the eleven commands, as the Help sheet lists them.
     composer.click()
     composer.typeText("/")
-    XCTAssertTrue(element(app, "composer-commands").waitForExistence(timeout: 5), app.debugDescription)
-    for name in ["clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help"] {
+    let popup = element(app, "composer-commands")
+    XCTAssertTrue(popup.waitForExistence(timeout: 5), app.debugDescription)
+    for name in ["clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help", "btw"] {
       XCTAssertTrue(element(app, "command-\(name)").exists, "No /\(name) row")
     }
+    // The eleventh row peeks above the popup's bottom edge, so the list reads as one that
+    // scrolls; the live run saw ten whole rows and no /btw. A scroll brings it fully in.
+    let btw = element(app, "command-btw")
+    XCTAssertLessThan(btw.frame.minY, popup.frame.maxY - 4, "/btw at \(btw.frame) is hidden under \(popup.frame)")
+    popup.scroll(byDeltaX: 0, deltaY: -200)
+    XCTAssertTrue(btw.isHittable, "/btw is not hittable after a scroll: \(btw.frame) in \(popup.frame)")
     // Typing filters the list, and Tab completes the highlighted command and a space.
     composer.typeText("he")
     XCTAssertTrue(element(app, "command-clear").waitForNonExistence(timeout: 5))
@@ -977,6 +1013,60 @@ final class MMacUITests: XCTestCase {
     quit(app)
     XCTAssertTrue(try Self.requests(log, "terminal").isEmpty)
     XCTAssertTrue(try Self.requests(log, "cli-terminal").isEmpty)
+  }
+
+  /// The live run's layout faults at the default 900-point window: Send cut at the right edge,
+  /// the split view running past both window edges with the inspector open, the inspector's tabs
+  /// past the right edge, and the Files tab widening the inspector until it ran past both of its
+  /// edges, even after leaving Files. No Window › Zoom here: the default size is the point.
+  func testTheWindowFitsAtItsDefaultWidth() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    let app = try launchFake(log: log)
+    waitUntilConnected(app)
+    let window = app.windows["main"]
+    // A test run has no saved frame, so the window opens at its default size.
+    XCTAssertEqual(window.frame.width, 900, accuracy: 1, "The window opened at \(window.frame)")
+
+    // A new conversation in the fake's Git project: the worktree toggle is in the row too.
+    let send = element(app, "send-button")
+    XCTAssertTrue(send.waitForExistence(timeout: 10))
+    assertInside(send, window, "Send")
+
+    let toggle = app.buttons["Toggle project inspector"]
+    waitForValue(toggle, "Hidden")
+    toggle.click()
+    waitForValue(toggle, "Shown")
+    let tabs = element(app, "inspector-tabs")
+    XCTAssertTrue(tabs.waitForExistence(timeout: 10), app.debugDescription)
+    assertInside(tabs, window, "The inspector's tab bar")
+    assertInside(app.buttons["New conversation"].firstMatch, window, "The sidebar's New conversation")
+    assertInside(send, window, "Send, with the inspector open")
+
+    // The Files tab: its rows and preview stay in the column, and the tab bar with them.
+    selectTab(app, "Files")
+    let notes = app.buttons["notes.md"]
+    XCTAssertTrue(notes.waitForExistence(timeout: 10))
+    assertInside(notes, window, "The Files row notes.md")
+    assertInside(tabs, window, "The inspector's tab bar on Files")
+    notes.click()
+    let preview = app.textViews["file-preview"]
+    XCTAssertTrue(preview.waitForExistence(timeout: 10))
+    XCTAssertGreaterThan(preview.frame.width, 20, "The preview is \(preview.frame)")
+    assertInside(preview, window, "The file preview")
+
+    // Back on Changes, nothing stays wide.
+    selectTab(app, "Changes")
+    let changed = app.buttons["notes.md, Project root, Untracked"]
+    XCTAssertTrue(changed.waitForExistence(timeout: 10))
+    assertInside(changed, window, "The changed file notes.md")
+    assertInside(tabs, window, "The inspector's tab bar back on Changes")
+    assertInside(app.buttons["New conversation"].firstMatch, window, "The sidebar's New conversation after Files")
+    assertInside(send, window, "Send after Files")
+
+    // Off again, so the run leaves the real defaults as they were.
+    app.typeKey("i", modifierFlags: [.command, .option])
+    waitForValue(toggle, "Hidden")
+    quit(app)
   }
 
   func testM5aAgainstTheFakeBackend() throws {
