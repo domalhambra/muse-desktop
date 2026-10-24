@@ -66,7 +66,9 @@ export function checkCron(expression: string): string | undefined {
 // goes back in time, so dueTime and nextRun agree and each wall time runs once.
 // cron-parser 5.10.2's own tz handling skips or repeats times inside the changed hour.
 // An expression whose hour field is * runs every real hour instead (25 runs on a fall-back
-// day, 23 on a spring-forward day): see hourlyTimes.
+// day, 23 on a spring-forward day): see hourlyTimes. Lord Howe's 30-minute changes give an
+// hourly task one extra nextRun at the change. `0 */1 * * *` and `0 0-23 * * *` are not hour *,
+// so they take the wall-clock path and run 24 times on a change day.
 
 const HOUR = 60 * 60 * 1000
 const formatters = new Map<string, Intl.DateTimeFormat>()
@@ -97,8 +99,9 @@ function offsetAt(instant: number, tz: string | undefined): number {
 const toWall = (instant: number, tz: string | undefined) => instant + offsetAt(instant, tz)
 
 function fromWall(wall: number, tz: string | undefined): number {
-  const before = wall - offsetAt(wall - 12 * HOUR, tz)
-  const after = wall - offsetAt(wall + 12 * HOUR, tz)
+  // Offsets run from UTC-12 to UTC+14, so probes 14 hours either side straddle the change.
+  const before = wall - offsetAt(wall - 14 * HOUR, tz)
+  const after = wall - offsetAt(wall + 14 * HOUR, tz)
   const valid = [before, after].filter((instant) => toWall(instant, tz) === wall)
   // Neither is valid in a skipped hour: the old offset moves the time forward by the gap.
   return valid.length > 0 ? Math.min(...valid) : before
@@ -119,7 +122,7 @@ function hourlyTimes(expression: string, reference: number, tz: string | undefin
   const m = Number(minute) * 60 * 1000
   const phase = (((m - offsetAt(reference, tz)) % HOUR) + HOUR) % HOUR
   const days = CronExpressionParser.parse(expression, { tz: 'UTC' })
-  const day = (instant: number) => {
+  const localDayAtMinute = (instant: number) => {
     const wall = toWall(instant, tz)
     return wall - (wall % (24 * HOUR)) + m
   }
@@ -128,7 +131,7 @@ function hourlyTimes(expression: string, reference: number, tz: string | undefin
     /** The first instant at or before `instant` that fires. */
     atOrBefore(instant: number): number {
       let t = onGrid(instant)
-      while (!days.includesDate(new Date(day(t)))) {
+      while (!days.includesDate(new Date(localDayAtMinute(t)))) {
         // Jump to the last hour of the previous matching local day.
         const wall = wallTimes(expression, toWall(t, tz)).prev().toDate().getTime()
         t = onGrid(fromWall(wall - (wall % (24 * HOUR)) + 23 * HOUR + m, tz))
@@ -138,7 +141,7 @@ function hourlyTimes(expression: string, reference: number, tz: string | undefin
     /** The first instant after `instant` that fires. */
     after(instant: number): number {
       let t = onGrid(instant) + HOUR
-      while (!days.includesDate(new Date(day(t)))) {
+      while (!days.includesDate(new Date(localDayAtMinute(t)))) {
         // Jump to the first hour of the next matching local day.
         const wall = wallTimes(expression, toWall(t, tz)).next().toDate().getTime()
         const next = fromWall(wall, tz)

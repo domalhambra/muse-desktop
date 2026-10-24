@@ -96,6 +96,22 @@ describe('schedule rules', () => {
     ])
   })
 
+  it('keeps the same rule in zones thirteen or more hours ahead of UTC', () => {
+    const daily = { ...base, hour: 2, minute: 30 }
+    // Auckland, 2026-04-05: 2:30 happens at 13:30Z (NZDT) and again at 14:30Z (NZST); the first.
+    expect(
+      dueOver(daily, '2026-04-04T10:00:00Z', '2026-04-04T18:00:00Z', 'Pacific/Auckland'),
+    ).toEqual([at('2026-04-04T13:30:00Z')])
+    // Auckland, 2026-09-27: 2:30 NZST does not exist, so it runs at 3:30 NZDT.
+    expect(
+      dueOver(daily, '2026-09-26T10:00:00Z', '2026-09-26T18:00:00Z', 'Pacific/Auckland'),
+    ).toEqual([at('2026-09-26T14:30:00Z')])
+    // Chatham on an ordinary day: 2:30 at UTC+12:45.
+    expect(
+      dueOver(daily, '2026-07-14T10:00:00Z', '2026-07-14T18:00:00Z', 'Pacific/Chatham'),
+    ).toEqual([at('2026-07-14T13:45:00Z')])
+  })
+
   it('runs an hourly task every real hour across a daylight-saving change', () => {
     const tz = 'America/Los_Angeles'
     const hourly = { ...base, preset: 'hourly' as const, minute: 15 }
