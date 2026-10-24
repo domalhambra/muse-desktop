@@ -190,7 +190,10 @@ export class MuseHost {
         .object({ usage: z.unknown().optional() })
         .parse(await this.connection.request('usage/read', {}))
       if (result.usage === undefined) return
-      this.limits = toLimits(result.usage)
+      const next = toLimits(result.usage)
+      // A usage/changed that arrived while the read was in flight is newer: keep it.
+      if (this.limits && next.observedAt < this.limits.observedAt) return
+      this.limits = next
       this.emit({ type: 'usage-changed', limits: this.limits })
     } catch {
       // An older CLI, or a read that failed: the footer stays hidden.
