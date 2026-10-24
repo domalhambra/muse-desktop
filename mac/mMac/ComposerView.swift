@@ -161,7 +161,8 @@ struct ComposerView: View {
           .accessibilityIdentifier("composer-footnote")
       }
     }
-    .padding(12)
+    // `WindowMetrics` holds it, so a test proves the row's minimum fits the column's.
+    .padding(WindowMetrics.composerPadding)
     // A drop outside the text lands here; the text view takes its own through `onDropFiles`.
     // File URLs only, so a web link dragged over the composer neither lights the ring nor drops.
     .onDrop(of: [.fileURL], isTargeted: $draggingOverComposer) { providers in

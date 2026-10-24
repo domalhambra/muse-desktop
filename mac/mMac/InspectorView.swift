@@ -48,7 +48,7 @@ struct InspectorView: View {
     // does, so a turn that ends shows what it changed.
     // The Changes, Files and Activity lists draw on the column's color.
     .scrollContentBackground(.hidden)
-    // The column's own width, whatever its views would like: see `WindowLayout`.
+    // The column's own width, whatever its views would like: see `WindowMetrics`.
     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
     .clipped()
     .background(appearance.colors.dialog)
@@ -109,7 +109,7 @@ struct InspectorView: View {
       Group {
         // Titled segments when all six fit the bar; at the column's narrower widths, icons, whose
         // names (with the counts) VoiceOver and the tooltip still read.
-        if tabBarWidth == 0 || tabBarWidth >= InspectorTab.titledWidth(titles) {
+        if InspectorTabFit.showsTitles(available: tabBarWidth, titleWidths: InspectorTab.titleWidths(titles)) {
           Picker("Inspector view", selection: $inspector.tab) {
             ForEach(Array(InspectorTab.all.enumerated()), id: \.offset) { index, tab in
               Text(titles[index]).tag(tab.tab)
@@ -230,16 +230,10 @@ struct InspectorTab {
     InspectorTab(tab: .preview, title: "Preview", symbol: "globe"),
   ]
 
-  /// Room around each title in a segment: an estimate on the generous side, so titles show only
-  /// when they fit uncut.
-  static let segmentPadding: CGFloat = 24
-
-  /// The width six titled segments need at the control's font.
-  @MainActor static func titledWidth(_ titles: [String]) -> CGFloat {
+  /// Each title's width at the segmented control's font, for `InspectorTabFit`.
+  @MainActor static func titleWidths(_ titles: [String]) -> [CGFloat] {
     let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-    return titles.reduce(0) { total, title in
-      total + ceil((title as NSString).size(withAttributes: [.font: font]).width) + segmentPadding
-    }
+    return titles.map { ($0 as NSString).size(withAttributes: [.font: font]).width }
   }
 
   /// A segment's icon, described by its name.

@@ -55,7 +55,7 @@ final class MMacUITests: XCTestCase {
     // no window at all, and SwiftUI then opens none either.
     // "NSWindow Frame main" in the argument domain overrides any frame AppKit saved in Dom's
     // standard defaults, which it applies before `WindowStateGuard` clears the autosave name, and
-    // writes nothing. It opens every test at the default 900-point width (`WindowLayout`): a
+    // writes nothing. It opens every test at the default 900-point width (`WindowMetrics` in MuseKit): a
     // window frame is its content's width, and 620 points of content under a 28-point title bar.
     app.launchArguments = [
       "-MMacRepository", repository.path, "-NSQuitAlwaysKeepsWindows", "NO", "-ApplePersistenceIgnoreState", "YES",
