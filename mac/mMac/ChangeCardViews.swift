@@ -41,10 +41,7 @@ struct ChangeCardView: View {
         .accessibilityHidden(loaded.isEmpty)
       }
       // A PR merged into an accepted draft copy shows its note at Checked, in place of Accepted.
-      TrackView(
-        track: track,
-        acceptedText: track.step == .accepted || ChangeCardRules.strandedParent(of: pr, in: all) != nil
-          ? ChangeCardRules.acceptedText(pr, in: all) : nil)
+      TrackView(track: track, acceptedText: ChangeCardRules.acceptedText(pr, track: track))
       HStack(spacing: 6) {
         Circle().fill(color(risk.light)).frame(width: 9, height: 9)
         Text(risk.reason).font(.caption).lineLimit(2)

@@ -105,7 +105,10 @@ private func check(_ state: String, _ name: String = "check") -> PullRequestChec
   let pr = PullRequest(number: 9, title: "Usage", baseRefName: "extensions")
   #expect(ChangeCardRules.askWhyPrompt(pr).contains("does not use Git"))
   #expect(ChangeCardRules.askWhyPrompt(pr).contains("pull request 9"))
-  #expect(ChangeCardRules.acceptedText(pr) == "Accepted into extensions")
+  // Only an accepted card says where it landed.
+  #expect(ChangeCardRules.acceptedText(pr, track: ChangeCardRules.track(pr)) == nil)
+  let merged = PullRequest(number: 9, title: "Usage", state: "MERGED", baseRefName: "extensions")
+  #expect(ChangeCardRules.acceptedText(merged, track: ChangeCardRules.track(merged)) == "Accepted into extensions")
 }
 
 @Test func theHeadlineSkipsTildeFencesAndIndentedCode() {
@@ -153,17 +156,37 @@ private func check(_ state: String, _ name: String = "check") -> PullRequestChec
   let child = PullRequest(number: 12, title: "Limits", state: "MERGED", baseRefName: "usage", headRefName: "limits")
   let all = [parent, child]
   #expect(ChangeCardRules.strandedParent(of: child, in: all)?.number == 9)
-  #expect(
-    ChangeCardRules.acceptedText(child, in: all)
-      == "Merged into usage, a draft copy that was already accepted. Move the change onto extensions.")
   let track = ChangeCardRules.track(child, in: all)
-  #expect(track.step.rawValue < ChangeCardRules.Step.accepted.rawValue && !track.failing)
+  #expect(track.step == .checked && !track.failing)
+  #expect(track.movesOnto == "extensions")
+  #expect(
+    ChangeCardRules.acceptedText(child, track: track)
+      == "Merged into usage, a draft copy that was already accepted. Move the change onto extensions.")
   // The parent itself, and a merged PR whose base no merged PR heads, read as accepted.
   #expect(ChangeCardRules.strandedParent(of: parent, in: all) == nil)
-  #expect(ChangeCardRules.acceptedText(parent, in: all) == "Accepted into extensions")
-  #expect(ChangeCardRules.track(parent, in: all).step == .accepted)
+  let parentTrack = ChangeCardRules.track(parent, in: all)
+  #expect(parentTrack.step == .accepted && parentTrack.movesOnto == nil)
+  #expect(ChangeCardRules.acceptedText(parent, track: parentTrack) == "Accepted into extensions")
   // An open parent on that branch is not an accepted draft copy.
   let open = PullRequest(number: 9, title: "Usage", baseRefName: "extensions", headRefName: "usage")
   #expect(ChangeCardRules.strandedParent(of: child, in: [open, child]) == nil)
   #expect(ChangeCardRules.track(child, in: [open, child]).step == .accepted)
+}
+
+@Test func aChainOfAcceptedDraftCopiesPointsAtTheFirstRealBase() {
+  // A went into main, B into A's branch, C into B's branch: C's change belongs on main.
+  let a = PullRequest(number: 1, title: "A", state: "MERGED", baseRefName: "main", headRefName: "a")
+  let b = PullRequest(number: 2, title: "B", state: "MERGED", baseRefName: "a", headRefName: "b")
+  let c = PullRequest(number: 3, title: "C", state: "MERGED", baseRefName: "b", headRefName: "c")
+  #expect(ChangeCardRules.strandedParent(of: c, in: [a, b, c])?.number == 2)
+  #expect(ChangeCardRules.track(c, in: [a, b, c]).movesOnto == "main")
+  // An open PR on C's branch is told the same base.
+  let d = PullRequest(number: 4, title: "D", baseRefName: "b", headRefName: "d")
+  #expect(ChangeCardRules.blocker(of: d, in: [a, b, d]) == "Its draft copy was accepted; move it onto main first")
+  // Two merged PRs into each other's branches: the walk stops instead of looping.
+  let x = PullRequest(number: 5, title: "X", state: "MERGED", baseRefName: "y", headRefName: "x")
+  let y = PullRequest(number: 6, title: "Y", state: "MERGED", baseRefName: "x", headRefName: "y")
+  let z = PullRequest(number: 7, title: "Z", state: "MERGED", baseRefName: "x", headRefName: "z")
+  #expect(ChangeCardRules.strandedParent(of: z, in: [x, y, z])?.number == 5)
+  #expect(ChangeCardRules.track(z, in: [x, y, z]).movesOnto != nil)
 }
