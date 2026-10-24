@@ -22,6 +22,23 @@ struct ChangesView: View {
 
   private var list: some View {
     List {
+      // The open conversation's pull request, as a change card.
+      if workspace.view != nil {
+        if let error = workspace.pullRequestError {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(error).font(.caption).foregroundStyle(.themeSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button("Retry") { Task { await workspace.retryPullRequest() } }
+              .controlSize(.small)
+              .accessibilityLabel("Read the pull request again")
+              .accessibilityIdentifier("pull-request-retry")
+          }
+        } else if let pr = workspace.pullRequest {
+          ChangeCardView(pr: pr, all: [pr], workspace: workspace, conversationCard: true)
+            .listRowSeparator(.hidden)
+        }
+      }
       if let error = inspector.error {
         Text(error).foregroundStyle(.red)
       }
@@ -70,6 +87,13 @@ struct ChangesView: View {
       }
     }
     .listStyle(.inset)
+    // The loop only asks the rule; the rule holds the 60-second pace and the first look.
+    .task(id: workspace.view?.session.sessionId) {
+      while !Task.isCancelled {
+        if workspace.shouldPollPullRequest(showingChanges: true, now: .now) { await workspace.refreshPullRequest() }
+        try? await Task.sleep(for: .seconds(15))
+      }
+    }
   }
 
   private func confirmRemove(_ entry: WorktreeEntry) async {

@@ -480,3 +480,9 @@ private func waitFor(_ condition: () -> Bool) async throws {
   let old = try JSONDecoder().decode(SessionView.self, from: Data(viewJSON.utf8))
   #expect(old.cost == nil && old.quota == nil)
 }
+
+@Test func aPullRequestDecodesWithItsChecks() throws {
+  let json = #"{"number":9,"title":"Usage","url":"https://github.com/o/r/pull/9","state":"OPEN","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"main","headRefName":"usage","mergedAt":null,"checks":[{"name":"check","state":"failing"}],"body":"","files":["docs/a.md"],"live":false}"#
+  let pr = try JSONDecoder().decode(PullRequest.self, from: Data(json.utf8))
+  #expect(pr.number == 9 && pr.checks == [PullRequestCheck(name: "check", state: "failing")] && pr.files == ["docs/a.md"])
+}

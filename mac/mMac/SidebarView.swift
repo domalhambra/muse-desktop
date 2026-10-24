@@ -59,6 +59,19 @@ struct SidebarView: View {
           .accessibilityElement(children: .combine)
           .accessibilityIdentifier("project-git-badge")
         }
+        if !workspace.project.isEmpty {
+          Button {
+            controller.sheets.proposedChanges = true
+          } label: {
+            Label("Proposed changes", systemImage: "rectangle.stack.badge.person.crop").lineLimit(1)
+          }
+          .buttonStyle(.plain)
+          .font(.callout)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .contentShape(.rect)
+          .help("The project\u{2019}s pull requests, as change cards")
+          .accessibilityIdentifier("proposed-changes")
+        }
       }
       history
     }
