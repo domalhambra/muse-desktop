@@ -104,11 +104,27 @@ private func schedule(_ preset: String = "daily", minute: Int = 0, cron: String?
 }
 
 @Test func eachPermissionModeSaysWhatItMeansForAnUnattendedRun() {
-  #expect(ScheduleRules.unattendedNote("allowAll")?.contains("without asking") == true)
-  #expect(ScheduleRules.unattendedNote("promptUnmatched")?.contains("waits for you") == true)
-  #expect(ScheduleRules.unattendedNote("onRequest")?.contains("waits for you") == true)
-  #expect(ScheduleRules.unattendedNote("denyUnmatched")?.contains("never waits") == true)
+  #expect(ScheduleRules.unattendedNote("allowAll") == "This task uses every tool without asking.")
+  #expect(ScheduleRules.unattendedNote("promptUnmatched")
+    == "This task waits for your approval when a tool no rule allows needs it. Other scheduled tasks still run.")
+  #expect(ScheduleRules.unattendedNote("onRequest")
+    == "This task waits for your approval when Muse asks for it. Other scheduled tasks still run.")
+  #expect(ScheduleRules.unattendedNote("denyUnmatched")
+    == "This task refuses any tool no rule allows, so it never waits for you.")
   #expect(ScheduleRules.unattendedNote("somethingNew") == nil)
+}
+
+@Test func aRunWaitingForApprovalReadsAsStartedWithItsReason() {
+  let nine = ms(noon.addingTimeInterval(-10_800))
+  #expect(ScheduleRules.historyLine(
+    ScheduleRun(at: nine, outcome: "started", reason: "Waiting for your approval.", sessionId: "s"),
+    now: noon, calendar: utc, locale: locale)
+    == "Started today 9:00\u{202F}AM: Waiting for your approval.")
+  let lastTuesday = ms(noon.addingTimeInterval(-6 * 86_400 - 10_800))
+  #expect(ScheduleRules.historyLine(
+    ScheduleRun(at: lastTuesday, outcome: "started", reason: "Waiting for your approval.", sessionId: "s"),
+    now: noon, calendar: utc, locale: locale)
+    == "Started Tue 9:00\u{202F}AM: Waiting for your approval.")
 }
 
 @Test func theSentencesKeepEnglishDayNamesInAnotherLocale() {

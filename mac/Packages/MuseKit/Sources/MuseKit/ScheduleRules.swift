@@ -59,14 +59,14 @@ public enum ScheduleRules {
   public static func finishedNotice(name: String) -> String { "Scheduled task \(name) finished" }
 
   /// What a permission mode means for a run nobody watches, or nil for a mode this list does not
-  /// know. A run that waits still counts as running, so the backend skips other tasks until it ends.
+  /// know. A run that waits for an approval stops counting as running, so other due tasks run.
   public static func unattendedNote(_ approvalMode: String) -> String? {
     switch ApprovalMode(rawValue: approvalMode) {
-    case .allowAll: "The run uses every tool without asking."
+    case .allowAll: "This task uses every tool without asking."
     case .promptUnmatched:
-      "A tool no rule allows makes the run stop and ask; it waits for you, and other tasks skip until it ends."
-    case .onRequest: "The run can stop and ask; it waits for you, and other tasks skip until it ends."
-    case .denyUnmatched: "A tool no rule allows is refused, so the run never waits for you."
+      "This task waits for your approval when a tool no rule allows needs it. Other scheduled tasks still run."
+    case .onRequest: "This task waits for your approval when Muse asks for it. Other scheduled tasks still run."
+    case .denyUnmatched: "This task refuses any tool no rule allows, so it never waits for you."
     case nil: nil
     }
   }

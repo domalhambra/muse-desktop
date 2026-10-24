@@ -63,15 +63,15 @@ struct SchedulesPane: View {
     }
   }
 
-  /// Runs a Workspace action, then moves any error it reported to the Settings window's alert:
-  /// the Workspace's own alert is in the conversation window.
+  /// Runs a Workspace action, then moves an error it reported to the Settings window's alert:
+  /// the Workspace's own alert is in the conversation window. An error that was already there
+  /// before the action stays in the conversation window.
   private func perform(_ action: @escaping @MainActor () async -> Void, then: (@MainActor () -> Void)? = nil) {
     Task {
-      // Only this action's own error moves to Settings, never one the conversation window showed.
-      workspace.errorMessage = nil
+      let before = workspace.errorMessage
       await action()
       then?()
-      if let error = workspace.errorMessage {
+      if let error = workspace.errorMessage, error != before {
         settings.errorMessage = error
         workspace.errorMessage = nil
       }
