@@ -60,6 +60,52 @@ export function checkCron(expression: string): string | undefined {
   }
 }
 
+// Fire times are found in local wall-clock time, where cron-parser has no daylight-saving
+// changes, and each wall time becomes one instant: a repeated time (fall back) is its first
+// occurrence, and a skipped time (spring forward) moves forward by the gap. The mapping never
+// goes back in time, so dueTime and nextRun agree and each wall time runs once.
+// cron-parser 5.10.2's own tz handling skips or repeats times inside the changed hour.
+
+const HOUR = 60 * 60 * 1000
+const formatters = new Map<string, Intl.DateTimeFormat>()
+
+/** The zone's offset from UTC at this instant, in milliseconds. */
+function offsetAt(instant: number, tz: string | undefined): number {
+  const key = tz ?? ''
+  let format = formatters.get(key)
+  if (!format) {
+    format = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    })
+    formatters.set(key, format)
+  }
+  const part: Record<string, number> = {}
+  for (const { type, value } of format.formatToParts(instant)) part[type] = Number(value)
+  const wall = Date.UTC(part.year, part.month - 1, part.day, part.hour, part.minute, part.second)
+  return wall - Math.floor(instant / 1000) * 1000
+}
+
+const toWall = (instant: number, tz: string | undefined) => instant + offsetAt(instant, tz)
+
+function fromWall(wall: number, tz: string | undefined): number {
+  const before = wall - offsetAt(wall - 12 * HOUR, tz)
+  const after = wall - offsetAt(wall + 12 * HOUR, tz)
+  const valid = [before, after].filter((instant) => toWall(instant, tz) === wall)
+  // Neither is valid in a skipped hour: the old offset moves the time forward by the gap.
+  return valid.length > 0 ? Math.min(...valid) : before
+}
+
+/** Fire times as wall clock, read as if UTC, starting at the given wall time. */
+const wallTimes = (expression: string, wall: number) =>
+  CronExpressionParser.parse(expression, { currentDate: new Date(wall), tz: 'UTC' })
+
 /**
  * The latest fire time after `since` and at or before `now`, no older than seven days: one run,
  * whether this is a minute tick, a restart or a wake. Null when nothing came due.
@@ -72,19 +118,22 @@ export function dueTime(
 ): number | null {
   const expression = schedule.enabled ? cronFor(schedule) : null
   if (!expression) return null
-  // prev() is strictly before currentDate, so start one second past now to include it, then
-  // step back once more if that found a fire time in the second after now.
-  const times = CronExpressionParser.parse(expression, { currentDate: new Date(now + 1000), tz })
-  let latest = times.prev().toDate().getTime()
-  if (latest > now) latest = times.prev().toDate().getTime()
-  return latest > since && latest >= now - SEVEN_DAYS ? latest : null
+  const from = Math.max(since, now - SEVEN_DAYS)
+  // Start past now by more than any offset change, then step back to the first time at or
+  // before now. Instants never decrease as wall times increase, so that one is the latest.
+  const times = wallTimes(expression, toWall(now, tz) + 3 * HOUR)
+  for (;;) {
+    const instant = fromWall(times.prev().toDate().getTime(), tz)
+    if (instant <= now) return instant > from ? instant : null
+  }
 }
 
 export function nextRun(schedule: Schedule, after: number, tz?: string): number | null {
   const expression = cronFor(schedule)
   if (!expression) return null
-  return CronExpressionParser.parse(expression, { currentDate: new Date(after), tz })
-    .next()
-    .toDate()
-    .getTime()
+  const times = wallTimes(expression, toWall(after, tz) - 3 * HOUR)
+  for (;;) {
+    const instant = fromWall(times.next().toDate().getTime(), tz)
+    if (instant > after) return instant
+  }
 }
