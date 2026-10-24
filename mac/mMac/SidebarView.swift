@@ -1,3 +1,4 @@
+import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
@@ -309,7 +310,9 @@ struct SessionRow: View {
         .accessibilityIdentifier("pin-button")
       }
     }
-    .onHover { hovering = $0 }
+    // Not `onHover`: in the live run it never fired on these sidebar rows, though the row's
+    // tooltip showed. `HoverTracker`'s tracking area works whether or not mMac is the active app.
+    .background(HoverTracker { hovering = $0 })
     .help(SessionTitle.of(session))
     // VoiceOver reaches the pin without hovering.
     .accessibilityAction(named: pinned ? "Unpin conversation" : "Pin conversation", togglePin)
@@ -352,6 +355,55 @@ struct SessionRow: View {
           .foregroundStyle(.themeSecondary)
           .monospacedDigit()
       }
+    }
+  }
+}
+
+/// Reports the pointer entering and leaving its frame. An `NSTrackingArea` that is active always,
+/// so it reports while mMac is in the background too, as a tooltip shows then. It takes no clicks.
+struct HoverTracker: NSViewRepresentable {
+  let onChange: @MainActor (Bool) -> Void
+
+  func makeNSView(context: Context) -> TrackingView {
+    let view = TrackingView()
+    view.onChange = onChange
+    return view
+  }
+
+  func updateNSView(_ view: TrackingView, context: Context) {
+    view.onChange = onChange
+  }
+
+  final class TrackingView: NSView {
+    var onChange: (@MainActor (Bool) -> Void)?
+    private var area: NSTrackingArea?
+    private var inside = false
+
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      if let area { removeTrackingArea(area) }
+      let area = NSTrackingArea(
+        rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+      addTrackingArea(area)
+      self.area = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { report(true) }
+    override func mouseExited(with event: NSEvent) { report(false) }
+
+    /// A row that leaves the window, as the list reuses it, is no longer hovered.
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if window == nil { report(false) }
+    }
+
+    /// Clicks go to the row's views above it.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private func report(_ hovering: Bool) {
+      guard hovering != inside else { return }
+      inside = hovering
+      onChange?(hovering)
     }
   }
 }
