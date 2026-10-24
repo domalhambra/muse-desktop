@@ -91,6 +91,12 @@ public final class Workspace {
   public var notice: String?
   /// Bumped by every `showNotice(_:)`, so the same text twice restarts the app's timer.
   public private(set) var noticeCount = 0
+  /// The open conversation's PR, or nil. A gh failure sets `pullRequestError` and stops the poll.
+  public internal(set) var pullRequest: PullRequest?
+  public internal(set) var pullRequestError: String?
+  @ObservationIgnored var lastPullRequestPoll: Date?
+  /// The project's PRs, as change cards.
+  public internal(set) var changeCards: [PullRequest] = []
   public internal(set) var decidingApprovals: Set<String> = []
   public internal(set) var answeringQuestions: Set<String> = []
   public internal(set) var storedOutput: [String: String] = [:]
@@ -381,10 +387,18 @@ public final class Workspace {
     view = nil
     sideView = nil
     childView = nil
+    clearPullRequest()
     mode = .queue
     // As Electron's startNew: back to the normal list.
     showArchived = false
     clearStoredOutput()
+  }
+
+  /// The PR monitor belongs to one conversation: another one starts with a first look of its own.
+  func clearPullRequest() {
+    pullRequest = nil
+    pullRequestError = nil
+    lastPullRequestPoll = nil
   }
 
   /// Stored output belongs to one conversation's items.
@@ -425,7 +439,7 @@ public final class Workspace {
       let opened = try await client.open(sessionId)
       guard sequence == openSequence else { return }
       if opened.session.sessionId != view?.session.sessionId { clearStoredOutput() }
-      if opened.session.sessionId != view?.session.sessionId { sideView = nil; childView = nil }
+      if opened.session.sessionId != view?.session.sessionId { sideView = nil; childView = nil; clearPullRequest() }
       view = opened
       // As Electron: a conversation without a folder shows all projects, so it stays visible.
       project = opened.session.workspaceRoot ?? ""
