@@ -65,8 +65,13 @@ public enum ChangeCardRules {
     }
   }
 
-  public static func track(_ pr: PullRequest) -> Track {
-    if pr.state == "MERGED" { return Track(step: pr.live ? .live : .accepted, failing: false) }
+  /// The step `pr` stands at. `prs` are the cards it is judged against: a PR merged into a draft
+  /// copy that was already accepted stays at Checked, since it never reached its real target.
+  public static func track(_ pr: PullRequest, in prs: [PullRequest] = []) -> Track {
+    if pr.state == "MERGED" {
+      if strandedParent(of: pr, in: prs) != nil { return Track(step: .checked, failing: false) }
+      return Track(step: pr.live ? .live : .accepted, failing: false)
+    }
     if pr.isDraft { return Track(step: .drafted, failing: false) }
     let failing = pr.checks.contains { $0.state == "failing" }
     let pending = pr.checks.contains { $0.state == "pending" }
@@ -109,6 +114,13 @@ public enum ChangeCardRules {
   /// branch that was already accepted, so it must move onto that PR's own base first.
   public static func mergedParent(of pr: PullRequest, in prs: [PullRequest]) -> PullRequest? {
     guard pr.state == "OPEN" else { return nil }
+    return prs.first { $0.state == "MERGED" && $0.number != pr.number && $0.headRefName == pr.baseRefName }
+  }
+
+  /// The merged PR whose head branch is this merged PR's base: this PR was merged into a draft copy
+  /// that was already accepted, so its change never reached that PR's own base.
+  public static func strandedParent(of pr: PullRequest, in prs: [PullRequest]) -> PullRequest? {
+    guard pr.state == "MERGED" else { return nil }
     return prs.first { $0.state == "MERGED" && $0.number != pr.number && $0.headRefName == pr.baseRefName }
   }
 
@@ -206,7 +218,14 @@ public enum ChangeCardRules {
     """
   }
 
-  public static func acceptedText(_ pr: PullRequest) -> String { "Accepted into \(pr.baseRefName)" }
+  /// Where a merged PR landed. Merged into an accepted draft copy, it says so and where to move it.
+  public static func acceptedText(_ pr: PullRequest, in prs: [PullRequest] = []) -> String {
+    if let parent = strandedParent(of: pr, in: prs) {
+      return
+        "Merged into \(pr.baseRefName), a draft copy that was already accepted. Move the change onto \(parent.baseRefName)."
+    }
+    return "Accepted into \(pr.baseRefName)"
+  }
 
   private static func plain(_ text: String) -> String {
     var result = text

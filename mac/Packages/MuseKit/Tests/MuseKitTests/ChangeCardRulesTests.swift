@@ -146,3 +146,24 @@ private func check(_ state: String, _ name: String = "check") -> PullRequestChec
   let inline = "## Summary\n<!-- one line --> \nShown line.\n"
   #expect(ChangeCardRules.headline(title: "Title", body: inline) == "Shown line.")
 }
+
+@Test func aPullRequestMergedIntoAnAcceptedDraftCopyDoesNotReadAsAccepted() {
+  // PR 9 was accepted into extensions; PR 12 was then merged on GitHub into PR 9's branch, usage.
+  let parent = PullRequest(number: 9, title: "Usage", state: "MERGED", baseRefName: "extensions", headRefName: "usage")
+  let child = PullRequest(number: 12, title: "Limits", state: "MERGED", baseRefName: "usage", headRefName: "limits")
+  let all = [parent, child]
+  #expect(ChangeCardRules.strandedParent(of: child, in: all)?.number == 9)
+  #expect(
+    ChangeCardRules.acceptedText(child, in: all)
+      == "Merged into usage, a draft copy that was already accepted. Move the change onto extensions.")
+  let track = ChangeCardRules.track(child, in: all)
+  #expect(track.step.rawValue < ChangeCardRules.Step.accepted.rawValue && !track.failing)
+  // The parent itself, and a merged PR whose base no merged PR heads, read as accepted.
+  #expect(ChangeCardRules.strandedParent(of: parent, in: all) == nil)
+  #expect(ChangeCardRules.acceptedText(parent, in: all) == "Accepted into extensions")
+  #expect(ChangeCardRules.track(parent, in: all).step == .accepted)
+  // An open parent on that branch is not an accepted draft copy.
+  let open = PullRequest(number: 9, title: "Usage", baseRefName: "extensions", headRefName: "usage")
+  #expect(ChangeCardRules.strandedParent(of: child, in: [open, child]) == nil)
+  #expect(ChangeCardRules.track(child, in: [open, child]).step == .accepted)
+}

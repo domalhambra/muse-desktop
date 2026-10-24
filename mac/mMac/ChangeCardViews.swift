@@ -15,7 +15,7 @@ struct ChangeCardView: View {
   @State private var loaded: Set<URL> = []
 
   var body: some View {
-    let track = ChangeCardRules.track(pr)
+    let track = ChangeCardRules.track(pr, in: all)
     let risk = ChangeCardRules.risk(pr.files)
     let blocker = ChangeCardRules.blocker(of: pr, in: all)
     VStack(alignment: .leading, spacing: 10) {
@@ -40,7 +40,11 @@ struct ChangeCardView: View {
         .accessibilityLabel("Before and after")
         .accessibilityHidden(loaded.isEmpty)
       }
-      TrackView(track: track, acceptedText: track.step == .accepted ? ChangeCardRules.acceptedText(pr) : nil)
+      // A PR merged into an accepted draft copy shows its note at Checked, in place of Accepted.
+      TrackView(
+        track: track,
+        acceptedText: track.step == .accepted || ChangeCardRules.strandedParent(of: pr, in: all) != nil
+          ? ChangeCardRules.acceptedText(pr, in: all) : nil)
       HStack(spacing: 6) {
         Circle().fill(color(risk.light)).frame(width: 9, height: 9)
         Text(risk.reason).font(.caption).lineLimit(2)
@@ -171,7 +175,8 @@ struct TrackView: View {
         }
       }
       if let acceptedText {
-        Text(acceptedText).font(.caption).foregroundStyle(.themeSecondary).lineLimit(1).truncationMode(.middle)
+        Text(acceptedText).font(.caption).foregroundStyle(.themeSecondary).lineLimit(3).truncationMode(.middle)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
     .accessibilityElement(children: .ignore)
