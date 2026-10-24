@@ -34,6 +34,18 @@ public enum UsageRules {
     return "\(first) \u{00B7} \(second)"
   }
 
+  /// The footer as VoiceOver reads it: "5-hour 80 percent, week 20 percent", with no "·".
+  public static func spokenFooter(_ limits: SubscriptionLimits, now: Date) -> String {
+    let window = windowLabel(minutes: limits.window.minutes)
+    let first =
+      isStale(resetsAt: limits.window.resetsAt, observedAt: limits.observedAt, now: now)
+      ? "\(window) reset" : "\(window) \(limits.window.usedPercent) percent"
+    let second =
+      isStale(resetsAt: limits.weekly.resetsAt, observedAt: limits.observedAt, now: now)
+      ? "week reset" : "week \(limits.weekly.usedPercent) percent"
+    return "\(first), \(second)"
+  }
+
   /// The higher level of the limits whose numbers still hold.
   public static func footerLevel(_ limits: SubscriptionLimits, now: Date) -> Level {
     var levels: [Level] = [.normal]

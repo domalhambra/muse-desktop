@@ -182,13 +182,14 @@ public final class Workspace {
       defer { beginsRunning -= 1 }
       await refreshSessions()
       await loadModels()
-      await loadLimits()
       if let reopen = reopenSessionId {
         reopenSessionId = nil
         // Not over a conversation the person opened, is opening, or is sending a first message to
         // while history loaded.
         if view == nil, openingSessionId == nil, !submitting { await open(reopen) }
       }
+      // After the reopen, so the footer's read does not hold up the conversation.
+      await loadLimits()
     }
     await refreshProjectGit()
   }

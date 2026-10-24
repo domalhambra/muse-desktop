@@ -81,3 +81,13 @@ private func limits(window: Int = 42, weekly: Int = 18, minutes: Int = 300, obse
   #expect(UsageRules.spoken(name: "Session limit", percent: 42, reset: "resets 3:40 PM")
     == "Session limit 42 percent used, resets 3:40 PM")
 }
+
+@Test func theSpokenFooterHasNoSeparatorAndSaysReset() {
+  let limits = SubscriptionLimits(
+    observedAt: 1_000, tier: "pro", window: .init(usedPercent: 80, resetsAt: 2_000_000, minutes: 300),
+    weekly: .init(usedPercent: 20, resetsAt: 3_000_000))
+  #expect(UsageRules.spokenFooter(limits, now: Date(timeIntervalSince1970: 1))
+    == "5-hour 80 percent, week 20 percent")
+  #expect(UsageRules.spokenFooter(limits, now: Date(timeIntervalSince1970: 2_500))
+    == "5-hour reset, week 20 percent")
+}

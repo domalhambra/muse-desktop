@@ -12,12 +12,16 @@ struct UsageFooter: View {
     TimelineView(.periodic(from: .now, by: 60)) { context in
       Button { showing.toggle() } label: {
         HStack(spacing: 6) {
+          // The warning colour goes on the icon only: amber caption text fails contrast.
           Image(systemName: "gauge.with.dots.needle.33percent")
-          Text(UsageRules.footer(limits, now: context.date)).monospacedDigit()
+            .foregroundStyle(color(UsageRules.footerLevel(limits, now: context.date)))
+          Text(UsageRules.footer(limits, now: context.date))
+            .monospacedDigit()
+            .lineLimit(1)
+            .foregroundStyle(.themeSecondary)
           Spacer()
         }
         .font(.caption)
-        .foregroundStyle(color(UsageRules.footerLevel(limits, now: context.date)))
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .contentShape(.rect)
@@ -25,7 +29,7 @@ struct UsageFooter: View {
       .buttonStyle(.plain)
       .accessibilityIdentifier("usage-footer")
       .accessibilityLabel("Usage limits")
-      .accessibilityValue(UsageRules.footer(limits, now: context.date))
+      .accessibilityValue(UsageRules.spokenFooter(limits, now: context.date))
       .popover(isPresented: $showing, arrowEdge: .trailing) {
         UsagePopover(limits: limits, now: context.date)
       }
@@ -72,7 +76,7 @@ struct UsagePopover: View {
       }
       if !stale {
         ProgressView(value: Double(min(percent, 100)), total: 100)
-          .tint(percent >= 100 ? .red : percent >= 80 ? .orange : .accentColor)
+          .tint(tint(UsageRules.level(percent)))
         Text(reset).font(.caption).foregroundStyle(.themeSecondary)
       }
     }
@@ -81,5 +85,13 @@ struct UsagePopover: View {
       stale
         ? "\(name), reset since last update"
         : UsageRules.spoken(name: name, percent: percent, reset: reset))
+  }
+
+  private func tint(_ level: UsageRules.Level) -> Color {
+    switch level {
+    case .normal: .accentColor
+    case .warning: .orange
+    case .full: .red
+    }
   }
 }
