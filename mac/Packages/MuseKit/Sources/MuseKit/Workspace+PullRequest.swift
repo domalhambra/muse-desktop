@@ -9,19 +9,27 @@ extension Workspace {
   }
 
   /// Reads the open conversation's PR. One read at a time; a reply for a conversation the person
-  /// has left is dropped. A good read clears an earlier error, so the poll starts again.
-  public func refreshPullRequest() async {
+  /// has left is dropped. A good read clears an earlier error, so the poll starts again. When the
+  /// card waits for another PR, the project's cards are read again too, at most once a minute, so
+  /// a parent merged since shows as merged.
+  public func refreshPullRequest(now: Date = .now) async {
     guard let sessionId = view?.session.sessionId, !pullRequestInFlight else { return }
     pullRequestInFlight = true
     defer { pullRequestInFlight = false }
     let sequence = openSequence
     func current() -> Bool { sequence == openSequence && view?.session.sessionId == sessionId }
-    lastPullRequestPoll = .now
+    lastPullRequestPoll = now
     do {
       let found = try await client.pullRequest(sessionId: sessionId)
       guard current() else { return }
       pullRequest = found
       pullRequestError = nil
+      if let found, changeCardsProject == project,
+        ChangeCardRules.dependency(of: found, in: conversationCardSiblings(found)) != nil,
+        lastChangeCardsLoad.map({ now.timeIntervalSince($0) >= 60 }) ?? true
+      {
+        await loadChangeCards(now: now)
+      }
     } catch {
       guard current() else { return }
       pullRequestError = error.localizedDescription
@@ -30,9 +38,10 @@ extension Workspace {
 
   /// Reads the project's PRs. A reply for a project the person has left is dropped. A failure
   /// sets `changeCardsError`.
-  public func loadChangeCards() async {
+  public func loadChangeCards(now: Date = .now) async {
     let project = self.project
     guard !project.isEmpty else { return }
+    lastChangeCardsLoad = now
     do {
       let cards = try await client.pullRequests(project: project)
       guard project == self.project else { return }

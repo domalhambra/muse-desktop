@@ -54,6 +54,9 @@ public enum ChangeCardRules {
     public let step: Step
     /// A check fails: the Checked step shows red.
     public let failing: Bool
+    /// Set when the PR was merged into a draft copy that was already accepted: the branch its change
+    /// must move onto.
+    public var movesOnto: String? = nil
   }
   public enum Light: Sendable { case green, amber, red }
   public struct Risk: Equatable, Sendable {
@@ -65,8 +68,15 @@ public enum ChangeCardRules {
     }
   }
 
-  public static func track(_ pr: PullRequest) -> Track {
-    if pr.state == "MERGED" { return Track(step: pr.live ? .live : .accepted, failing: false) }
+  /// The step `pr` stands at. `prs` are the cards it is judged against: a PR merged into a draft
+  /// copy that was already accepted stays at Checked, since it never reached its real target.
+  public static func track(_ pr: PullRequest, in prs: [PullRequest] = []) -> Track {
+    if pr.state == "MERGED" {
+      if let copy = acceptedCopy(of: pr, in: prs) {
+        return Track(step: .checked, failing: false, movesOnto: copy.target)
+      }
+      return Track(step: pr.live ? .live : .accepted, failing: false)
+    }
     if pr.isDraft { return Track(step: .drafted, failing: false) }
     let failing = pr.checks.contains { $0.state == "failing" }
     let pending = pr.checks.contains { $0.state == "pending" }
@@ -105,18 +115,44 @@ public enum ChangeCardRules {
     prs.first { $0.state == "OPEN" && $0.number != pr.number && $0.headRefName == pr.baseRefName }
   }
 
+  /// The merged PR whose head branch is this PR's base, and the branch the change belongs on: the
+  /// first base up the chain of merged PRs that no merged PR heads. A visited set stops a cycle.
+  private static func acceptedCopy(of pr: PullRequest, in prs: [PullRequest]) -> (
+    parent: PullRequest, target: String
+  )? {
+    var visited: Set<Int> = [pr.number]
+    func merged(heading branch: String) -> PullRequest? {
+      prs.first { $0.state == "MERGED" && !visited.contains($0.number) && $0.headRefName == branch }
+    }
+    guard let parent = merged(heading: pr.baseRefName) else { return nil }
+    var target = parent.baseRefName
+    visited.insert(parent.number)
+    while let next = merged(heading: target) {
+      visited.insert(next.number)
+      target = next.baseRefName
+    }
+    return (parent, target)
+  }
+
   /// The merged PR whose head branch is this open PR's base: accepting this PR would land it in a
-  /// branch that was already accepted, so it must move onto that PR's own base first.
+  /// branch that was already accepted, so it must move onto the first real base first.
   public static func mergedParent(of pr: PullRequest, in prs: [PullRequest]) -> PullRequest? {
     guard pr.state == "OPEN" else { return nil }
-    return prs.first { $0.state == "MERGED" && $0.number != pr.number && $0.headRefName == pr.baseRefName }
+    return acceptedCopy(of: pr, in: prs)?.parent
+  }
+
+  /// The merged PR whose head branch is this merged PR's base: this PR was merged into a draft copy
+  /// that was already accepted, so its change never reached the first real base.
+  public static func strandedParent(of pr: PullRequest, in prs: [PullRequest]) -> PullRequest? {
+    guard pr.state == "MERGED" else { return nil }
+    return acceptedCopy(of: pr, in: prs)?.parent
   }
 
   /// Why Accept and Merge when ready stay off, or nil. mMac never moves the PR itself.
   public static func blocker(of pr: PullRequest, in prs: [PullRequest]) -> String? {
     if let parent = dependency(of: pr, in: prs) { return "Accept PR \(parent.number) first" }
-    if let parent = mergedParent(of: pr, in: prs) {
-      return "Its draft copy was accepted; move it onto \(parent.baseRefName) first"
+    if pr.state == "OPEN", let copy = acceptedCopy(of: pr, in: prs) {
+      return "Its draft copy was accepted; move it onto \(copy.target) first"
     }
     return nil
   }
@@ -206,7 +242,14 @@ public enum ChangeCardRules {
     """
   }
 
-  public static func acceptedText(_ pr: PullRequest) -> String { "Accepted into \(pr.baseRefName)" }
+  /// Where a merged PR landed, from its track, or nil before it is accepted. Merged into an accepted
+  /// draft copy, it says so and where to move it.
+  public static func acceptedText(_ pr: PullRequest, track: Track) -> String? {
+    if let target = track.movesOnto {
+      return "Merged into \(pr.baseRefName), a draft copy that was already accepted. Move the change onto \(target)."
+    }
+    return track.step == .accepted ? "Accepted into \(pr.baseRefName)" : nil
+  }
 
   private static func plain(_ text: String) -> String {
     var result = text

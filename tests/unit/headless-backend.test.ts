@@ -530,6 +530,80 @@ describe('headless backend, M1 methods', () => {
       cliPath: '/opt/muse',
     })
   })
+
+  it('keeps a trust save that is still in flight when a second project is trusted', async () => {
+    const { call, start, preferencesFile, lastPreferences } = harness(fakeMuse(), [0, 0])
+    await start()
+    const a = await folder('a')
+    const b = await folder('b')
+    await call('add-project', a)
+    await call('add-project', b)
+    await Promise.all([call('create', a), call('create', b)])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.trustedProjects].sort()).toEqual([a, b].sort())
+    expect([...(lastPreferences()?.preferences.trustedProjects ?? [])].sort()).toEqual(
+      [a, b].sort(),
+    )
+  })
+
+  it('keeps a recent-project save that is still in flight when a second session opens', async () => {
+    const a = await folder('a')
+    const b = await folder('b')
+    const roots: Record<string, string> = { s1: a, s2: b }
+    const muse = fakeMuse({
+      open: vi.fn(async (sessionId: string) =>
+        view(session({ sessionId, workspaceRoot: roots[sessionId] })),
+      ),
+    })
+    const { call, start, preferencesFile, events } = harness(muse)
+    await start()
+    await Promise.all([call('open', 's1'), call('open', 's2')])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.recentProjects].sort()).toEqual([a, b].sort())
+    // Opening a session whose project is already recent writes nothing and emits nothing.
+    const emitted = events.length
+    await call('open', 's1')
+    expect(events).toHaveLength(emitted)
+    expect(JSON.parse(await readFile(preferencesFile, 'utf8')).recentProjects).toEqual(
+      saved.recentProjects,
+    )
+  })
+
+  it('keeps an add-project save that is still in flight when a second project is added', async () => {
+    const { call, start, preferencesFile, events } = harness()
+    await start()
+    const a = await folder('a')
+    const b = await folder('b')
+    await Promise.all([call('add-project', a), call('add-project', b)])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.recentProjects].sort()).toEqual([a, b].sort())
+    // Adding the project that is already first writes nothing and emits nothing.
+    const emitted = events.length
+    await call('add-project', saved.recentProjects[0])
+    expect(events).toHaveLength(emitted)
+  })
+
+  it('keeps a discovered-projects save that is still in flight when sessions is read again', async () => {
+    const a = await folder('a')
+    const b = await folder('b')
+    const lists = [[a], [b]]
+    const muse = fakeMuse({
+      list: vi.fn(async () => ({
+        sessions: (lists.shift() ?? []).map((root) => session({ workspaceRoot: root })),
+        nextCursor: null,
+      })),
+    })
+    const { call, start, preferencesFile, events } = harness(muse)
+    await start()
+    await Promise.all([call('sessions'), call('sessions')])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.recentProjects].sort()).toEqual([a, b].sort())
+    // A list that finds no new project writes nothing and emits nothing.
+    const emitted = events.length
+    lists.push([a, b])
+    await call('sessions')
+    expect(events).toHaveLength(emitted)
+  })
 })
 
 /** A Git repository with one commit of `a.txt`. Git's global config is kept out. */
@@ -1658,6 +1732,59 @@ describe('headless backend, scheduled tasks', () => {
     const logged = errors.mock.calls.map((args) => String(args[0])).join('\n')
     expect(logged).toContain('internal error at SessionManager.create')
     expect(logged).toContain('queue closed')
+    errors.mockRestore()
+  })
+
+  it('archives the new conversation when its mode or prompt fails, and the history keeps its id', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let next = 0
+    const muse = fakeMuse({
+      create: vi.fn(async (root: string) =>
+        view(session({ sessionId: `run-${++next}`, workspaceRoot: root })),
+      ),
+    })
+    const { call, id, events } = await trustedTask(muse)
+    vi.mocked(muse.send).mockRejectedValueOnce(new Error('MSP -32000: queue closed'))
+    await call('schedule-run', id)
+    vi.mocked(muse.setApprovalMode).mockRejectedValueOnce(new Error('MSP -32602: bad mode'))
+    await call('schedule-run', id)
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason: string; sessionId?: string }[]
+    }[]
+    expect(entry.history.map((run) => [run.outcome, run.reason, run.sessionId])).toEqual([
+      ['failed', 'mMac could not start this scheduled task.', 'run-3'],
+      ['failed', 'mMac could not start this scheduled task.', 'run-2'],
+    ])
+    const saved = events.filter((event) => event.type === 'preferences').at(-1)
+    expect(saved?.type === 'preferences' && saved.preferences.archivedSessionIds).toEqual([
+      'run-2',
+      'run-3',
+    ])
+    errors.mockRestore()
+  })
+
+  it('a failed start’s archive keeps an app Archive that was queued but not yet written', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let next = 0
+    const muse = fakeMuse({
+      create: vi.fn(async (root: string) =>
+        view(session({ sessionId: `run-${++next}`, workspaceRoot: root })),
+      ),
+    })
+    const { call, id, events } = await trustedTask(muse)
+    let appArchive: Promise<unknown> = Promise.resolve()
+    vi.mocked(muse.send).mockImplementationOnce(async () => {
+      // The person archives another conversation while the send fails: its write is queued.
+      appArchive = Promise.resolve(call('preferences', { archivedSessionIds: ['app-1'] }))
+      throw new Error('MSP -32000: queue closed')
+    })
+    await call('schedule-run', id)
+    await appArchive
+    const saved = events.filter((event) => event.type === 'preferences').at(-1)
+    expect(saved?.type === 'preferences' && saved.preferences.archivedSessionIds).toEqual([
+      'app-1',
+      'run-2',
+    ])
     errors.mockRestore()
   })
 

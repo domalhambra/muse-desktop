@@ -45,7 +45,7 @@ import { exportMarkdown, exportTitle } from './export'
 import { MissingFolder, plainError, realFolder } from './plain-errors'
 import { prList, prMerge, prMergeWhenReady, prStatus } from './pull-request'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
-import { Scheduler } from './schedule'
+import { Scheduler, StartFailed } from './schedule'
 import type { Schedule } from './schedule-rules'
 import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
@@ -160,8 +160,17 @@ export function createBackend({
     return preferences
   }
 
-  async function savePreferences(patch: Partial<Preferences>) {
+  /**
+   * Queues one write. A function patch is built from the preferences when the write runs, after
+   * every earlier queued write, so a read-modify-write cannot erase one of them.
+   */
+  async function savePreferences(
+    change: Partial<Preferences> | ((preferences: Preferences) => Partial<Preferences>),
+  ) {
     const write = preferenceWrites.then(async () => {
+      const patch = typeof change === 'function' ? change(current()) : change
+      // An empty patch changes nothing: no write, no event.
+      if (Object.keys(patch).length === 0) return current()
       const snapshot = preferencesSchema.parse({ ...current(), ...patch })
       await writePreferences(preferencePath, snapshot)
       preferences = snapshot
@@ -207,7 +216,9 @@ export function createBackend({
       buttons: ['Trust project', 'Cancel'],
     })
     if (choice !== 0) throw new Error('Project trust was cancelled. No session was started.')
-    await savePreferences({ trustedProjects: [...current().trustedProjects, project] })
+    await savePreferences(({ trustedProjects }) =>
+      trustedProjects.includes(project) ? {} : { trustedProjects: [...trustedProjects, project] },
+    )
   }
 
   async function sessionProject(sessionId: string) {
@@ -233,6 +244,16 @@ export function createBackend({
   /** A reason the person can act on, shown after START_FAILED. */
   class StartProblem extends Error {}
 
+  /** The mode or the prompt failed after create: the conversation exists but holds no prompt. */
+  class CreatedThenFailed extends Error {
+    constructor(
+      readonly sessionId: string,
+      override readonly cause: unknown,
+    ) {
+      super('created then failed')
+    }
+  }
+
   /**
    * A scheduled run: no Ask, so the folder must already be trusted. History shows START_FAILED,
    * with a plain reason where one is known; Muse's own text goes to stderr only.
@@ -242,11 +263,30 @@ export function createBackend({
       return await startScheduledRun(schedule)
     } catch (error) {
       if (error instanceof StartProblem) throw new Error(`${START_FAILED} ${error.message}`)
+      const cause = error instanceof CreatedThenFailed ? error.cause : error
       console.error(
-        `mMac could not start scheduled task ${schedule.id}: ${error instanceof Error ? error.message : String(error)}`,
+        `mMac could not start scheduled task ${schedule.id}: ${cause instanceof Error ? cause.message : String(cause)}`,
       )
+      if (error instanceof CreatedThenFailed) {
+        await archiveFailedRun(error.sessionId)
+        throw new StartFailed(START_FAILED, error.sessionId)
+      }
       throw new Error(START_FAILED)
     }
+  }
+
+  /**
+   * Archives a scheduled run's empty conversation as the app's Archive does, through the
+   * preferences, so it leaves the sidebar but the history can still open it.
+   */
+  async function archiveFailedRun(sessionId: string) {
+    await savePreferences(({ archivedSessionIds: archived }) => ({
+      archivedSessionIds: archived.includes(sessionId) ? archived : [...archived, sessionId],
+    })).catch((error: unknown) =>
+      console.error(
+        `mMac could not archive scheduled conversation ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    )
   }
 
   async function startScheduledRun(schedule: Schedule) {
@@ -271,9 +311,9 @@ export function createBackend({
       worktree: schedule.worktree,
     })
     const sessionId = view.session.sessionId
-    await muse.setApprovalMode(sessionId, schedule.approvalMode)
-    scheduledTurns.set(sessionId, { updatedAt: view.session.updatedAt, since: schedulerNow() })
     try {
+      await muse.setApprovalMode(sessionId, schedule.approvalMode)
+      scheduledTurns.set(sessionId, { updatedAt: view.session.updatedAt, since: schedulerNow() })
       await muse.send(
         sessionId,
         [{ type: 'text', text: schedule.prompt }],
@@ -283,7 +323,7 @@ export function createBackend({
       )
     } catch (error) {
       scheduledTurns.delete(sessionId)
-      throw error
+      throw new CreatedThenFailed(sessionId, error)
     }
     return sessionId
   }
@@ -409,12 +449,16 @@ export function createBackend({
   method('add-project', async (value) => {
     const project = await realFolder(pathSchema.parse(value))
     if (!(await stat(project)).isDirectory()) throw new Error('Choose a folder, not a file.')
-    await savePreferences({
-      recentProjects: [
-        project,
-        ...current().recentProjects.filter((entry) => entry !== project),
-      ].slice(0, 30),
-    })
+    await savePreferences(({ recentProjects }) =>
+      recentProjects[0] === project
+        ? {}
+        : {
+            recentProjects: [project, ...recentProjects.filter((entry) => entry !== project)].slice(
+              0,
+              30,
+            ),
+          },
+    )
     return project
   })
 
@@ -438,14 +482,12 @@ export function createBackend({
         }
       }),
     )
-    const recentProjects = [
-      ...new Set([
-        ...current().recentProjects,
-        ...discovered.filter((root): root is string => root !== null),
-      ]),
-    ].slice(0, 30)
-    if (recentProjects.length !== current().recentProjects.length)
-      await savePreferences({ recentProjects })
+    const found = discovered.filter((root): root is string => root !== null)
+    if (found.length > 0)
+      await savePreferences(({ recentProjects }) => {
+        const next = [...new Set([...recentProjects, ...found])].slice(0, 30)
+        return next.length === recentProjects.length ? {} : { recentProjects: next }
+      })
     return result
   })
 
@@ -461,8 +503,12 @@ export function createBackend({
     const view = await muse.open(id.parse(value))
     // Record a worktree session's parent project, not each worktree folder.
     const root = view.session.workspaceRoot && projectRoot(view.session.workspaceRoot)
-    if (root && !current().recentProjects.includes(root))
-      await savePreferences({ recentProjects: [root, ...current().recentProjects].slice(0, 30) })
+    if (root)
+      await savePreferences(({ recentProjects }) =>
+        recentProjects.includes(root)
+          ? {}
+          : { recentProjects: [root, ...recentProjects].slice(0, 30) },
+      )
     return view
   })
 
