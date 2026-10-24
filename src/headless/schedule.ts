@@ -47,6 +47,7 @@ export class Scheduler {
   private active: { starting: boolean; sessionId?: string } | null = null
   private timer?: ReturnType<typeof setInterval>
   private writes: Promise<void> = Promise.resolve()
+  private ticking: Promise<void> | null = null
 
   constructor(private deps: SchedulerDeps) {}
 
@@ -133,7 +134,18 @@ export class Scheduler {
     await this.run(schedule, null)
   }
 
-  async tick() {
+  /**
+   * Not reentrant: a tick that starts while one runs (a start slower than a minute) waits for
+   * that one instead of checking the tasks again before lastCheckedAt moves.
+   */
+  tick(): Promise<void> {
+    this.ticking ??= this.check().finally(() => {
+      this.ticking = null
+    })
+    return this.ticking
+  }
+
+  private async check() {
     const now = this.now()
     for (const schedule of this.store.schedules) {
       const since = Math.max(this.store.lastCheckedAt, schedule.createdAt)

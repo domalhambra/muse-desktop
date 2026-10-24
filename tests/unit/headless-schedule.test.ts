@@ -188,4 +188,32 @@ describe('Scheduler', () => {
     expect(start).not.toHaveBeenCalled()
     expect(scheduler.list()[0].history[0]).toMatchObject({ outcome: 'failed' })
   })
+
+  it('a tick that starts while one runs does not check the tasks again', async () => {
+    let release = () => {}
+    const blocked = new Promise<void>((resolve) => (release = resolve))
+    const h = harness(
+      vi.fn(async () => {
+        await blocked
+        return 'session-1'
+      }),
+    )
+    await h.scheduler.load()
+    const first = await h.scheduler.save(input)
+    const second = await h.scheduler.save({ ...input, name: 'Second' })
+    h.at('2026-10-26T09:00:30Z')
+    h.running.add('session-1')
+    const one = h.scheduler.tick()
+    const two = h.scheduler.tick()
+    release()
+    await Promise.all([one, two])
+    expect(h.start).toHaveBeenCalledTimes(1)
+    const entries = h.scheduler.list()
+    const ran = entries.find((entry) => entry.schedule.id === first.schedule.id)!
+    const skipped = entries.find((entry) => entry.schedule.id === second.schedule.id)!
+    expect(ran.history).toHaveLength(1)
+    expect(ran.history[0]).toMatchObject({ outcome: 'started' })
+    expect(skipped.history).toHaveLength(1)
+    expect(skipped.history[0]).toMatchObject({ outcome: 'skipped' })
+  })
 })
