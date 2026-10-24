@@ -245,6 +245,7 @@ struct SidebarView: View {
   private var connectionFooter: some View {
     VStack(spacing: 0) {
       Divider()
+      if let limits = workspace.limits { UsageFooter(limits: limits) }
       MuseCodeSettingsButton {
         HStack(spacing: 6) {
           Circle().fill(dotColor).frame(width: 7, height: 7)

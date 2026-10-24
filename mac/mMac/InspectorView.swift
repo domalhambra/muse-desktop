@@ -79,6 +79,14 @@ struct InspectorView: View {
             .accessibilityIdentifier("context-gauge")
             .help("How full this conversation\u{2019}s context window is. Muse compacts it when it fills.")
         }
+        if let line = UsageRules.tokensLine(usage: workspace.view?.usage, cost: workspace.view?.cost) {
+          Text(line)
+            .font(.caption)
+            .foregroundStyle(.themeSecondary)
+            .monospacedDigit()
+            .accessibilityIdentifier("usage-line")
+            .help("This conversation\u{2019}s tokens, and Muse\u{2019}s estimate of its cost.")
+        }
       }
       Spacer(minLength: 0)
     }

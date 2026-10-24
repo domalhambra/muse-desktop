@@ -37,7 +37,10 @@ struct TranscriptView: View {
           ForEach(entries) { entry in EntryView(entry: entry, controller: controller, workspace: workspace) }
           ForEach(view.approvals) { approval in ApprovalCard(approval: approval, workspace: workspace) }
           ForEach(view.questions) { question in QuestionCard(question: question, workspace: workspace) }
-          if let error = view.error { TurnErrorView(message: error) }
+          if let error = view.error {
+            TurnErrorView(
+              message: view.quota.map { UsageRules.stopBanner($0, limits: workspace.limits, now: .now) } ?? error)
+          }
           Color.clear.frame(height: 1).id(Self.bottom)
         }
         .padding(20)
