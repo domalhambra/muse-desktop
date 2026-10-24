@@ -459,3 +459,20 @@ private func waitFor(_ condition: () -> Bool) async throws {
   let old = try JSONDecoder().decode(SessionView.self, from: Data(viewJSON.utf8))
   #expect(old.cost == nil && old.quota == nil)
 }
+
+@Test func aScheduleEntryAndItsEventsDecode() throws {
+  let json = #"{"schedule":{"id":"a","name":"Morning review","prompt":"Review.","folder":"/p","preset":"daily","minute":0,"hour":9,"weekday":1,"approvalMode":"onRequest","modelId":null,"worktree":false,"enabled":true,"createdAt":1},"nextRunAt":1800000000000,"history":[{"at":2,"scheduledFor":null,"outcome":"skipped","reason":"Another scheduled task was running."}]}"#
+  let entry = try JSONDecoder().decode(ScheduleEntry.self, from: Data(json.utf8))
+  #expect(entry.schedule.preset == "daily" && entry.nextRunAt == 1_800_000_000_000)
+  #expect(entry.history.first?.reason == "Another scheduled task was running.")
+  let started = try JSONDecoder().decode(AppEvent.self, from: Data(#"{"type":"schedule-run-started","scheduleId":"a","name":"Morning review","sessionId":"s"}"#.utf8))
+  #expect(started == .scheduleRunStarted(scheduleId: "a", name: "Morning review", sessionId: "s"))
+  let changed = try JSONDecoder().decode(AppEvent.self, from: Data(#"{"type":"schedules-changed"}"#.utf8))
+  #expect(changed == .schedulesChanged)
+}
+
+@Test func aNewScheduleInputLeavesOutItsId() throws {
+  let input = ScheduleInput(name: "N", prompt: "P", folder: "/p", preset: "manual", minute: 0, hour: 9, weekday: 1, approvalMode: "onRequest")
+  guard case .object(let object) = try JSONValue(encoding: input) else { Issue.record("not an object"); return }
+  #expect(object["id"] == nil && object["name"] == .string("N") && object["worktree"] == .bool(false))
+}

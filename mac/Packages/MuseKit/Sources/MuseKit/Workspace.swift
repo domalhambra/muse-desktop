@@ -307,6 +307,8 @@ public final class Workspace {
       break
     case .error(let message):
       errorMessage = message
+    case .scheduleRunStarted, .schedulesChanged:
+      break
     case .other:
       break
     }

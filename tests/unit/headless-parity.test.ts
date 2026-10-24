@@ -71,6 +71,12 @@ const expected = [
   // The inspector's footer
   'terminal',
   'cli-terminal',
+  // Scheduled tasks
+  'schedule-list',
+  'schedule-save',
+  'schedule-remove',
+  'schedule-run',
+  'schedule-enabled',
 ]
 
 const swiftFolder = new URL('../../mac/Packages/MuseBackend/Sources/MuseBackend/', import.meta.url)
@@ -89,7 +95,7 @@ describe('the backend method list', () => {
       [...methods].sort(),
       'Register a method with a literal method(…) call, and list it in expected here',
     ).toEqual([...expected].sort())
-    expect(expected).toHaveLength(48)
+    expect(expected).toHaveLength(53)
   })
 
   it('gives every method a call in MuseBackend', () => {

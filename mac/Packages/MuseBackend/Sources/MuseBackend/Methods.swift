@@ -257,6 +257,24 @@ extension BackendClient {
     _ = try await request("cancel-voice")
   }
 
+  // Scheduled tasks.
+
+  public func schedules() async throws -> [ScheduleEntry] { try await call("schedule-list") }
+
+  /// Saves a new task (nil `id`) or replaces one.
+  public func saveSchedule(_ input: ScheduleInput) async throws -> ScheduleEntry {
+    try await call("schedule-save", [JSONValue(encoding: input)])
+  }
+
+  public func removeSchedule(id: String) async throws { _ = try await request("schedule-remove", [.string(id)]) }
+
+  /// Runs the task now. A failed start lands in its history, not here.
+  public func runSchedule(id: String) async throws { _ = try await request("schedule-run", [.string(id)]) }
+
+  public func setScheduleEnabled(id: String, enabled: Bool) async throws {
+    _ = try await request("schedule-enabled", [.string(id), .bool(enabled)])
+  }
+
   /// Asks the backend to quit, then waits for it to exit.
   /// Returns false when the person chose to keep Muse working.
   public func shutdown(timeout: Duration = .seconds(5)) async throws -> Bool {

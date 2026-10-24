@@ -115,6 +115,7 @@ function harness(
     askStartsQuit?: boolean
     dataFolder?: string
     voice?: NonNullable<BackendDeps['voice']>
+    scheduler?: BackendDeps['scheduler']
   } = {},
 ) {
   const asks: Ask[] = []
@@ -152,6 +153,7 @@ function harness(
     },
     bridgeFactories,
     voice,
+    scheduler: options.scheduler ?? { timer: false, tz: 'UTC' },
     ask: async (value) => {
       asks.push(value)
       // A quit that starts while the Ask shows: the answer still comes back.
@@ -1476,5 +1478,200 @@ describe('headless backend, M3 bridges', () => {
     const worktree = join(project, '.muse', 'worktrees', 'w1')
     await mkdir(worktree, { recursive: true })
     expect(await h.agentPolicy().resolveProject(worktree)).toBe(worktree)
+  })
+})
+
+describe('headless backend, scheduled tasks', () => {
+  const task = (folder: string) => ({
+    name: 'Morning review',
+    prompt: 'Review yesterday’s commits.',
+    folder,
+    preset: 'manual',
+    minute: 0,
+    hour: 9,
+    weekday: 1,
+    approvalMode: 'onRequest',
+    modelId: 'm1',
+    worktree: false,
+    enabled: true,
+  })
+
+  /** A known project, trusted through the create path's Ask, with one saved task. */
+  async function trustedTask(muse = fakeMuse()) {
+    const project = await folder('project')
+    const h = harness(muse, [0])
+    await h.start()
+    await h.call('add-project', project)
+    await h.call('create', project)
+    vi.mocked(muse.create).mockClear()
+    const saved = (await h.call('schedule-save', task(project))) as { schedule: { id: string } }
+    return { ...h, muse, project, id: saved.schedule.id }
+  }
+
+  it('saves a task for a known folder and lists it', async () => {
+    const project = await folder('project')
+    const { call, start, events } = harness()
+    await start()
+    await call('add-project', project)
+    const saved = (await call('schedule-save', task(project))) as { schedule: { id: string } }
+    const list = (await call('schedule-list')) as { schedule: { id: string } }[]
+    expect(list.map((entry) => entry.schedule.id)).toEqual([saved.schedule.id])
+    expect(events.some((event) => event.type === 'schedules-changed')).toBe(true)
+    await expect(call('schedule-save', task(join(dir, 'unknown')))).rejects.toThrow()
+    await mkdir(join(dir, 'other'))
+    await expect(call('schedule-save', task(join(dir, 'other')))).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+  })
+
+  it('runs a task in a trusted folder: create, mode, send', async () => {
+    const { call, muse, id, project, events } = await trustedTask()
+    await call('schedule-run', id)
+    expect(muse.create).toHaveBeenCalledWith(project, 'm1', { worktree: false })
+    expect(muse.setApprovalMode).toHaveBeenCalledWith('s1', 'onRequest')
+    expect(muse.send).toHaveBeenCalledWith(
+      's1',
+      [{ type: 'text', text: 'Review yesterday’s commits.' }],
+      'high',
+      'queue',
+      'Review yesterday’s commits.',
+    )
+    expect(events).toContainEqual({
+      type: 'schedule-run-started',
+      scheduleId: id,
+      name: 'Morning review',
+      sessionId: 's1',
+    })
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; sessionId?: string }[]
+    }[]
+    expect(entry.history[0]).toMatchObject({ outcome: 'started', sessionId: 's1' })
+  })
+
+  it('counts a started run as running until its turn ends', async () => {
+    let current = session()
+    const muse = fakeMuse({ getSession: vi.fn(() => current) })
+    const { call, id } = await trustedTask(muse)
+    await call('schedule-run', id)
+    // send has returned but turn/started has not arrived yet: still busy.
+    await expect(call('schedule-run', id)).rejects.toThrow(
+      'Another scheduled task is running. Try again when it finishes.',
+    )
+    current = session({ activeTurnId: 't1', status: 'running' })
+    await expect(call('schedule-run', id)).rejects.toThrow('Another scheduled task is running.')
+    current = session({ updatedAt: '2026-10-21T00:05:00Z' })
+    await call('schedule-run', id)
+    expect(muse.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('counts a turn that ended before it was seen as finished, and a gone session as idle', async () => {
+    let gone = false
+    let current = session()
+    const muse = fakeMuse({
+      getSession: vi.fn(() => {
+        if (gone) throw new Error('Open this conversation before performing an action.')
+        return current
+      }),
+    })
+    const { call, id } = await trustedTask(muse)
+    await call('schedule-run', id)
+    // turn/completed moved updatedAt, though no check saw activeTurnId set.
+    current = session({ updatedAt: '2026-10-21T00:10:00Z' })
+    await call('schedule-run', id)
+    gone = true
+    await call('schedule-run', id)
+    expect(muse.send).toHaveBeenCalledTimes(3)
+  })
+
+  it('stops counting a run whose turn never starts after ten minutes', async () => {
+    let now = Date.parse('2026-10-21T08:00:00Z')
+    const muse = fakeMuse()
+    const project = await folder('project')
+    const h = harness(muse, [0], { scheduler: { timer: false, tz: 'UTC', now: () => now } })
+    await h.start()
+    await h.call('add-project', project)
+    await h.call('create', project)
+    const saved = (await h.call('schedule-save', task(project))) as { schedule: { id: string } }
+    await h.call('schedule-run', saved.schedule.id)
+    now += 9 * 60_000
+    await expect(h.call('schedule-run', saved.schedule.id)).rejects.toThrow('Another scheduled')
+    now += 2 * 60_000
+    await h.call('schedule-run', saved.schedule.id)
+    expect(muse.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('records a plain failure for a folder that is not trusted', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse()
+    const { call, start } = harness(muse)
+    await start()
+    await call('add-project', project)
+    const saved = (await call('schedule-save', task(project))) as { schedule: { id: string } }
+    await call('schedule-run', saved.schedule.id)
+    expect(muse.create).not.toHaveBeenCalled()
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason: string }[]
+    }[]
+    expect(entry.history[0]).toMatchObject({
+      outcome: 'failed',
+      reason: 'The folder is not trusted in mMac. Open it and send a message there first.',
+    })
+  })
+
+  it('records a plain failure, not a Node error, for a folder that is gone', async () => {
+    const { call, muse, id, project } = await trustedTask()
+    await rm(project, { recursive: true })
+    await call('schedule-run', id)
+    expect(muse.create).not.toHaveBeenCalled()
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason: string }[]
+    }[]
+    expect(entry.history[0].outcome).toBe('failed')
+    expect(entry.history[0].reason).toBe(
+      'The folder for this task no longer exists, or mMac cannot open it.',
+    )
+  })
+
+  it('turns a failed store write into a plain sentence', async () => {
+    const project = await folder('project')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', project)
+    const saved = (await call('schedule-save', task(project))) as { schedule: { id: string } }
+    await rm(join(dir, 'data'), { recursive: true })
+    const plain = 'mMac could not save scheduled tasks.'
+    await expect(call('schedule-save', task(project))).rejects.toThrow(plain)
+    await expect(call('schedule-enabled', saved.schedule.id, false)).rejects.toThrow(plain)
+    await expect(call('schedule-remove', saved.schedule.id)).rejects.toThrow(plain)
+    await expect(call('schedule-save', task(project))).rejects.not.toThrow(/ENOENT|\.tmp/)
+  })
+
+  it('pauses and removes a task', async () => {
+    const project = await folder('project')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', project)
+    const saved = (await call('schedule-save', task(project))) as { schedule: { id: string } }
+    await call('schedule-enabled', saved.schedule.id, false)
+    const [paused] = (await call('schedule-list')) as { schedule: { enabled: boolean } }[]
+    expect(paused.schedule.enabled).toBe(false)
+    await expect(call('schedule-enabled', saved.schedule.id, 'no')).rejects.toThrow()
+    await call('schedule-remove', saved.schedule.id)
+    expect(await call('schedule-list')).toEqual([])
+    await expect(call('schedule-run', saved.schedule.id)).rejects.toThrow(
+      'This scheduled task no longer exists.',
+    )
+  })
+
+  it('keeps tasks in the data folder across a restart, and stops on the quit path', async () => {
+    const project = await folder('project')
+    const first = harness()
+    await first.start()
+    await first.call('add-project', project)
+    await first.call('schedule-save', task(project))
+    first.backend.stopScheduler()
+    const second = harness()
+    await second.start()
+    expect((await second.call('schedule-list')) as unknown[]).toHaveLength(1)
   })
 })

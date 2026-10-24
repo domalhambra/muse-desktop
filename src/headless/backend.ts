@@ -43,6 +43,8 @@ import { Attachments } from './attachments'
 import { Bridges, type BridgeFactories } from './bridges'
 import { exportMarkdown, exportTitle } from './export'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
+import { Scheduler } from './schedule'
+import type { Schedule } from './schedule-rules'
 import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
@@ -99,6 +101,8 @@ export type BackendDeps = {
   bridgeFactories?: BridgeFactories
   /** Runs `muse voice transcribe`. Tests pass a fake; the default is src/main/voice.ts's. */
   voice?: { transcribe(data: Buffer, cliPath: string): Promise<string>; cancel(): Promise<void> }
+  /** Scheduled tasks. Tests pass `{ timer: false }` and call the methods; the default ticks every minute. */
+  scheduler?: { timer?: boolean; now?: () => number; tz?: string }
 }
 
 export function createBackend({
@@ -112,6 +116,7 @@ export function createBackend({
   agent,
   bridgeFactories,
   voice = new VoiceTranscriber(),
+  scheduler: schedulerOptions = {},
 }: BackendDeps) {
   const id = z.string().min(1).max(200)
   const pathSchema = z.string().min(1).max(4096)
@@ -122,6 +127,7 @@ export function createBackend({
   let preferencePath = ''
   let preferenceWrites: Promise<void> = Promise.resolve()
   let bridges: Bridges | undefined
+  let scheduler: Scheduler | undefined
   // Files chosen for the next message. Memory only, as in Electron.
   const attachments = new Attachments()
 
@@ -199,6 +205,72 @@ export function createBackend({
     return project
   }
 
+  // Scheduled runs whose turn mMac has not yet seen start: send returns before turn/started
+  // arrives, and the Scheduler asks isRunning right after start returns. Each entry keeps the
+  // session's updatedAt from before the send (turn/completed moves it) and when it started.
+  const scheduledTurns = new Map<string, { updatedAt: string; since: number }>()
+  const TURN_START_LIMIT = 10 * 60_000
+  const schedulerNow = () => (schedulerOptions.now ?? Date.now)()
+  /** A Node file error (it would name a path) rather than a sentence for the person. */
+  const systemError = (error: unknown) =>
+    typeof (error as { code?: unknown } | null)?.code === 'string' &&
+    /^E[A-Z]+$/.test((error as { code: string }).code)
+
+  /** A scheduled run: no Ask, so the folder must already be trusted. Every error is a sentence. */
+  async function startScheduled(schedule: Schedule) {
+    const folder = await knownProject(schedule.folder).catch((error: unknown) => {
+      throw systemError(error)
+        ? new Error('The folder for this task no longer exists, or mMac cannot open it.')
+        : error
+    })
+    const trusted = current().trustedProjects
+    if (!trusted.includes(folder) && !trusted.includes(projectRoot(folder)))
+      throw new Error('The folder is not trusted in mMac. Open it and send a message there first.')
+    const view = await muse.create(folder, schedule.modelId ?? undefined, {
+      worktree: schedule.worktree,
+    })
+    const sessionId = view.session.sessionId
+    await muse.setApprovalMode(sessionId, schedule.approvalMode)
+    scheduledTurns.set(sessionId, { updatedAt: view.session.updatedAt, since: schedulerNow() })
+    try {
+      await muse.send(
+        sessionId,
+        [{ type: 'text', text: schedule.prompt }],
+        current().reasoningEffort,
+        'queue',
+        schedule.prompt,
+      )
+    } catch (error) {
+      scheduledTurns.delete(sessionId)
+      throw error
+    }
+    return sessionId
+  }
+
+  /** True while the turn runs, or was sent and has not yet started. A gone session is not. */
+  function scheduledRunning(sessionId: string) {
+    let session
+    try {
+      session = muse.getSession(sessionId)
+    } catch {
+      scheduledTurns.delete(sessionId)
+      return false
+    }
+    if (session.activeTurnId != null || session.status === 'running') {
+      scheduledTurns.delete(sessionId)
+      return true
+    }
+    const waiting = scheduledTurns.get(sessionId)
+    if (
+      waiting &&
+      session.updatedAt === waiting.updatedAt &&
+      schedulerNow() - waiting.since < TURN_START_LIMIT
+    )
+      return true
+    scheduledTurns.delete(sessionId)
+    return false
+  }
+
   method('hello', (value) => {
     const theirs = z.number().int().parse(value)
     if (theirs !== HEADLESS_PROTOCOL) {
@@ -223,6 +295,15 @@ export function createBackend({
       await mkdir(dataFolder, { recursive: true, mode: 0o700 })
       preferencePath = join(dataFolder, 'preferences.json')
       preferences = await readPreferences(preferencePath)
+      scheduler = new Scheduler({
+        file: join(dataFolder, 'schedules.json'),
+        now: schedulerOptions.now,
+        tz: schedulerOptions.tz,
+        start: startScheduled,
+        isRunning: scheduledRunning,
+        emit,
+      })
+      await scheduler.load()
       if (agent) {
         // Bridges: other agents drive Muse Code through mMac, limited to projects mMac
         // already knows and trusts, as in src/main/index.ts.
@@ -250,6 +331,7 @@ export function createBackend({
     if (quitting()) throw new Error('The backend is quitting.')
     const status = await muse.connect(preferences.cliPath)
     await bridges?.sync() // As Electron does, after the first connect.
+    if (schedulerOptions.timer !== false && !quitting()) scheduler?.start()
     return { preferences, status }
   })
 
@@ -409,6 +491,37 @@ export function createBackend({
 
   // The subscription's limits as Muse last observed them; `usage-changed` carries each new value.
   method('usage', () => muse.limits)
+
+  // Scheduled tasks, as Desktop's Scheduled page. src/headless/schedule.ts keeps them.
+  function schedules() {
+    if (!scheduler) throw new Error('Send start first.')
+    return scheduler
+  }
+  /** A failed store write names a temporary file; the person sees a sentence instead. */
+  async function plainly<T>(action: () => Promise<T>) {
+    try {
+      return await action()
+    } catch (error) {
+      if (systemError(error)) throw new Error('mMac could not save scheduled tasks.')
+      throw error
+    }
+  }
+
+  method('schedule-list', () => schedules().list())
+
+  method('schedule-save', async (value) => {
+    const input = z.object({ folder: pathSchema }).passthrough().parse(value)
+    await knownProject(input.folder)
+    return plainly(() => schedules().save(value))
+  })
+
+  method('schedule-remove', (value) => plainly(() => schedules().remove(id.parse(value))))
+
+  method('schedule-run', (value) => plainly(() => schedules().runNow(id.parse(value))))
+
+  method('schedule-enabled', (value, enabled) =>
+    plainly(() => schedules().setEnabled(id.parse(value), z.boolean().parse(enabled))),
+  )
 
   method('approve', async (session, approval, choice) => {
     const sessionId = id.parse(session)
@@ -689,5 +802,7 @@ export function createBackend({
     stopBridges: () => bridges?.stop() ?? Promise.resolve(),
     /** Cancels a transcription in progress: the quit path. */
     stopVoice: () => cancelVoice(),
+    /** Stops the scheduled tasks' timer: the quit path. */
+    stopScheduler: () => scheduler?.stop(),
   }
 }
