@@ -109,6 +109,31 @@ private func count(_ backend: ScriptedBackend, _ method: String) -> Int {
   #expect(!workspace.shouldPollPullRequest(showingChanges: true, now: .now))
 }
 
+@MainActor @Test func theConversationCardUsesOnlyTheCurrentProjectsCards() async throws {
+  let merged = #"{"number":7,"title":"Base","url":"u","state":"MERGED","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"extensions","headRefName":"main","mergedAt":null,"checks":[],"body":"","files":[],"live":false}"#
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "pr-list": [reply(id, "[\(merged)]")]
+    case "pr-status": [reply(id, pr)]
+    default: [reply(id, "null")]
+    }
+  }
+  workspace.project = "/p"
+  workspace.view = try decodeView(viewJSON(sessionJSON("s1")))
+  await workspace.refreshPullRequest()
+  let own = try #require(workspace.pullRequest)
+  #expect(workspace.conversationCardSiblings(own).map(\.number) == [9])
+  #expect(workspace.needsChangeCardsForConversation)
+  await workspace.loadChangeCards()
+  #expect(!workspace.needsChangeCardsForConversation)
+  #expect(workspace.conversationCardSiblings(own).map(\.number).sorted() == [7, 9])
+  #expect(ChangeCardRules.blocker(of: own, in: workspace.conversationCardSiblings(own))
+    == "Its draft copy was accepted; move it onto extensions first")
+  // Cards read for another project are never used.
+  workspace.project = "/q"
+  #expect(workspace.conversationCardSiblings(own).map(\.number) == [9])
+}
+
 @MainActor @Test func askWhyOpensNoSideChatWhenTheOwnerDoesNotOpen() async throws {
   let worktrees =
     #"[{"path":"/p","branch":"refs/heads/main","isMain":true,"sessionIds":[]},{"path":"/p/.muse/worktrees/a","branch":"refs/heads/usage","isMain":false,"sessionIds":["s1"]}]"#

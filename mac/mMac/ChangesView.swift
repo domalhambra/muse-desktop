@@ -35,8 +35,12 @@ struct ChangesView: View {
               .accessibilityIdentifier("pull-request-retry")
           }
         } else if let pr = workspace.pullRequest {
-          ChangeCardView(pr: pr, all: [pr], workspace: workspace, conversationCard: true)
+          // Judged against the project's cards too, so a merged or open parent blocks Accept.
+          ChangeCardView(pr: pr, all: workspace.conversationCardSiblings(pr), workspace: workspace, conversationCard: true)
             .listRowSeparator(.hidden)
+            .task(id: workspace.project) {
+              if workspace.needsChangeCardsForConversation { await workspace.loadChangeCards() }
+            }
         }
       }
       if let error = inspector.error {

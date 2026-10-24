@@ -46,6 +46,18 @@ extension Workspace {
     }
   }
 
+  /// The PRs the open conversation's card is judged against: the cards read for this project, never
+  /// another project's, with the conversation's own read in place of its entry.
+  public func conversationCardSiblings(_ pr: PullRequest) -> [PullRequest] {
+    ChangeCardRules.siblings(of: pr, cards: changeCardsProject == project ? changeCards : [])
+  }
+
+  /// True when the conversation's card shows but no cards were read for this project, so a stacked
+  /// PR's blocker cannot show yet.
+  public var needsChangeCardsForConversation: Bool {
+    pullRequest != nil && !project.isEmpty && changeCardsProject != project
+  }
+
   /// True when `pr` is the current project's: the open conversation's PR, or a card read for this
   /// project. A card left from another project is never merged here.
   public func isCurrent(_ pr: PullRequest) -> Bool {

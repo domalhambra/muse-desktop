@@ -124,3 +124,25 @@ private func check(_ state: String, _ name: String = "check") -> PullRequestChec
   #expect(ChangeCardRules.pictures(body).map(\.absoluteString) == ["https://x/d.png"])
   #expect(ChangeCardRules.pictures("# Before\n![a](http://x/a.png)\n# After\n![b](https://x/b.png)").map(\.absoluteString) == ["https://x/b.png"])
 }
+
+@Test func theConversationCardSeesTheProjectsCardsSoAMergedParentBlocksIt() {
+  let merged = PullRequest(number: 9, title: "Usage", state: "MERGED", baseRefName: "extensions", headRefName: "usage")
+  let stale = PullRequest(number: 12, title: "Old title", baseRefName: "usage", headRefName: "limits")
+  let fresh = PullRequest(number: 12, title: "Limits", baseRefName: "usage", headRefName: "limits")
+  let all = ChangeCardRules.siblings(of: fresh, cards: [stale, merged])
+  // One entry per number, and the conversation's own read wins over the list's older copy.
+  #expect(all.map(\.number).sorted() == [9, 12])
+  #expect(all.first { $0.number == 12 }?.title == "Limits")
+  #expect(ChangeCardRules.blocker(of: fresh, in: all) == "Its draft copy was accepted; move it onto extensions first")
+  // With no cards read, the card has only itself and no blocker.
+  #expect(ChangeCardRules.siblings(of: fresh, cards: []).map(\.number) == [12])
+}
+
+@Test func theHeadlineSkipsAMultiLineHtmlComment() {
+  let body = "## Summary\n<!--\nThe template says: describe it here.\n-->\nThe footer shows usage. More.\n"
+  #expect(ChangeCardRules.headline(title: "Title", body: body) == "The footer shows usage.")
+  let unclosed = "## Summary\n<!-- left open\nHidden line.\n"
+  #expect(ChangeCardRules.headline(title: "Title", body: unclosed) == "Title")
+  let inline = "## Summary\n<!-- one line --> \nShown line.\n"
+  #expect(ChangeCardRules.headline(title: "Title", body: inline) == "Shown line.")
+}

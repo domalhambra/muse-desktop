@@ -121,6 +121,12 @@ public enum ChangeCardRules {
     return nil
   }
 
+  /// The PRs a card is judged against: the project's cards with `pr` in place of its own entry,
+  /// one per number, so the conversation's card sees a merged or open parent too.
+  public static func siblings(of pr: PullRequest, cards: [PullRequest]) -> [PullRequest] {
+    [pr] + cards.filter { $0.number != pr.number }
+  }
+
   /// Newest first, with each PR after the one it depends on.
   public static func ordered(_ prs: [PullRequest]) -> [PullRequest] {
     var remaining = prs.sorted { $0.number > $1.number }
@@ -139,11 +145,21 @@ public enum ChangeCardRules {
   /// (``` or ~~~) and indented code blocks are skipped; Markdown marks are removed.
   public static func headline(title: String, body: String) -> String {
     var inCode = false
+    var inComment = false
     var inSection = false
     for raw in body.components(separatedBy: "\n") {
       let line = raw.trimmingCharacters(in: .whitespaces)
+      if inComment {
+        if line.contains("-->") { inComment = false }
+        continue
+      }
       if line.hasPrefix("```") || line.hasPrefix("~~~") { inCode.toggle(); continue }
       if inCode { continue }
+      // An HTML comment, such as a PR template's hint, can run over several lines.
+      if line.hasPrefix("<!--") {
+        inComment = !line.dropFirst(4).contains("-->")
+        continue
+      }
       // An indented code block: four spaces or a tab.
       if raw.hasPrefix("    ") || raw.hasPrefix("\t") { continue }
       if line.hasPrefix("#") {
