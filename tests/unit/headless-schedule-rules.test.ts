@@ -96,6 +96,25 @@ describe('schedule rules', () => {
     ])
   })
 
+  it('runs an hourly task every real hour across a daylight-saving change', () => {
+    const tz = 'America/Los_Angeles'
+    const hourly = { ...base, preset: 'hourly' as const, minute: 15 }
+    // 2026-11-01 is 25 hours long: 1:15 runs at 08:15Z (PDT) and again at 09:15Z (PST).
+    const fall = dueOver(hourly, '2026-11-01T07:00:00Z', '2026-11-02T08:00:00Z', tz)
+    expect(fall).toHaveLength(25)
+    expect(fall).toContain(at('2026-11-01T08:15:00Z'))
+    expect(fall).toContain(at('2026-11-01T09:15:00Z'))
+    // 2026-03-08 is 23 hours long, with no 2:15.
+    const spring = dueOver(hourly, '2026-03-08T08:00:00Z', '2026-03-09T07:00:00Z', tz)
+    expect(spring).toHaveLength(23)
+    expect(new Set(spring.map((t) => t % (60 * 60 * 1000)))).toEqual(new Set([15 * 60 * 1000]))
+    expect(nextRun(hourly, at('2026-11-01T08:15:00Z'), tz)).toBe(at('2026-11-01T09:15:00Z'))
+    // A custom cron with hour * keeps its day rule: Sundays only.
+    const sundays = { ...base, preset: 'custom' as const, cron: '15 * * * 0' }
+    expect(dueOver(sundays, '2026-11-01T07:00:00Z', '2026-11-02T08:00:00Z', tz)).toHaveLength(25)
+    expect(nextRun(sundays, at('2026-11-02T07:15:00Z'), tz)).toBe(at('2026-11-08T08:15:00Z'))
+  })
+
   it('catches up once after a long sleep, with a time from the last seven days', () => {
     const now = at('2026-10-26T12:00:00Z')
     const due = dueTime(base, now - 10 * 24 * 60 * 60 * 1000, now, 'UTC')

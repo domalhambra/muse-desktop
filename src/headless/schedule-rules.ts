@@ -65,6 +65,8 @@ export function checkCron(expression: string): string | undefined {
 // occurrence, and a skipped time (spring forward) moves forward by the gap. The mapping never
 // goes back in time, so dueTime and nextRun agree and each wall time runs once.
 // cron-parser 5.10.2's own tz handling skips or repeats times inside the changed hour.
+// An expression whose hour field is * runs every real hour instead (25 runs on a fall-back
+// day, 23 on a spring-forward day): see hourlyTimes.
 
 const HOUR = 60 * 60 * 1000
 const formatters = new Map<string, Intl.DateTimeFormat>()
@@ -107,6 +109,47 @@ const wallTimes = (expression: string, wall: number) =>
   CronExpressionParser.parse(expression, { currentDate: new Date(wall), tz: 'UTC' })
 
 /**
+ * For an expression with hour * and one minute M: instants one real hour apart, at local :MM
+ * when the reference instant is read in the zone. Each is kept when its local day matches the
+ * expression's day, month and weekday fields. Null when the expression has another shape.
+ */
+function hourlyTimes(expression: string, reference: number, tz: string | undefined) {
+  const [minute, hour] = expression.trim().split(/\s+/)
+  if (hour !== '*' || !/^\d{1,2}$/.test(minute)) return null
+  const m = Number(minute) * 60 * 1000
+  const phase = (((m - offsetAt(reference, tz)) % HOUR) + HOUR) % HOUR
+  const days = CronExpressionParser.parse(expression, { tz: 'UTC' })
+  const day = (instant: number) => {
+    const wall = toWall(instant, tz)
+    return wall - (wall % (24 * HOUR)) + m
+  }
+  const onGrid = (instant: number) => Math.floor((instant - phase) / HOUR) * HOUR + phase
+  return {
+    /** The first instant at or before `instant` that fires. */
+    atOrBefore(instant: number): number {
+      let t = onGrid(instant)
+      while (!days.includesDate(new Date(day(t)))) {
+        // Jump to the last hour of the previous matching local day.
+        const wall = wallTimes(expression, toWall(t, tz)).prev().toDate().getTime()
+        t = onGrid(fromWall(wall - (wall % (24 * HOUR)) + 23 * HOUR + m, tz))
+      }
+      return t
+    },
+    /** The first instant after `instant` that fires. */
+    after(instant: number): number {
+      let t = onGrid(instant) + HOUR
+      while (!days.includesDate(new Date(day(t)))) {
+        // Jump to the first hour of the next matching local day.
+        const wall = wallTimes(expression, toWall(t, tz)).next().toDate().getTime()
+        const next = fromWall(wall, tz)
+        t = onGrid(next) === next ? next : onGrid(next) + HOUR
+      }
+      return t
+    },
+  }
+}
+
+/**
  * The latest fire time after `since` and at or before `now`, no older than seven days: one run,
  * whether this is a minute tick, a restart or a wake. Null when nothing came due.
  */
@@ -119,6 +162,11 @@ export function dueTime(
   const expression = schedule.enabled ? cronFor(schedule) : null
   if (!expression) return null
   const from = Math.max(since, now - SEVEN_DAYS)
+  const hourly = hourlyTimes(expression, now, tz)
+  if (hourly) {
+    const latest = hourly.atOrBefore(now)
+    return latest > from ? latest : null
+  }
   // Start past now by more than any offset change, then step back to the first time at or
   // before now. Instants never decrease as wall times increase, so that one is the latest.
   const times = wallTimes(expression, toWall(now, tz) + 3 * HOUR)
@@ -131,6 +179,8 @@ export function dueTime(
 export function nextRun(schedule: Schedule, after: number, tz?: string): number | null {
   const expression = cronFor(schedule)
   if (!expression) return null
+  const hourly = hourlyTimes(expression, after, tz)
+  if (hourly) return hourly.after(after)
   const times = wallTimes(expression, toWall(after, tz) - 3 * HOUR)
   for (;;) {
     const instant = fromWall(times.next().toDate().getTime(), tz)
