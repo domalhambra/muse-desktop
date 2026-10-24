@@ -216,6 +216,8 @@ public final class Workspace {
       }
       // After the reopen, so the footer's read does not hold up the conversation.
       await loadLimits()
+      // Also after the reopen: the sidebar's Scheduled group can wait for the conversation.
+      await loadSchedules()
     }
     await refreshProjectGit()
   }

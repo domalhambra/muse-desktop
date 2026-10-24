@@ -68,3 +68,20 @@ private let entry = #"{"schedule":{"id":"a","name":"Morning review","prompt":"Re
   await first.value
   #expect(workspace.schedules.count == 1)
 }
+
+@MainActor @Test func aScheduledRunNamesOnlyTheTurnThatFinishesIt() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "schedule-list" ? [reply(id, "[\(entry)]")] : [reply(id, "null")]
+  }
+  workspace.apply(.scheduleRunStarted(scheduleId: "a", name: "Morning review", sessionId: "s1"))
+  let running = try decodeView(viewJSON(sessionJSON("s1", status: "running"))).session
+  let idle = try decodeView(viewJSON(sessionJSON("s1", status: "idle"))).session
+  // A status that is not a finished turn keeps the entry.
+  #expect(workspace.finishScheduledRun(running, previous: nil) == nil)
+  #expect(workspace.scheduledRuns["s1"] == "Morning review")
+  // The turn that finishes takes the name, once.
+  #expect(workspace.finishScheduledRun(idle, previous: "running") == "Morning review")
+  #expect(workspace.scheduledRuns["s1"] == nil)
+  // A later turn in that conversation is an ordinary one.
+  #expect(workspace.finishScheduledRun(idle, previous: "running") == nil)
+}

@@ -58,6 +58,15 @@ public enum ScheduleRules {
 
   public static func finishedNotice(name: String) -> String { "Scheduled task \(name) finished" }
 
+  /// The form's fields for an existing task. The id makes Save change it rather than add one.
+  public static func input(from schedule: Schedule) -> ScheduleInput {
+    ScheduleInput(
+      id: schedule.id, name: schedule.name, prompt: schedule.prompt, folder: schedule.folder, preset: schedule.preset,
+      minute: schedule.minute, hour: schedule.hour, weekday: schedule.weekday, cron: schedule.cron,
+      approvalMode: schedule.approvalMode, modelId: schedule.modelId, worktree: schedule.worktree,
+      enabled: schedule.enabled)
+  }
+
   /// The sentences are English, so day and month names are too. Times follow `locale`.
   private static let english = Locale(identifier: "en_US")
 

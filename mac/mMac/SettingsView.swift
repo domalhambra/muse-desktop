@@ -1,10 +1,10 @@
 import MuseKit
 import SwiftUI
 
-/// The Settings window: Electron's Settings dialog as four macOS panes. About is macOS's own panel.
+/// The Settings window: Electron's Settings dialog as macOS panes, with Desktop's Scheduled page. About is macOS's own panel.
 struct SettingsView: View {
   enum Pane: String, CaseIterable, Identifiable {
-    case appearance, museCode, mcp, bridges
+    case appearance, museCode, mcp, bridges, scheduled
     var id: String { rawValue }
     var title: String {
       switch self {
@@ -12,6 +12,7 @@ struct SettingsView: View {
       case .museCode: "Muse Code"
       case .mcp: "MCP servers"
       case .bridges: "Bridges"
+      case .scheduled: "Scheduled"
       }
     }
     var symbol: String {
@@ -20,6 +21,7 @@ struct SettingsView: View {
       case .museCode: "terminal"
       case .mcp: "puzzlepiece.extension"
       case .bridges: "point.3.connected.trianglepath.dotted"
+      case .scheduled: "calendar.badge.clock"
       }
     }
   }
@@ -65,6 +67,7 @@ struct SettingsView: View {
       case .museCode: MuseCodePane(settings: settings)
       case .mcp: McpPane(settings: settings)
       case .bridges: BridgesPane(settings: settings)
+      case .scheduled: SchedulesPane(workspace: settings.workspace)
       }
     } else {
       ContentUnavailableView(

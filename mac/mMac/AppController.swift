@@ -117,11 +117,17 @@ final class AppController {
       // itself focused only while it is active and the conversation window is open.
       workspace.turnFinished = { [weak self, weak workspace] session, previous in
         guard let self, let workspace else { return }
+        // Taken before the check, so a scheduled turn that ends while mMac is focused never names a later turn.
+        let scheduled = workspace.finishScheduledRun(session, previous: previous)
         if CompletionNotice.shouldPost(
           previous: previous, next: session.status, enabled: workspace.preferences.notifyOnCompletion,
           focused: NSApp.isActive && NSApp.windows.contains { $0.isVisible && MMacApp.isMainWindow($0) })
         {
-          self.notifications.post(for: session)
+          if let scheduled {
+            self.notifications.postScheduled(name: scheduled, session: session)
+          } else {
+            self.notifications.post(for: session)
+          }
         }
       }
       self.workspace = workspace

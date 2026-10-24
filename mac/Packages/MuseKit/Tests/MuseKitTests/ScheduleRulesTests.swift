@@ -91,3 +91,13 @@ private func schedule(_ preset: String = "daily", minute: Int = 0, cron: String?
   let later = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(8 * 86_400 - 10_800)), history: [])
   #expect(ScheduleRules.nextRun(later, now: noon, calendar: calendar, locale: german) == "Next run Nov 3, 9:00")
 }
+
+@Test func inputFromAScheduleKeepsItsId() {
+  let source = Schedule(
+    id: "a", name: "Morning review", prompt: "Review.", folder: "/p", preset: "custom", minute: 15, hour: 9,
+    weekday: 3, cron: "15 9 * * 3", approvalMode: "denyUnmatched", modelId: "m1", worktree: true, enabled: false,
+    createdAt: 7)
+  #expect(ScheduleRules.input(from: source) == ScheduleInput(
+    id: "a", name: "Morning review", prompt: "Review.", folder: "/p", preset: "custom", minute: 15, hour: 9,
+    weekday: 3, cron: "15 9 * * 3", approvalMode: "denyUnmatched", modelId: "m1", worktree: true, enabled: false))
+}

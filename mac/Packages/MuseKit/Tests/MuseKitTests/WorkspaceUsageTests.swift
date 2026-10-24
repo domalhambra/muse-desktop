@@ -7,16 +7,19 @@ import Testing
 private let limitsJSON = #"{"observedAt":1,"tier":"pro","window":{"usedPercent":42,"resetsAt":2,"minutes":300},"weekly":{"usedPercent":18,"resetsAt":3}}"#
 
 @MainActor @Test func beginReadsTheLimitsAndEventsReplaceThem() async throws {
-  let (workspace, _) = await makeWorkspace { method, _, id in
+  let (workspace, backend) = await makeWorkspace { method, _, id in
     switch method {
     case "sessions": [reply(id, #"{"sessions":[],"nextCursor":null}"#)]
     case "models": [reply(id, "[]")]
     case "usage": [reply(id, limitsJSON)]
+    case "schedule-list": [reply(id, "[]")]
     default: [reply(id, "null")]
     }
   }
   await workspace.begin()
   #expect(workspace.limits?.window.usedPercent == 42)
+  // begin also reads the scheduled tasks once, for the sidebar's Scheduled group.
+  #expect(requests(backend).filter { $0.first == "schedule-list" }.count == 1)
   workspace.apply(.usageChanged(SubscriptionLimits(
     observedAt: 4, tier: "pro", window: .init(usedPercent: 85, resetsAt: 5, minutes: 300),
     weekly: .init(usedPercent: 30, resetsAt: 6))))

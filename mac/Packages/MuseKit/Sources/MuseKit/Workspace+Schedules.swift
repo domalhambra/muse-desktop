@@ -36,4 +36,13 @@ extension Workspace {
     await run { try await self.client.setScheduleEnabled(id: id, enabled: enabled) }
     await loadSchedules()
   }
+
+  /// The task's name when this `session` event ends the turn a scheduled run started, or nil. It
+  /// forgets the run either way, so only that first turn's notice names the task: a later turn in
+  /// the same conversation is the person's own, and a turn that ended while mMac was focused (no
+  /// notice) still ends the run.
+  public func finishScheduledRun(_ session: Session, previous: String?) -> String? {
+    guard previous == "running", session.status != "running" else { return nil }
+    return scheduledRuns.removeValue(forKey: session.sessionId)
+  }
 }

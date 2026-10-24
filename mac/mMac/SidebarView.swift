@@ -154,6 +154,7 @@ struct SidebarView: View {
   @ViewBuilder private var history: some View {
     // Read once: each read groups and sorts every session.
     let sections = workspace.sections
+    scheduled
     Section {
       conversationsHeader
       if let error = workspace.historyError {
@@ -202,6 +203,38 @@ struct SidebarView: View {
           Text(workspace.showArchived ? "No archived conversations" : "No conversations yet").font(.headline)
           Text(workspace.showArchived ? "Archived conversations appear here." : "Start a conversation in this project.")
             .foregroundStyle(.themeSecondary)
+        }
+      }
+    }
+  }
+
+  /// The active scheduled tasks, each with its next run. A click opens the latest run that started
+  /// a conversation. Rows have no tag, so the list never selects them.
+  @ViewBuilder private var scheduled: some View {
+    let active = workspace.schedules.filter(\.schedule.enabled)
+    if !active.isEmpty {
+      Section("Scheduled") {
+        ForEach(active) { entry in
+          let sessionId = entry.history.first(where: { $0.sessionId != nil })?.sessionId
+          Button {
+            if let sessionId { Task { await workspace.open(sessionId) } }
+          } label: {
+            VStack(alignment: .leading, spacing: 2) {
+              Text(entry.schedule.name).lineLimit(1).truncationMode(.tail)
+              Text(ScheduleRules.nextRun(entry, now: .now))
+                .font(.caption)
+                .foregroundStyle(.themeSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+          }
+          .buttonStyle(.plain)
+          .help(entry.schedule.name)
+          .accessibilityElement(children: .combine)
+          .accessibilityHint(sessionId == nil ? "No run yet" : "Opens the latest run")
+          .accessibilityIdentifier("scheduled-row-\(entry.schedule.id)")
         }
       }
     }
