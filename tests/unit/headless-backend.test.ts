@@ -1620,7 +1620,8 @@ describe('headless backend, scheduled tasks', () => {
     }[]
     expect(entry.history[0]).toMatchObject({
       outcome: 'failed',
-      reason: 'The folder is not trusted in mMac. Open it and send a message there first.',
+      reason:
+        'mMac could not start this scheduled task. The folder is not trusted in mMac. Open it and send a message there first.',
     })
   })
 
@@ -1634,7 +1635,54 @@ describe('headless backend, scheduled tasks', () => {
     }[]
     expect(entry.history[0].outcome).toBe('failed')
     expect(entry.history[0].reason).toBe(
-      'The folder for this task no longer exists, or mMac cannot open it.',
+      'mMac could not start this scheduled task. The folder for this task no longer exists, or mMac cannot open it.',
+    )
+  })
+
+  it('records a plain failure, not Muse’s own text, when create or send fails', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { call, id, muse } = await trustedTask()
+    vi.mocked(muse.create).mockRejectedValueOnce(
+      new Error('MSP -32603: internal error at SessionManager.create'),
+    )
+    await call('schedule-run', id)
+    vi.mocked(muse.send).mockRejectedValueOnce(new Error('MSP -32000: queue closed'))
+    await call('schedule-run', id)
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason: string }[]
+    }[]
+    expect(entry.history.map((run) => [run.outcome, run.reason])).toEqual([
+      ['failed', 'mMac could not start this scheduled task.'],
+      ['failed', 'mMac could not start this scheduled task.'],
+    ])
+    const logged = errors.mock.calls.map((args) => String(args[0])).join('\n')
+    expect(logged).toContain('internal error at SessionManager.create')
+    expect(logged).toContain('queue closed')
+    errors.mockRestore()
+  })
+
+  it('a run waiting for a tool approval lets another task run, and says so once', async () => {
+    let waiting = true
+    const running = session({ activeTurnId: 't1', status: 'running' })
+    const muse = fakeMuse({
+      getSession: vi.fn(() => running),
+      getView: vi.fn((sessionId: string) => ({
+        ...view(session({ sessionId })),
+        approvals: waiting ? [{ approvalId: 'a1' } as SessionView['approvals'][number]] : [],
+      })),
+    })
+    const { call, id } = await trustedTask(muse)
+    await call('schedule-run', id)
+    await call('schedule-run', id)
+    expect(muse.send).toHaveBeenCalledTimes(2)
+    // Not waiting any more, and its turn runs: the second run holds the next one back.
+    waiting = false
+    await expect(call('schedule-run', id)).rejects.toThrow('Another scheduled task is running.')
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason?: string }[]
+    }[]
+    expect(entry.history.filter((run) => run.reason === 'Waiting for your approval.')).toHaveLength(
+      1,
     )
   })
 
@@ -1746,7 +1794,9 @@ describe('headless backend, scheduled tasks', () => {
       }
       expect(store.lastCheckedAt).toBe(now)
       const later = store.schedules.find((schedule) => schedule.name === 'Second')!
-      expect(store.history[later.id].at(-1)?.reason).toBe('mMac is quitting.')
+      expect(store.history[later.id].at(-1)?.reason).toBe(
+        'mMac could not start this scheduled task. mMac is quitting.',
+      )
     })
   })
 })
@@ -1834,6 +1884,8 @@ describe('headless backend, M5b pull requests', () => {
     await call('add-project', project)
     await expect(call('pr-merge', project, -1)).rejects.toThrow()
     await expect(call('pr-merge', project, 1.5)).rejects.toThrow()
+    await expect(call('pr-merge', project, 2 ** 53)).rejects.toThrow()
+    await expect(call('pr-merge-when-ready', 's1', 2 ** 53)).rejects.toThrow()
     expect(asks).toHaveLength(0)
   })
 })

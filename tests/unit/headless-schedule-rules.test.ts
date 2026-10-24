@@ -41,7 +41,10 @@ describe('schedule rules', () => {
     expect(checkCron('*/5 * * * *')).toMatch(/at most once an hour/)
     expect(checkCron('0,30 9 * * *')).toMatch(/at most once an hour/)
     expect(checkCron('* 9 * * *')).toMatch(/at most once an hour/)
-    expect(checkCron('0 25 * * *')).toMatch(/^Muse could not read this schedule/)
+    const unreadable = 'mMac could not read this schedule. Check that each field is in range.'
+    expect(checkCron('0 25 * * *')).toBe(unreadable)
+    expect(checkCron('0 9 32 * *')).toBe(unreadable)
+    expect(checkCron('0 9 * 13 *')).toBe(unreadable)
   })
 
   it('gives the latest fire time since the last check, within seven days', () => {
