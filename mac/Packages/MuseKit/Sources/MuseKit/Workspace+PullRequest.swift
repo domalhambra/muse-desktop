@@ -36,15 +36,34 @@ extension Workspace {
       let cards = try await client.pullRequests(project: project)
       guard project == self.project else { return }
       changeCards = cards
+      changeCardsProject = project
     } catch {
       guard project == self.project else { return }
       errorMessage = error.localizedDescription
     }
   }
 
+  /// True when `pr` is the current project's: the open conversation's PR, or a card read for this
+  /// project. A card left from another project is never merged here.
+  public func isCurrent(_ pr: PullRequest) -> Bool {
+    if pullRequest?.number == pr.number, view != nil { return true }
+    return changeCardsProject == project && changeCards.contains { $0.number == pr.number }
+  }
+
+  /// Clears a PR read error and reads again, so the poll starts again.
+  public func retryPullRequest() async {
+    pullRequestError = nil
+    lastPullRequestPoll = nil
+    await refreshPullRequest()
+  }
+
   public func accept(_ pr: PullRequest) async {
+    guard !project.isEmpty, isCurrent(pr), !merging.contains(pr.number) else { return }
+    merging.insert(pr.number)
+    defer { merging.remove(pr.number) }
+    let project = self.project
     var merged = false
-    await run { merged = try await self.client.mergePullRequest(project: self.project, number: pr.number) }
+    await run { merged = try await self.client.mergePullRequest(project: project, number: pr.number) }
     guard merged else { return }
     showNotice("PR merged")
     await loadChangeCards()
@@ -52,7 +71,9 @@ extension Workspace {
   }
 
   public func mergeWhenReady(_ pr: PullRequest) async {
-    guard let sessionId = view?.session.sessionId else { return }
+    guard let sessionId = view?.session.sessionId, isCurrent(pr), !merging.contains(pr.number) else { return }
+    merging.insert(pr.number)
+    defer { merging.remove(pr.number) }
     await run { _ = try await self.client.mergeWhenReady(sessionId: sessionId, number: pr.number) }
   }
 

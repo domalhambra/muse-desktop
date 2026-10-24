@@ -144,14 +144,16 @@ public enum ChangeCardRules {
     return plain(title)
   }
 
-  /// Images under "Before" and "After", otherwise up to the first two in the body.
+  /// Images under "Before" and "After", otherwise up to the first two in the body. https only.
   public static func pictures(_ body: String) -> [URL] {
     let pattern = #"!\[[^\]]*\]\(([^)\s]+)\)|<img[^>]*src="([^"]+)""#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     func images(_ text: String) -> [URL] {
       regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
         let range = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
+        // Only https: a card never loads a local file or a plain-http address.
         return Range(range, in: text).flatMap { URL(string: String(text[$0])) }
+          .flatMap { $0.scheme?.lowercased() == "https" && $0.host != nil ? $0 : nil }
       }
     }
     let sections = body.components(separatedBy: "\n#")

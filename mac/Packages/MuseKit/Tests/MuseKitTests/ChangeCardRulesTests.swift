@@ -99,3 +99,9 @@ private func check(_ state: String, _ name: String = "check") -> PullRequestChec
   let body = "~~~\n## Summary\nlet secret = 1\n~~~\n## Summary\n    let code = 1\nThe footer shows usage. More.\n"
   #expect(ChangeCardRules.headline(title: "Title", body: body) == "The footer shows usage.")
 }
+
+@Test func picturesKeepOnlyHttps() {
+  let body = "![a](file:///etc/passwd) ![b](http://x/b.png) ![c](data:image/png;base64,AA) ![d](https://x/d.png)"
+  #expect(ChangeCardRules.pictures(body).map(\.absoluteString) == ["https://x/d.png"])
+  #expect(ChangeCardRules.pictures("# Before\n![a](http://x/a.png)\n# After\n![b](https://x/b.png)").map(\.absoluteString) == ["https://x/b.png"])
+}

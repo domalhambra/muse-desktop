@@ -36,6 +36,9 @@ public final class Workspace {
       // The inspector's read for the old project is dropped now, so read the badge it was to write.
       if pendingTurnEndRead == oldValue { makeUpTurnEndRead() }
       inspector.show(project: project)
+      // Change cards belong to one project: another one's must never show or merge here.
+      changeCards = []
+      changeCardsProject = nil
       if !project.isEmpty, beginsRunning == 0 { startBadgeRead([project]) }
     }
   }
@@ -100,6 +103,10 @@ public final class Workspace {
   @ObservationIgnored var pullRequestInFlight = false
   /// The project's PRs, as change cards.
   public internal(set) var changeCards: [PullRequest] = []
+  /// The project `changeCards` were read for, or nil until a read lands. A project switch clears both.
+  public internal(set) var changeCardsProject: String?
+  /// The PR numbers an Accept or a Merge when ready is sending, so a double click sends one.
+  public internal(set) var merging: Set<Int> = []
   public internal(set) var decidingApprovals: Set<String> = []
   public internal(set) var answeringQuestions: Set<String> = []
   public internal(set) var storedOutput: [String: String] = [:]

@@ -11,6 +11,8 @@ struct ChangeCardView: View {
   /// True for the open conversation's own card in Changes, which can merge when ready and archive.
   var conversationCard = false
   @Environment(\.openURL) private var openURL
+  /// The pictures that loaded, so "Before and after" is read only when one shows.
+  @State private var loaded: Set<URL> = []
 
   var body: some View {
     let track = ChangeCardRules.track(pr)
@@ -29,12 +31,14 @@ struct ChangeCardView: View {
             AsyncImage(url: url) { phase in
               if let image = phase.image {
                 image.resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: 160)
+                  .onAppear { loaded.insert(url) }
               }
             }
           }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Before and after")
+        .accessibilityHidden(loaded.isEmpty)
       }
       TrackView(track: track, acceptedText: track.step == .accepted ? ChangeCardRules.acceptedText(pr) : nil)
       HStack(spacing: 6) {
@@ -52,7 +56,7 @@ struct ChangeCardView: View {
       }
       FlowLayout(spacing: 6) {
         Button("Accept") { Task { await workspace.accept(pr) } }
-          .disabled(track.step != .ready || blocker != nil)
+          .disabled(track.step != .ready || blocker != nil || merging || !workspace.isCurrent(pr))
           .accessibilityLabel("Accept PR \(pr.number)")
           .accessibilityIdentifier("change-accept-\(pr.number)")
         Button("Ask why") { Task { await workspace.askWhy(pr) } }
@@ -65,6 +69,7 @@ struct ChangeCardView: View {
         }
         if conversationCard, pr.state == "OPEN", track.step == .checked, !track.failing {
           Button("Merge when ready") { Task { await workspace.mergeWhenReady(pr) } }
+            .disabled(merging)
             .accessibilityLabel("Merge PR \(pr.number) when its checks pass")
             .accessibilityIdentifier("change-merge-when-ready-\(pr.number)")
         }
@@ -85,8 +90,8 @@ struct ChangeCardView: View {
             .truncationMode(.middle)
             .textSelection(.enabled)
           Text(PullRequestRules.summary(pr.checks).text).font(.caption)
-          ForEach(pr.checks, id: \.name) { check in
-            Text("\(check.name): \(check.state)").font(.caption).lineLimit(1).truncationMode(.middle)
+          ForEach(Array(pr.checks.enumerated()), id: \.offset) { _, check in
+            Text("\(check.name): \(Self.stateWords(check.state))").font(.caption).lineLimit(1).truncationMode(.middle)
           }
           if let url = URL(string: pr.url), !pr.url.isEmpty {
             Button("Open on GitHub") { openURL(url) }
@@ -104,6 +109,19 @@ struct ChangeCardView: View {
     .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("change-card-\(pr.number)")
+  }
+
+  private var merging: Bool { workspace.merging.contains(pr.number) }
+
+  /// A check's state in words.
+  static func stateWords(_ state: String) -> String {
+    switch state {
+    case "passing": "Passing"
+    case "failing": "Failing"
+    case "pending": "Pending"
+    case "skipped": "Skipped"
+    default: state.capitalized
+    }
   }
 
   private func color(_ light: ChangeCardRules.Light) -> Color {
@@ -127,7 +145,13 @@ struct TrackView: View {
           let lit = step == track.step
           // The step and its chevron wrap together.
           HStack(spacing: 4) {
-            Text(step.title)
+            // A failing step says so with a symbol too, not by colour alone.
+            Label {
+              Text(step.title)
+            } icon: {
+              if lit, track.failing { Image(systemName: "xmark") }
+            }
+            .labelStyle(StepLabelStyle())
               .font(.caption2.weight(lit ? .bold : .regular))
               .lineLimit(1)
               .fixedSize()
@@ -152,6 +176,16 @@ struct TrackView: View {
   }
 }
 
+/// A step's title, after an icon when it has one.
+private struct StepLabelStyle: LabelStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    HStack(spacing: 3) {
+      configuration.icon
+      configuration.title
+    }
+  }
+}
+
 /// The project's change cards, in dependency order.
 struct ProposedChangesSheet: View {
   let workspace: Workspace
@@ -162,11 +196,18 @@ struct ProposedChangesSheet: View {
       Text("Proposed changes").font(.headline).accessibilityAddTraits(.isHeader)
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 12) {
-          if workspace.changeCards.isEmpty {
+          // Until the cards are this project's, a load is under way: never another project's cards.
+          if workspace.changeCardsProject != workspace.project {
+            HStack(spacing: 8) {
+              ProgressView().controlSize(.small)
+              Text("Reading the pull requests\u{2026}").foregroundStyle(.themeSecondary)
+            }
+          } else if workspace.changeCards.isEmpty {
             Text("No proposed changes.").foregroundStyle(.themeSecondary)
-          }
-          ForEach(ChangeCardRules.ordered(workspace.changeCards)) { pr in
-            ChangeCardView(pr: pr, all: workspace.changeCards, workspace: workspace)
+          } else {
+            ForEach(ChangeCardRules.ordered(workspace.changeCards)) { pr in
+              ChangeCardView(pr: pr, all: workspace.changeCards, workspace: workspace)
+            }
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,6 +223,6 @@ struct ProposedChangesSheet: View {
     .frame(minWidth: 460, idealWidth: 520, minHeight: 420, idealHeight: 560)
     .onExitCommand(perform: done)
     .accessibilityIdentifier("proposed-changes-sheet")
-    .task { await workspace.loadChangeCards() }
+    .task(id: workspace.project) { await workspace.loadChangeCards() }
   }
 }

@@ -124,3 +124,45 @@ private func count(_ backend: ScriptedBackend, _ method: String) -> Int {
   await load.value
   #expect(workspace.changeCards.isEmpty)
 }
+
+@MainActor @Test func aProjectSwitchClearsTheCardsUntilTheNewLoadLands() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "pr-list": return [reply(id, "[\(pr)]")]
+    case "pr-merge": return [reply(id, "true")]
+    default: return [reply(id, "null")]
+    }
+  }
+  workspace.project = "/p"
+  await workspace.loadChangeCards()
+  let stale = try #require(workspace.changeCards.first)
+  #expect(workspace.changeCardsProject == "/p")
+  workspace.project = "/q"
+  #expect(workspace.changeCards.isEmpty)
+  #expect(workspace.changeCardsProject == nil)
+  // A card left from /p merges nothing in /q.
+  await workspace.accept(stale)
+  #expect(count(backend, "pr-merge") == 0)
+  await workspace.loadChangeCards()
+  #expect(workspace.changeCardsProject == "/q")
+  #expect(workspace.changeCards.map(\.number) == [9])
+}
+
+@MainActor @Test func aDoubleAcceptSendsOneMerge() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "pr-list": return [reply(id, "[\(pr)]")]
+    case "pr-merge": return []  // held: the second click arrives while the first runs
+    default: return [reply(id, "null")]
+    }
+  }
+  workspace.project = "/p"
+  await workspace.loadChangeCards()
+  let card = workspace.changeCards[0]
+  let first = Task { await workspace.accept(card) }
+  while count(backend, "pr-merge") == 0 { await Task.yield() }
+  #expect(workspace.merging.contains(9))
+  await workspace.accept(card)
+  #expect(count(backend, "pr-merge") == 1)
+  first.cancel()
+}
