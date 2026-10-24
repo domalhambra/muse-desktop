@@ -530,6 +530,44 @@ describe('headless backend, M1 methods', () => {
       cliPath: '/opt/muse',
     })
   })
+
+  it('keeps a trust save that is still in flight when a second project is trusted', async () => {
+    const { call, start, preferencesFile, lastPreferences } = harness(fakeMuse(), [0, 0])
+    await start()
+    const a = await folder('a')
+    const b = await folder('b')
+    await call('add-project', a)
+    await call('add-project', b)
+    await Promise.all([call('create', a), call('create', b)])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.trustedProjects].sort()).toEqual([a, b].sort())
+    expect([...(lastPreferences()?.preferences.trustedProjects ?? [])].sort()).toEqual(
+      [a, b].sort(),
+    )
+  })
+
+  it('keeps a recent-project save that is still in flight when a second session opens', async () => {
+    const a = await folder('a')
+    const b = await folder('b')
+    const roots: Record<string, string> = { s1: a, s2: b }
+    const muse = fakeMuse({
+      open: vi.fn(async (sessionId: string) =>
+        view(session({ sessionId, workspaceRoot: roots[sessionId] })),
+      ),
+    })
+    const { call, start, preferencesFile, events } = harness(muse)
+    await start()
+    await Promise.all([call('open', 's1'), call('open', 's2')])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.recentProjects].sort()).toEqual([a, b].sort())
+    // Opening a session whose project is already recent writes nothing and emits nothing.
+    const emitted = events.length
+    await call('open', 's1')
+    expect(events).toHaveLength(emitted)
+    expect(JSON.parse(await readFile(preferencesFile, 'utf8')).recentProjects).toEqual(
+      saved.recentProjects,
+    )
+  })
 })
 
 /** A Git repository with one commit of `a.txt`. Git's global config is kept out. */

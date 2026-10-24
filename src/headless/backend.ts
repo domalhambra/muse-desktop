@@ -163,6 +163,8 @@ export function createBackend({
   ) {
     const write = preferenceWrites.then(async () => {
       const patch = typeof change === 'function' ? change(current()) : change
+      // An empty patch changes nothing: no write, no event.
+      if (Object.keys(patch).length === 0) return current()
       const snapshot = preferencesSchema.parse({ ...current(), ...patch })
       await writePreferences(preferencePath, snapshot)
       preferences = snapshot
@@ -208,7 +210,9 @@ export function createBackend({
       buttons: ['Trust project', 'Cancel'],
     })
     if (choice !== 0) throw new Error('Project trust was cancelled. No session was started.')
-    await savePreferences({ trustedProjects: [...current().trustedProjects, project] })
+    await savePreferences(({ trustedProjects }) =>
+      trustedProjects.includes(project) ? {} : { trustedProjects: [...trustedProjects, project] },
+    )
   }
 
   async function sessionProject(sessionId: string) {
@@ -490,8 +494,12 @@ export function createBackend({
     const view = await muse.open(id.parse(value))
     // Record a worktree session's parent project, not each worktree folder.
     const root = view.session.workspaceRoot && projectRoot(view.session.workspaceRoot)
-    if (root && !current().recentProjects.includes(root))
-      await savePreferences({ recentProjects: [root, ...current().recentProjects].slice(0, 30) })
+    if (root)
+      await savePreferences(({ recentProjects }) =>
+        recentProjects.includes(root)
+          ? {}
+          : { recentProjects: [root, ...recentProjects].slice(0, 30) },
+      )
     return view
   })
 
