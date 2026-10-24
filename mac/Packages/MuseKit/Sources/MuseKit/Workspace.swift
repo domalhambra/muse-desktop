@@ -86,6 +86,10 @@ public final class Workspace {
   /// them. A connection that stops being ready clears them, so the footer never shows a number from a
   /// backend that is gone.
   public internal(set) var limits: SubscriptionLimits?
+  /// Scheduled tasks with their next run and history, for the Scheduled pane and the sidebar group.
+  public internal(set) var schedules: [ScheduleEntry] = []
+  /// The sessions scheduled runs started, by session id, with the task's name: the finished notice names it.
+  public internal(set) var scheduledRuns: [String: String] = [:]
   /// The conversation being opened, for a spinner.
   public private(set) var openingSessionId: String?
   public internal(set) var models: [MuseModel] = []
@@ -334,8 +338,11 @@ public final class Workspace {
       limits = next
     case .error(let message):
       errorMessage = message
-    case .scheduleRunStarted, .schedulesChanged:
-      break
+    case .scheduleRunStarted(_, let name, let sessionId):
+      scheduledRuns[sessionId] = name
+      Task { [weak self] in await self?.loadSchedules() }
+    case .schedulesChanged:
+      Task { [weak self] in await self?.loadSchedules() }
     case .other:
       break
     }
