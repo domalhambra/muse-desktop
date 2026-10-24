@@ -43,6 +43,10 @@ macOS asks for microphone access on first use. `mac/project.yml` sets `NSMicroph
 
 The WAV encoding, the voice states and the backend's calls have unit tests. The real microphone, the permission prompt and a real transcription wait for M4b's live run.
 
+## Runtime dependencies
+
+- cron-parser 5.10.2. Scheduled tasks' custom trigger and next run. A cron parser with tests is more code than the rest of scheduled tasks (parity spec).
+
 ## Diagnose a connection
 
 Check `muse --version` and `muse serve --help` in Terminal. Complete `muse login` there if authentication is needed. Choose the executable in **Settings → Muse Code** if discovery fails. Login-shell discovery has a six-second timeout, then falls back to normal installation paths. CLI initialization has a fifteen-second timeout.
