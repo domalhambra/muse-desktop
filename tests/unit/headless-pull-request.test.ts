@@ -26,6 +26,27 @@ describe('pull requests through gh', () => {
     expect((await calls())[0].slice(0, 3)).toEqual(['pr', 'view', '--json'])
   })
 
+  it('reads each StatusContext state and a neutral check run', async () => {
+    const env = await fakeGh({
+      'pr view': {
+        ...raw,
+        statusCheckRollup: [
+          { __typename: 'StatusContext', context: 'ci/a', state: 'SUCCESS' },
+          { __typename: 'StatusContext', context: 'ci/b', state: 'ERROR' },
+          { __typename: 'StatusContext', context: 'ci/c', state: 'EXPECTED' },
+          { __typename: 'CheckRun', name: 'optional', status: 'COMPLETED', conclusion: 'NEUTRAL' },
+        ],
+      },
+    })
+    const pr = await prStatus('/tmp', { env, folders: [] })
+    expect(pr?.checks).toEqual([
+      { name: 'ci/a', state: 'passing' },
+      { name: 'ci/b', state: 'failing' },
+      { name: 'ci/c', state: 'pending' },
+      { name: 'optional', state: 'skipped' },
+    ])
+  })
+
   it('gives null when the folder has no PR', async () => {
     const env = await fakeGh({})
     await expect(prStatus('/tmp', { env, folders: [] })).resolves.toBeNull()

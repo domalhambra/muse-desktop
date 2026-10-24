@@ -43,7 +43,8 @@ const session = {
   turnCount: 1,
   approvalMode: { mode: 'promptUnmatched' },
 }
-// Two more conversations, with no cards, for the restart test.
+// Two more conversations, for the restart test and the M5a and M5b tests. fake-2 stopped on the
+// session limit and is the subagent's child conversation.
 const others = [
   ['fake-2', 'Second fake conversation', 'The second conversation says hello.'],
   ['fake-3', 'Third fake conversation', 'The third conversation says hello.'],
@@ -488,6 +489,7 @@ createInterface({ input: process.stdin })
         id: message.id,
         cancelValue: false,
         value: () => {
+          // Accept always merges pulls[0], whatever number the call names: the fake has one open PR.
           pulls[0] = { ...pulls[0], state: 'MERGED', mergedAt: new Date().toISOString() }
           return true
         },
