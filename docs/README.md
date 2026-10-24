@@ -25,6 +25,7 @@ Every document under `docs/`, with when to read it. The router is `CLAUDE.md` at
 | `superpowers/plans/2026-10-22-mmac-m4a.md`                    | You build or check M4a. Built 2026-10-23. It holds the interface contract and the tasks, and ends with the Parity report, the Review report and what M4b carries.                         |
 | `superpowers/specs/2026-10-23-mmac-parity-design.md`          | You build or check Desktop parity: the ten features M5a and M5b bring from Claude Code Desktop. Approved 2026-10-23. M5a is built; M5b closes.                                            |
 | `superpowers/plans/2026-10-23-mmac-m5a.md`                    | You build or check M5a, the session controls: permission modes, `!` shell, side chat, context and tasks, agents, preview and the shortcuts. Built 2026-10-23. Ends with what M5b carries. |
+| `superpowers/plans/2026-10-24-mmac-m5b.md`                    | You build or check M5b: usage and limits, scheduled tasks, and the PR monitor as change cards. Planned 2026-10-24; not built.                                                             |
 
 The extensions plan itself was attached to the cloud session's first message and was never committed. The discovery record holds every difference from it.
 
