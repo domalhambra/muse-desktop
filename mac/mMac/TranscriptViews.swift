@@ -37,7 +37,11 @@ struct TranscriptView: View {
           ForEach(entries) { entry in EntryView(entry: entry, controller: controller, workspace: workspace) }
           ForEach(view.approvals) { approval in ApprovalCard(approval: approval, workspace: workspace) }
           ForEach(view.questions) { question in QuestionCard(question: question, workspace: workspace) }
-          if let error = view.error { TurnErrorView(message: error) }
+          if let error = view.error {
+            TurnErrorView(
+              message: view.quota.map { UsageRules.stopBanner($0, limits: workspace.limits, now: .now) } ?? error,
+              isQuotaStop: view.quota != nil)
+          }
           Color.clear.frame(height: 1).id(Self.bottom)
         }
         .padding(20)
@@ -502,13 +506,19 @@ struct MonospacedBox: View {
 
 struct TurnErrorView: View {
   let message: String
+  /// A quota stop's banner: a follow-up or a reconnect cannot help before the reset.
+  var isQuotaStop = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       Label("Muse couldn’t finish this turn.", systemImage: "exclamationmark.triangle").bold()
       Text(message).textSelection(.enabled)
-      Text("Your conversation is saved. You can send a follow-up or reconnect.")
-        .foregroundStyle(.themeSecondary)
+      Text(
+        isQuotaStop
+          ? "Your conversation is saved. mMac can send again after the reset."
+          : "Your conversation is saved. You can send a follow-up or reconnect."
+      )
+      .foregroundStyle(.themeSecondary)
     }
     .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)

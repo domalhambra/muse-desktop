@@ -77,6 +77,11 @@ const expected = [
   'schedule-remove',
   'schedule-run',
   'schedule-enabled',
+  // The PR monitor and the change cards
+  'pr-status',
+  'pr-list',
+  'pr-merge',
+  'pr-merge-when-ready',
 ]
 
 const swiftFolder = new URL('../../mac/Packages/MuseBackend/Sources/MuseBackend/', import.meta.url)
@@ -95,7 +100,7 @@ describe('the backend method list', () => {
       [...methods].sort(),
       'Register a method with a literal method(…) call, and list it in expected here',
     ).toEqual([...expected].sort())
-    expect(expected).toHaveLength(53)
+    expect(expected).toHaveLength(57)
   })
 
   it('gives every method a call in MuseBackend', () => {

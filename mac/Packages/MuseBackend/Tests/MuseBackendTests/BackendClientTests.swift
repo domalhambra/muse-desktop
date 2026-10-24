@@ -451,6 +451,27 @@ private func waitFor(_ condition: () -> Bool) async throws {
   #expect(none == .usageChanged(nil))
 }
 
+@Test(.timeLimit(.minutes(1))) func usageSendsTheMethodAndReadsLimitsAndNull() async throws {
+  // The first usage call is id 1 and gets limits; the second is id 2 and gets null.
+  let backend = ScriptedBackend { message in
+    guard message["method"] == "usage" else { return [] }
+    if message["id"] == 1 {
+      return [#"{"id":1,"ok":true,"value":{"observedAt":1800000000000,"tier":"pro","window":{"usedPercent":42,"resetsAt":1800000600000,"minutes":300},"weekly":{"usedPercent":18,"resetsAt":1800400000000}}}"#]
+    }
+    return [#"{"id":2,"ok":true,"value":null}"#]
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let limits = try await client.usage()
+  #expect(limits?.observedAt == 1_800_000_000_000)
+  #expect(limits?.tier == "pro")
+  #expect(limits?.window.usedPercent == 42 && limits?.window.minutes == 300)
+  #expect(limits?.weekly.usedPercent == 18)
+  let none = try await client.usage()
+  #expect(none == nil)
+  #expect(backend.messages.first == ["id": 1, "method": "usage", "args": []])
+}
+
 @Test func quotaStopAndCostDecodeOnASessionView() throws {
   let json = #"{"session":{"sessionId":"s","updatedAt":"x","status":"idle","activeTurnId":null},"items":[],"approvals":[],"questions":[],"cost":{"usd":0.84,"partial":true},"quota":{"kind":"tierLimit","resetsAt":1800000600000}}"#
   let view = try JSONDecoder().decode(SessionView.self, from: Data(json.utf8))
@@ -475,4 +496,10 @@ private func waitFor(_ condition: () -> Bool) async throws {
   let input = ScheduleInput(name: "N", prompt: "P", folder: "/p", preset: "manual", minute: 0, hour: 9, weekday: 1, approvalMode: "onRequest")
   guard case .object(let object) = try JSONValue(encoding: input) else { Issue.record("not an object"); return }
   #expect(object["id"] == nil && object["name"] == .string("N") && object["worktree"] == .bool(false))
+}
+
+@Test func aPullRequestDecodesWithItsChecks() throws {
+  let json = #"{"number":9,"title":"Usage","url":"https://github.com/o/r/pull/9","state":"OPEN","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"main","headRefName":"usage","mergedAt":null,"checks":[{"name":"check","state":"failing"}],"body":"","files":["docs/a.md"],"live":false}"#
+  let pr = try JSONDecoder().decode(PullRequest.self, from: Data(json.utf8))
+  #expect(pr.number == 9 && pr.checks == [PullRequestCheck(name: "check", state: "failing")] && pr.files == ["docs/a.md"])
 }

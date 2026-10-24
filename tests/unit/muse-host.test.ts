@@ -325,6 +325,42 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('keeps the limits null and emits nothing when usage/read returns no usage', async () => {
+    const events: AppEvent[] = []
+    wire.request.mockImplementation(async () => ({}))
+    const host = new MuseHost((event) => events.push(event))
+    expect((await host.connect('')).state).toBe('ready')
+    await vi.waitFor(() =>
+      expect(wire.request.mock.calls.some(([method]) => method === 'usage/read')).toBe(true),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(host.limits).toBeNull()
+    expect(events.some((event) => event.type === 'usage-changed')).toBe(false)
+    await host.close()
+  })
+
+  it('keeps a newer usage/changed when a late usage/read reply arrives', async () => {
+    const events: AppEvent[] = []
+    let reply: (value: unknown) => void = () => {}
+    wire.request.mockImplementation((method: string) =>
+      method === 'usage/read'
+        ? new Promise((resolve) => {
+            reply = resolve
+          })
+        : Promise.resolve({}),
+    )
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    const newer = { ...usage, observedAtMs: usage.observedAtMs + 60_000 }
+    notify('usage/changed', { ...newer, window: { ...newer.window, usedPercent: 85 } })
+    reply({ usage })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(host.limits?.observedAt).toBe(newer.observedAtMs)
+    expect(host.limits?.window.usedPercent).toBe(85)
+    expect(events.filter((event) => event.type === 'usage-changed')).toHaveLength(1)
+    await host.close()
+  })
+
   it('folds usage/changed into the limits without a session id', async () => {
     const events: AppEvent[] = []
     const host = new MuseHost((event) => events.push(event))

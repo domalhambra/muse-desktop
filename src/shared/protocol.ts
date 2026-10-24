@@ -274,6 +274,29 @@ export type GitChange = { path: string; status: string; staged: boolean }
 export type GitStatus = { branch: string; changes: GitChange[]; isRepository: boolean }
 export type Attachment = { id: string; name: string; kind: 'image' | 'text'; size: number }
 export type ProjectFile = { name: string; path: string; directory: boolean }
+/** One CI check of a pull request, normalized from gh's statusCheckRollup. */
+export type PullRequestCheck = {
+  name: string
+  state: 'passing' | 'failing' | 'pending' | 'skipped'
+}
+/** A pull request as the PR monitor and the change cards use it. */
+export type PullRequest = {
+  number: number
+  title: string
+  url: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  isDraft: boolean
+  reviewDecision: string | null
+  /** gh's mergeStateStatus: CLEAN, HAS_HOOKS, UNSTABLE, BLOCKED, BEHIND, DIRTY, DRAFT or UNKNOWN. */
+  mergeState: string
+  baseRefName: string
+  headRefName: string
+  mergedAt: string | null
+  checks: PullRequestCheck[]
+  body: string
+  files: string[]
+  live: boolean
+}
 export type AppEvent =
   | { type: 'connection'; status: ConnectionStatus }
   | { type: 'session'; view: SessionView }

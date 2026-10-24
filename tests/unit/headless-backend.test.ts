@@ -28,6 +28,7 @@ import { encodeVoiceWav, MAX_VOICE_BYTES } from '../../src/shared/voice'
 import { createBackend, type BackendDeps, type Muse } from '../../src/headless/backend'
 import type { BridgeFactories } from '../../src/headless/bridges'
 import { HEADLESS_PROTOCOL, type Ask } from '../../src/headless/wire'
+import { calls, fakeGh, raw, removeFakeGh } from './fake-gh'
 
 let dir = ''
 beforeEach(async () => {
@@ -116,6 +117,8 @@ function harness(
     dataFolder?: string
     voice?: NonNullable<BackendDeps['voice']>
     scheduler?: BackendDeps['scheduler']
+    /** A fake gh's environment (tests/unit/fake-gh.ts). Without it, gh is never found. */
+    ghEnv?: NodeJS.ProcessEnv
   } = {},
 ) {
   const asks: Ask[] = []
@@ -154,6 +157,9 @@ function harness(
     bridgeFactories,
     voice,
     scheduler: options.scheduler ?? { timer: false, tz: 'UTC' },
+    // No test may reach the real gh: PATH holds only a fake gh, and no Homebrew folders are added.
+    ghEnv: options.ghEnv ?? { PATH: '/nonexistent' },
+    ghFolders: [],
     ask: async (value) => {
       asks.push(value)
       // A quit that starts while the Ask shows: the answer still comes back.
@@ -1742,5 +1748,92 @@ describe('headless backend, scheduled tasks', () => {
       const later = store.schedules.find((schedule) => schedule.name === 'Second')!
       expect(store.history[later.id].at(-1)?.reason).toBe('mMac is quitting.')
     })
+  })
+})
+
+describe('headless backend, M5b pull requests', () => {
+  afterEach(removeFakeGh)
+
+  it('asks before it merges, and merges only on Accept', async () => {
+    const project = await folder('project')
+    const env = await fakeGh({ 'pr merge': '' })
+    const accept = harness(fakeMuse(), [0], { ghEnv: env })
+    await accept.start()
+    await accept.call('add-project', project)
+    await expect(accept.call('pr-merge', project, 9)).resolves.toBe(true)
+    expect(accept.asks.at(-1)).toMatchObject({
+      title: 'Accept pull request 9?',
+      message:
+        'mMac merges it into its base branch with gh, as one squashed commit. GitHub keeps the branch.',
+      buttons: ['Accept', 'Cancel'],
+    })
+    const cancel = harness(fakeMuse(), [1], { ghEnv: env, dataFolder: 'data-cancel' })
+    await cancel.start()
+    await cancel.call('add-project', project)
+    await expect(cancel.call('pr-merge', project, 9)).resolves.toBe(false)
+    expect((await calls()).filter((args) => args[1] === 'merge')).toEqual([
+      ['pr', 'merge', '9', '--squash'],
+    ])
+  })
+
+  it('asks before it merges when ready, in the conversation’s folder', async () => {
+    const project = await folder('project')
+    const env = await fakeGh({ 'pr merge': '' })
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const { call, start, asks } = harness(muse, [0, 1], { ghEnv: env })
+    await start()
+    await call('add-project', project)
+    await expect(call('pr-merge-when-ready', 's1', 9)).resolves.toBe(true)
+    expect(asks.at(-1)).toMatchObject({
+      title: 'Merge pull request 9 when its checks pass?',
+      buttons: ['Merge when ready', 'Cancel'],
+    })
+    await expect(call('pr-merge-when-ready', 's1', 9)).resolves.toBe(false)
+    expect(await calls()).toEqual([['pr', 'merge', '9', '--auto', '--squash']])
+  })
+
+  it('reads a conversation’s PR in its own folder without a trust Ask', async () => {
+    const project = await folder('project')
+    const env = await fakeGh({ 'pr view': raw })
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const { call, start, asks } = harness(muse, [], { ghEnv: env })
+    await start()
+    await call('add-project', project)
+    const pr = (await call('pr-status', 's1')) as { number: number }
+    expect(pr.number).toBe(9)
+    expect(asks).toHaveLength(0)
+  })
+
+  it('lists a known project’s PRs, and refuses an unknown one before gh runs', async () => {
+    const project = await folder('project')
+    const env = await fakeGh({
+      'pr list': [raw],
+      'repo view': { nameWithOwner: 'o/r', defaultBranchRef: { name: 'main' } },
+    })
+    const { call, start } = harness(fakeMuse(), [], { ghEnv: env })
+    await start()
+    await expect(call('pr-list', project)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    await expect(call('pr-merge', project, 9)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    await call('add-project', project)
+    const list = (await call('pr-list', project)) as { number: number }[]
+    expect(list.map((pr) => pr.number)).toEqual([9])
+    expect((await calls()).map((args) => args.slice(0, 2))).toEqual([
+      ['pr', 'list'],
+      ['repo', 'view'],
+    ])
+  })
+
+  it('refuses a PR number that is not a positive whole number', async () => {
+    const project = await folder('project')
+    const { call, start, asks } = harness(fakeMuse(), [0])
+    await start()
+    await call('add-project', project)
+    await expect(call('pr-merge', project, -1)).rejects.toThrow()
+    await expect(call('pr-merge', project, 1.5)).rejects.toThrow()
+    expect(asks).toHaveLength(0)
   })
 })
