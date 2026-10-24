@@ -95,6 +95,9 @@ public final class Workspace {
   public internal(set) var pullRequest: PullRequest?
   public internal(set) var pullRequestError: String?
   @ObservationIgnored var lastPullRequestPoll: Date?
+  /// True while a `pr-status` read runs. `clearPullRequest()` leaves it, so a read for the old
+  /// conversation still blocks a second one until it ends; its reply is then dropped.
+  @ObservationIgnored var pullRequestInFlight = false
   /// The project's PRs, as change cards.
   public internal(set) var changeCards: [PullRequest] = []
   public internal(set) var decidingApprovals: Set<String> = []

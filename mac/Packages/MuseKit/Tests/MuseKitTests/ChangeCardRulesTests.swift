@@ -94,3 +94,8 @@ private func check(_ state: String, _ name: String = "check") -> PullRequestChec
   #expect(ChangeCardRules.askWhyPrompt(pr).contains("pull request 9"))
   #expect(ChangeCardRules.acceptedText(pr) == "Accepted into extensions")
 }
+
+@Test func theHeadlineSkipsTildeFencesAndIndentedCode() {
+  let body = "~~~\n## Summary\nlet secret = 1\n~~~\n## Summary\n    let code = 1\nThe footer shows usage. More.\n"
+  #expect(ChangeCardRules.headline(title: "Title", body: body) == "The footer shows usage.")
+}

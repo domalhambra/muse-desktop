@@ -8,21 +8,36 @@ extension Workspace {
         showingChanges: showingChanges, hasPullRequest: pullRequest != nil, lastPoll: lastPullRequestPoll, now: now)
   }
 
+  /// Reads the open conversation's PR. One read at a time; a reply for a conversation the person
+  /// has left is dropped. A good read clears an earlier error, so the poll starts again.
   public func refreshPullRequest() async {
-    guard let sessionId = view?.session.sessionId else { return }
+    guard let sessionId = view?.session.sessionId, !pullRequestInFlight else { return }
+    pullRequestInFlight = true
+    defer { pullRequestInFlight = false }
+    let sequence = openSequence
+    func current() -> Bool { sequence == openSequence && view?.session.sessionId == sessionId }
     lastPullRequestPoll = .now
     do {
-      pullRequest = try await client.pullRequest(sessionId: sessionId)
+      let found = try await client.pullRequest(sessionId: sessionId)
+      guard current() else { return }
+      pullRequest = found
+      pullRequestError = nil
     } catch {
+      guard current() else { return }
       pullRequestError = error.localizedDescription
     }
   }
 
+  /// Reads the project's PRs. A reply for a project the person has left is dropped.
   public func loadChangeCards() async {
+    let project = self.project
     guard !project.isEmpty else { return }
     do {
-      changeCards = try await client.pullRequests(project: project)
+      let cards = try await client.pullRequests(project: project)
+      guard project == self.project else { return }
+      changeCards = cards
     } catch {
+      guard project == self.project else { return }
       errorMessage = error.localizedDescription
     }
   }
@@ -54,6 +69,8 @@ extension Workspace {
     let prompt = ChangeCardRules.askWhyPrompt(pr)
     if let owner = ChangeCardRules.owner(of: pr, worktrees: inspector.worktrees) {
       await open(owner)
+      // A failed or overtaken open leaves another conversation shown: no side chat on that one.
+      guard view?.session.sessionId == owner else { return }
       await openSideChat()
       await sendToSide(prompt)
     } else {

@@ -123,15 +123,17 @@ public enum ChangeCardRules {
     return result
   }
 
-  /// One sentence for Dom: from "What changes for you" or "Summary", otherwise the title. Code
-  /// blocks are skipped; Markdown marks are removed.
+  /// One sentence for Dom: from "What changes for you" or "Summary", otherwise the title. Fenced
+  /// (``` or ~~~) and indented code blocks are skipped; Markdown marks are removed.
   public static func headline(title: String, body: String) -> String {
     var inCode = false
     var inSection = false
     for raw in body.components(separatedBy: "\n") {
       let line = raw.trimmingCharacters(in: .whitespaces)
-      if line.hasPrefix("```") { inCode.toggle(); continue }
+      if line.hasPrefix("```") || line.hasPrefix("~~~") { inCode.toggle(); continue }
       if inCode { continue }
+      // An indented code block: four spaces or a tab.
+      if raw.hasPrefix("    ") || raw.hasPrefix("\t") { continue }
       if line.hasPrefix("#") {
         let heading = line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces).lowercased()
         inSection = heading == "what changes for you" || heading == "summary"
