@@ -2,7 +2,9 @@
 // protocol of src/headless/wire.ts (keep `protocol` below equal to HEADLESS_PROTOCOL) and
 // serves three conversations. The first asks once when opened, then waits on an approval and a
 // question. It also answers the inspector's and the Settings window's methods from fixed or
-// in-memory data, and its rename Asks before it replies. A `send` of "crash now" ends the
+// in-memory data, and its rename Asks before it replies. For M5b it reports usage limits, gives
+// the second conversation a quota stop, serves two scheduled tasks and two pull requests, and its
+// pr-merge Asks before it replies. A `send` of "crash now" ends the
 // process with code 1, as a backend that crashes does.
 // Each request and Ask answer is appended to the file FAKE_BACKEND_LOG names, with the fake's
 // start and every reply it writes, so a failed test shows how far the fake got.
@@ -21,6 +23,14 @@ record({ fake: 'started', pid: process.pid })
 
 const project = process.env.MMAC_TEST_PROJECT ?? '/tmp'
 const now = new Date().toISOString()
+const hour = 60 * 60 * 1000
+// The usage limits: the window at 85% resets in three hours, the weekly block is at 30%.
+const limits = {
+  observedAt: Date.now(),
+  tier: 'pro',
+  window: { usedPercent: 85, resetsAt: Date.now() + 3 * hour, minutes: 300 },
+  weekly: { usedPercent: 30, resetsAt: Date.now() + 5 * 24 * hour },
+}
 const session = {
   sessionId: 'fake-1',
   workspaceRoot: project,
@@ -42,6 +52,10 @@ const others = [
   items: [
     { itemId: `${sessionId}-a1`, kind: 'agentMessage', revision: 1, status: 'completed', text },
   ],
+  // The second conversation stopped on the session limit, which resets with the window.
+  ...(sessionId === 'fake-2'
+    ? { error: 'quota', quota: { kind: 'tierLimit', resetsAt: limits.window.resetsAt } }
+    : {}),
 }))
 // The side session a side chat opens. Never in the sessions list.
 const side = {
@@ -267,6 +281,48 @@ const view = (sessionId = 'fake-1') => {
 // Sends the changed first conversation shortly after a reply, as MuseHost does.
 const update = () => setTimeout(() => write({ event: { type: 'session', view: view() } }), 50)
 const ready = { state: 'ready', version: 'fake', path: '/usr/local/bin/muse' }
+// Settings › Scheduled: two active tasks.
+const schedules = [
+  ['a', 'Morning review', 'daily'],
+  ['b', 'Weekly cleanup', 'weekly'],
+].map(([id, name, preset]) => ({
+  schedule: {
+    id,
+    name,
+    prompt: 'Review.',
+    folder: project,
+    preset,
+    minute: 0,
+    hour: 9,
+    weekday: 1,
+    approvalMode: 'onRequest',
+    modelId: null,
+    worktree: false,
+    enabled: true,
+    createdAt: 1,
+  },
+  nextRunAt: Date.now() + 2 * hour,
+  history: [],
+}))
+// The change cards: PR 1 is ready; PR 2 is based on PR 1's branch, so it waits for PR 1.
+const pullRequest = (number, base, head) => ({
+  number,
+  title: number === 1 ? 'mMac now shows your usage limits' : 'Limits get a weekly chart',
+  url: `https://github.com/o/r/pull/${number}`,
+  state: 'OPEN',
+  isDraft: false,
+  reviewDecision: null,
+  mergeState: 'CLEAN',
+  baseRefName: base,
+  headRefName: head,
+  mergedAt: null,
+  checks: [{ name: 'check', state: 'passing' }],
+  body: '',
+  files: ['docs/a.md'],
+  live: false,
+})
+const pulls = [pullRequest(1, 'main', 'usage'), pullRequest(2, 'usage', 'chart')]
+const scheduleEntry = (id) => schedules.find((entry) => entry.schedule.id === id)
 
 const methods = {
   // As backend.ts does: a client that speaks another protocol gets an error reply.
@@ -277,6 +333,8 @@ const methods = {
   },
   start: (options) => {
     bridgeToken = options?.bridgeToken ?? ''
+    // As MuseHost does when Muse reports limits: an event with the same value `usage` returns.
+    setTimeout(() => write({ event: { type: 'usage-changed', limits } }), 100)
     return { preferences, status: ready }
   },
   sessions: () => ({
@@ -348,6 +406,23 @@ const methods = {
   'worktree-merge': () => ({ ok: true, output: 'Merged muse/feature.' }),
   'worktree-remove': () => null,
   ...settingsMethods,
+  usage: () => limits,
+  'schedule-list': () => schedules,
+  'schedule-enabled': (id, enabled) => {
+    scheduleEntry(id).schedule.enabled = enabled
+  },
+  'schedule-run': (id) => {
+    scheduleEntry(id).history.unshift({
+      at: Date.now(),
+      scheduledFor: null,
+      outcome: 'started',
+      sessionId: 'fake-1',
+    })
+  },
+  'schedule-save': () => schedules[0],
+  'schedule-remove': () => null,
+  'pr-status': (sessionId) => (sessionId === 'fake-1' ? pulls[0] : null),
+  'pr-list': () => pulls,
   shutdown: () => {
     setTimeout(() => process.exit(0), 50)
     return true
@@ -364,7 +439,12 @@ createInterface({ input: process.stdin })
     const message = JSON.parse(line)
     if ('answer' in message) {
       record({ answer: message.answer, choice: message.choice })
-      if (pending) write({ id: pending.id, ok: true, value: pending.value() ?? null })
+      if (pending) {
+        // A pending request with a cancel value replies it on any choice but the first.
+        const value =
+          message.choice !== 0 && 'cancelValue' in pending ? pending.cancelValue : pending.value()
+        write({ id: pending.id, ok: true, value: value ?? null })
+      }
       pending = null
       return
     }
@@ -399,6 +479,26 @@ createInterface({ input: process.stdin })
         title: 'Rename needs an answer',
         message: 'The fake asks while the rename sheet is open.',
         buttons: ['Go on', 'Cancel'],
+      })
+      return
+    }
+    // Accepting a PR Asks first, as the backend does; Accept merges it.
+    if (message.method === 'pr-merge') {
+      pending = {
+        id: message.id,
+        cancelValue: false,
+        value: () => {
+          pulls[0] = { ...pulls[0], state: 'MERGED', mergedAt: new Date().toISOString() }
+          return true
+        },
+      }
+      write({
+        ask: 3,
+        kind: 'confirm',
+        title: `Accept pull request ${message.args[1]}?`,
+        message:
+          'mMac merges it into its base branch with gh, as one squashed commit. GitHub keeps the branch.',
+        buttons: ['Accept', 'Cancel'],
       })
       return
     }

@@ -715,4 +715,91 @@ final class MMacUITests: XCTestCase {
         $0["method"] as? String == "send" && (($0["args"] as? [Any])?.first as? [String: Any])?["sessionId"] as? String == "fake-side"
       })
   }
+
+  func testM5bAgainstTheFakeBackend() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    let app = try launchFake(log: log)
+    let project = temporary.appending(path: "project").path
+    waitUntilConnected(app)
+
+    // Usage: the footer line, as VoiceOver reads it, and its popover.
+    let footer = app.buttons["usage-footer"]
+    XCTAssertTrue(footer.waitForExistence(timeout: 10), "No usage footer. The fake's requests: \(fakeRequests())")
+    XCTAssertEqual(footer.label, "Usage limits")
+    waitForValue(footer, "5-hour 85 percent, week 30 percent")
+    footer.click()
+    let session = app.descendants(matching: .any)
+      .matching(NSPredicate(format: "label BEGINSWITH %@", "Session limit 85 percent used")).firstMatch
+    XCTAssertTrue(session.waitForExistence(timeout: 5))
+    app.typeKey(.escape, modifierFlags: [])
+    XCTAssertTrue(session.waitForNonExistence(timeout: 5))
+
+    // The stop banner on the second conversation, and its line about what happens next. On macOS a
+    // SwiftUI Text can report its string as its value, so the predicates check both.
+    let second = app.staticTexts["Second fake conversation"]
+    XCTAssertTrue(second.waitForExistence(timeout: 10))
+    second.click()
+    let banner = app.descendants(matching: .any)
+      .matching(
+        NSPredicate(
+          format: "label BEGINSWITH %@ OR value BEGINSWITH %@", "Session limit reached. Resets",
+          "Session limit reached. Resets")
+      ).firstMatch
+    XCTAssertTrue(banner.waitForExistence(timeout: 10))
+    let saved = "Your conversation is saved. mMac can send again after the reset."
+    XCTAssertTrue(
+      app.descendants(matching: .any)
+        .matching(NSPredicate(format: "label == %@ OR value == %@", saved, saved)).firstMatch.exists)
+
+    // Settings › Scheduled: pause one task, run the other.
+    app.typeKey(",", modifierFlags: .command)
+    let settings = settingsWindow(app)
+    XCTAssertTrue(settings.waitForExistence(timeout: 10))
+    pane(settings, "Scheduled").click()
+    let active = settings.descendants(matching: .any)["schedule-active-b"]
+    XCTAssertTrue(active.waitForExistence(timeout: 10))
+    active.click()
+    waitUntilLogged(log, ["method": "schedule-enabled", "args": ["b", false]])
+    let run = settings.buttons["schedule-run-a"]
+    XCTAssertTrue(run.waitForExistence(timeout: 5))
+    run.click()
+    waitUntilLogged(log, ["method": "schedule-run", "args": ["a"]])
+    settings.typeKey("w", modifierFlags: .command)
+    XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+
+    // Proposed changes: card 1 is ready, card 2 waits for it.
+    let proposed = app.buttons["proposed-changes"]
+    XCTAssertTrue(proposed.waitForExistence(timeout: 5))
+    proposed.click()
+    let card1 = app.descendants(matching: .any)["change-card-1"]
+    XCTAssertTrue(card1.waitForExistence(timeout: 10), "No card 1. The fake's requests: \(fakeRequests())")
+    XCTAssertTrue(
+      card1.descendants(matching: .any)
+        .matching(NSPredicate(format: "label CONTAINS %@", "Ready for you")).firstMatch.waitForExistence(timeout: 5))
+    let card2 = app.descendants(matching: .any)["change-card-2"]
+    XCTAssertTrue(card2.waitForExistence(timeout: 5))
+    XCTAssertTrue(
+      card2.descendants(matching: .any)
+        .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Accept PR 1 first", "Accept PR 1 first"))
+        .firstMatch.exists)
+
+    // Accept card 1: the backend Asks first. The Ask is a sheet on the Proposed changes sheet.
+    let accept = app.buttons["change-accept-1"]
+    XCTAssertEqual(accept.label, "Accept PR 1")
+    waitUntilEnabled(accept)
+    accept.click()
+    XCTAssertTrue(app.staticTexts["Accept pull request 1?"].waitForExistence(timeout: 10))
+    let answer = app.windows["main"].sheets.sheets.buttons["Accept"]
+    XCTAssertTrue(answer.waitForExistence(timeout: 5))
+    answer.click()
+    waitUntilLogged(log, ["answer": 3, "choice": 0])
+    XCTAssertTrue(
+      card1.descendants(matching: .any)
+        .matching(NSPredicate(format: "label CONTAINS %@", "Accepted")).firstMatch.waitForExistence(timeout: 10))
+    quit(app)
+
+    let entries = try Self.logged(log)
+    assertLogged(entries, ["method": "pr-merge", "args": [project, 1]])
+    assertLogged(entries, ["method": "open", "args": ["fake-2"]])
+  }
 }
