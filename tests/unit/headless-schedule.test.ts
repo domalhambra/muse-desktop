@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -215,5 +215,76 @@ describe('Scheduler', () => {
     expect(ran.history[0]).toMatchObject({ outcome: 'started' })
     expect(skipped.history).toHaveLength(1)
     expect(skipped.history[0]).toMatchObject({ outcome: 'skipped' })
+  })
+
+  it('a failed write does not block the next one', async () => {
+    const folder = join(dir, 'later')
+    const scheduler = new Scheduler({
+      file: join(folder, 'schedules.json'),
+      now: () => Date.parse('2026-10-26T08:00:00Z'),
+      tz: 'UTC',
+      start: async () => 'session-1',
+      isRunning: () => false,
+      emit: () => {},
+    })
+    await scheduler.load()
+    await expect(scheduler.save(input)).rejects.toThrow(/ENOENT/)
+    await mkdir(folder)
+    await scheduler.save({ ...input, name: 'Second' })
+    const stored = JSON.parse(await readFile(join(folder, 'schedules.json'), 'utf8'))
+    expect(stored.schedules.map((entry: { name: string }) => entry.name)).toEqual([
+      'Morning review',
+      'Second',
+    ])
+  })
+
+  it('the timer tolerates a failing write', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const scheduler = new Scheduler({
+      file: join(dir, 'missing', 'schedules.json'),
+      tz: 'UTC',
+      start: async () => 'session-1',
+      isRunning: () => false,
+      emit: () => {},
+    })
+    await scheduler.load()
+    scheduler.start()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    scheduler.stop()
+    expect(errors).toHaveBeenCalled()
+    errors.mockRestore()
+  })
+
+  it('emits after saving and enabling, and refuses an unknown id', async () => {
+    const h = harness()
+    await h.scheduler.load()
+    const entry = await h.scheduler.save(input)
+    expect(h.events).toEqual([{ type: 'schedules-changed' }])
+    await h.scheduler.setEnabled(entry.schedule.id, false)
+    expect(h.events).toHaveLength(2)
+    expect(h.scheduler.list()[0].schedule.enabled).toBe(false)
+    await expect(h.scheduler.setEnabled('gone', true)).rejects.toThrow(
+      'This scheduled task no longer exists.',
+    )
+  })
+
+  it('a task removed during a slow start leaves no history', async () => {
+    let release = () => {}
+    const blocked = new Promise<void>((resolve) => (release = resolve))
+    const h = harness(
+      vi.fn(async () => {
+        await blocked
+        return 'session-1'
+      }),
+    )
+    await h.scheduler.load()
+    const entry = await h.scheduler.save({ ...input, preset: 'manual' })
+    const running = h.scheduler.runNow(entry.schedule.id)
+    await h.scheduler.remove(entry.schedule.id)
+    release()
+    await running
+    expect(h.scheduler.list()).toEqual([])
+    const stored = JSON.parse(await readFile(join(dir, 'schedules.json'), 'utf8'))
+    expect(stored.history).toEqual({})
   })
 })

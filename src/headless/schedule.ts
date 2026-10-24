@@ -63,11 +63,19 @@ export class Scheduler {
     }
   }
 
-  /** Checks now, then every minute. */
+  /** Checks now, then every minute. A failed check is logged; the next minute tries again. */
   start() {
     this.stop()
-    this.timer = setInterval(() => void this.tick(), 60_000)
-    void this.tick()
+    this.timer = setInterval(() => this.timedTick(), 60_000)
+    this.timedTick()
+  }
+
+  private timedTick() {
+    this.tick().catch((error: unknown) => {
+      console.error(
+        `mMac could not check scheduled tasks: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
   }
 
   stop() {
@@ -109,6 +117,7 @@ export class Scheduler {
       ? this.store.schedules.map((entry) => (entry.id === schedule.id ? schedule : entry))
       : [...this.store.schedules, schedule]
     await this.write()
+    this.deps.emit({ type: 'schedules-changed' })
     return this.list().find((entry) => entry.schedule.id === schedule.id)!
   }
 
@@ -120,10 +129,13 @@ export class Scheduler {
   }
 
   async setEnabled(id: string, enabled: boolean) {
+    if (!this.store.schedules.some((schedule) => schedule.id === id))
+      throw new Error('This scheduled task no longer exists.')
     this.store.schedules = this.store.schedules.map((schedule) =>
       schedule.id === id ? { ...schedule, enabled } : schedule,
     )
     await this.write()
+    this.deps.emit({ type: 'schedules-changed' })
   }
 
   async runNow(id: string) {
@@ -207,20 +219,27 @@ export class Scheduler {
   }
 
   private record(id: string, run: ScheduleRun) {
+    // A task removed during a slow start keeps no orphan history.
+    if (!this.store.schedules.some((schedule) => schedule.id === id)) return
     this.store.history[id] = [...(this.store.history[id] ?? []), run].slice(-HISTORY)
     this.deps.emit({ type: 'schedules-changed' })
   }
 
   /** A temporary file with mode 600, renamed over the store: no half-written file after a crash. */
+  // Each write waits for the one before but not on its success, so one failure (a full disk, a
+  // missing folder) does not fail every later write. The caller still sees its own failure.
   private write() {
     const data = JSON.stringify(this.store, null, 2)
-    this.writes = this.writes.then(async () => {
-      const temporary = `${this.deps.file}.${process.pid}.tmp`
-      await writeFile(temporary, data, { mode: 0o600 })
-      // The mode option applies only when the file is created; a leftover temporary keeps its own.
-      await chmod(temporary, 0o600)
-      await rename(temporary, this.deps.file)
-    })
-    return this.writes
+    const next = this.writes
+      .catch(() => {})
+      .then(async () => {
+        const temporary = `${this.deps.file}.${process.pid}.tmp`
+        await writeFile(temporary, data, { mode: 0o600 })
+        // The mode option applies only when the file is created; a leftover temporary keeps its own.
+        await chmod(temporary, 0o600)
+        await rename(temporary, this.deps.file)
+      })
+    this.writes = next
+    return next
   }
 }
