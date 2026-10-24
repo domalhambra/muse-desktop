@@ -10,6 +10,8 @@ struct InspectorView: View {
   let workspace: Workspace
   @Bindable var inspector: Inspector
   @Environment(\.appearance) private var appearance
+  /// The tab bar's width, for choosing between titled and icon-only segments.
+  @State private var tabBarWidth: CGFloat = 0
 
   var body: some View {
     // Built once per render, for the tab's count and the list, so the list compares entries
@@ -30,7 +32,11 @@ struct InspectorView: View {
         case .preview: PreviewView(project: workspace.project)
         }
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      // A tab's content never sets the column's width: minWidth 0 keeps a wide list or split view
+      // from widening the inspector past its column and both window edges, and anything wider is
+      // cut at the column's edge.
+      .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .clipped()
       if let usage = workspace.view?.usage {
         Divider()
         UsagePanel(usage: usage)
@@ -42,6 +48,9 @@ struct InspectorView: View {
     // does, so a turn that ends shows what it changed.
     // The Changes, Files and Activity lists draw on the column's color.
     .scrollContentBackground(.hidden)
+    // The column's own width, whatever its views would like: see `WindowLayout`.
+    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+    .clipped()
     .background(appearance.colors.dialog)
     .task(id: RefreshKey(project: workspace.project, status: workspace.view?.session.status)) {
       await inspector.refresh()
@@ -87,21 +96,43 @@ struct InspectorView: View {
   }
 
   private func tabs(activityCount: Int, todosCount: Int) -> some View {
-    HStack(spacing: 8) {
-      Picker("Inspector view", selection: $inspector.tab) {
-        Text(ChangeLabel.counted("Changes", inspector.git?.changes.count ?? 0)).tag(Inspector.Tab.changes)
-        Text("Files").tag(Inspector.Tab.files)
-        Text(ChangeLabel.counted("Activity", activityCount)).tag(Inspector.Tab.activity)
-        Text(ChangeLabel.counted("Tasks", todosCount)).tag(Inspector.Tab.tasks)
-        Text(ChangeLabel.counted("Agents", AgentRow.build(workspace.view?.items ?? []).count)).tag(Inspector.Tab.agents)
-        Text("Preview").tag(Inspector.Tab.preview)
+    let titles = InspectorTab.all.map { tab in
+      switch tab.tab {
+      case .changes: ChangeLabel.counted("Changes", inspector.git?.changes.count ?? 0)
+      case .activity: ChangeLabel.counted("Activity", activityCount)
+      case .tasks: ChangeLabel.counted("Tasks", todosCount)
+      case .agents: ChangeLabel.counted("Agents", AgentRow.build(workspace.view?.items ?? []).count)
+      case .files, .preview: tab.title
+      }
+    }
+    return HStack(spacing: 8) {
+      Group {
+        // Titled segments when all six fit the bar; at the column's narrower widths, icons, whose
+        // names (with the counts) VoiceOver and the tooltip still read.
+        if tabBarWidth == 0 || tabBarWidth >= InspectorTab.titledWidth(titles) {
+          Picker("Inspector view", selection: $inspector.tab) {
+            ForEach(Array(InspectorTab.all.enumerated()), id: \.offset) { index, tab in
+              Text(titles[index]).tag(tab.tab)
+            }
+          }
+          .frame(minWidth: 0, maxWidth: .infinity)
+        } else {
+          Picker("Inspector view", selection: $inspector.tab) {
+            ForEach(Array(InspectorTab.all.enumerated()), id: \.offset) { index, tab in
+              // The image's description is the segment's name for VoiceOver and the UI tests.
+              Image(nsImage: InspectorTab.icon(tab.symbol, named: titles[index])).tag(tab.tab)
+            }
+          }
+          .frame(minWidth: 0, maxWidth: .infinity)
+          .help(titles[InspectorTab.all.firstIndex { $0.tab == inspector.tab } ?? 0])
+        }
       }
       .pickerStyle(.segmented)
       .labelsHidden()
       .tint(nil)
-      // Six segments share the column's width; at their intrinsic width they would push the
-      // later segments out of the window.
-      .frame(maxWidth: .infinity)
+      // The room the picker has, measured on the frame, which minWidth 0 keeps at the bar's width
+      // even while the segments inside want more.
+      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabBarWidth = $0 }
       Button {
         Task { await inspector.refresh() }
       } label: {
@@ -120,6 +151,8 @@ struct InspectorView: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("inspector-tabs")
   }
 
   /// Electron's footer: the project in Finder, in Terminal, or in the full Muse Code CLI. Off with
@@ -150,10 +183,12 @@ struct InspectorView: View {
     }
     .buttonStyle(.borderless)
     .labelStyle(.titleAndIcon)
+    // One line each, so the three fit the column at its minimum width.
+    .lineLimit(1)
     .font(.callout)
     .foregroundStyle(.themeMuted)
     .disabled(workspace.project.isEmpty)
-    .padding(.horizontal, 18)
+    .padding(.horizontal, 14)
     .padding(.vertical, 12)
   }
 
@@ -174,6 +209,39 @@ struct InspectorView: View {
   struct RefreshKey: Equatable {
     let project: String
     let status: String?
+  }
+}
+
+/// The inspector's six tabs, in order, with the icon each shows when the bar is narrow.
+struct InspectorTab {
+  let tab: Inspector.Tab
+  let title: String
+  let symbol: String
+
+  static let all = [
+    InspectorTab(tab: .changes, title: "Changes", symbol: "plusminus"),
+    InspectorTab(tab: .files, title: "Files", symbol: "folder"),
+    InspectorTab(tab: .activity, title: "Activity", symbol: "terminal"),
+    InspectorTab(tab: .tasks, title: "Tasks", symbol: "checklist"),
+    InspectorTab(tab: .agents, title: "Agents", symbol: "person.2"),
+    InspectorTab(tab: .preview, title: "Preview", symbol: "globe"),
+  ]
+
+  /// Room around each title in a segment: an estimate on the generous side, so titles show only
+  /// when they fit uncut.
+  static let segmentPadding: CGFloat = 24
+
+  /// The width six titled segments need at the control's font.
+  @MainActor static func titledWidth(_ titles: [String]) -> CGFloat {
+    let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+    return titles.reduce(0) { total, title in
+      total + ceil((title as NSString).size(withAttributes: [.font: font]).width) + segmentPadding
+    }
+  }
+
+  /// A segment's icon, described by its name.
+  @MainActor static func icon(_ symbol: String, named name: String) -> NSImage {
+    NSImage(systemSymbolName: symbol, accessibilityDescription: name) ?? NSImage()
   }
 }
 
