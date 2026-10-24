@@ -321,6 +321,57 @@ describe('Scheduler', () => {
     expect(ran.history[0]).toMatchObject({ outcome: 'started', sessionId: 'session-2' })
   })
 
+  it('an approved run that runs again keeps one task at a time', async () => {
+    const h = harness(vi.fn(async () => `session-${h.start.mock.calls.length}`))
+    await h.scheduler.load()
+    await h.scheduler.save(input)
+    await h.scheduler.save({ ...input, minute: 20 })
+    const third = await h.scheduler.save({ ...input, minute: 40 })
+    const fourth = await h.scheduler.save({ ...input, preset: 'manual' })
+    h.at('2026-10-26T09:00:30Z')
+    await h.scheduler.tick()
+    // Run 1 waits for an approval: task 2 starts.
+    h.running.add('session-1')
+    h.waiting.add('session-1')
+    h.at('2026-10-26T09:20:30Z')
+    await h.scheduler.tick()
+    expect(h.start).toHaveBeenCalledTimes(2)
+    h.running.add('session-2')
+    // Run 1 is approved and runs again; run 2 ends. Task 3 is skipped.
+    h.waiting.delete('session-1')
+    h.running.delete('session-2')
+    h.at('2026-10-26T09:40:30Z')
+    await h.scheduler.tick()
+    expect(h.start).toHaveBeenCalledTimes(2)
+    const skipped = h.scheduler.list().find((entry) => entry.schedule.id === third.schedule.id)!
+    expect(skipped.history[0]).toMatchObject({ outcome: 'skipped' })
+    await expect(h.scheduler.runNow(fourth.schedule.id)).rejects.toThrow(
+      'Another scheduled task is running.',
+    )
+    // Run 1 ends too: nothing holds the next one back.
+    h.running.delete('session-1')
+    await h.scheduler.runNow(fourth.schedule.id)
+    expect(h.start).toHaveBeenCalledTimes(3)
+  })
+
+  it('a waiting run 1 and a running run 2 still hold back a third', async () => {
+    const h = harness(vi.fn(async () => `session-${h.start.mock.calls.length}`))
+    await h.scheduler.load()
+    const manual = await h.scheduler.save({ ...input, preset: 'manual' })
+    await h.scheduler.runNow(manual.schedule.id)
+    h.running.add('session-1')
+    h.waiting.add('session-1')
+    await h.scheduler.runNow(manual.schedule.id)
+    h.running.add('session-2')
+    h.waiting.delete('session-1')
+    h.running.delete('session-1')
+    await expect(h.scheduler.runNow(manual.schedule.id)).rejects.toThrow('Another scheduled')
+    const waits = h.scheduler
+      .list()[0]
+      .history.filter((run) => run.reason === 'Waiting for your approval.')
+    expect(waits).toHaveLength(1)
+  })
+
   it('a failed write still emits, so other windows reload the true state', async () => {
     const folder = join(dir, 'later')
     const events: AppEvent[] = []

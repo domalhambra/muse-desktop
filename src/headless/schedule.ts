@@ -51,6 +51,8 @@ export type SchedulerDeps = {
 export class Scheduler {
   private store: Store = { schedules: [], history: {}, lastCheckedAt: 0 }
   private active: { scheduleId: string; starting: boolean; sessionId?: string } | null = null
+  /** Runs that waited for the person. Each counts as busy again while it runs and no longer waits. */
+  private parked = new Set<string>()
   private timer?: ReturnType<typeof setInterval>
   private writes: Promise<void> = Promise.resolve()
   private ticking: Promise<void> | null = null
@@ -153,6 +155,7 @@ export class Scheduler {
   async runNow(id: string) {
     const schedule = this.store.schedules.find((entry) => entry.id === id)
     if (!schedule) throw new Error('This scheduled task no longer exists.')
+    this.settle()
     if (this.busy())
       throw new Error('Another scheduled task is running. Try again when it finishes.')
     await this.run(schedule, null)
@@ -172,7 +175,7 @@ export class Scheduler {
   private async check() {
     const now = this.now()
     // Each minute, so a run that comes to wait for an approval says so then, not at the next due task.
-    this.busy()
+    this.settle()
     for (const schedule of this.store.schedules) {
       const since = Math.max(this.store.lastCheckedAt, schedule.createdAt)
       let due: number | null
@@ -192,13 +195,17 @@ export class Scheduler {
     await this.write()
   }
 
-  private busy() {
-    if (!this.active) return false
-    if (this.active.starting) return true
+  /**
+   * Parks a run that waits for the person, with one history entry, and forgets finished runs.
+   * check and runNow call it before busy.
+   */
+  private settle() {
+    for (const sessionId of this.parked)
+      if (!this.deps.isRunning(sessionId)) this.parked.delete(sessionId)
+    if (!this.active || this.active.starting || !this.active.sessionId) return
     const { scheduleId, sessionId } = this.active
-    if (sessionId && this.deps.isWaiting?.(sessionId)) {
-      // The run stays open in its conversation, but no longer holds back other tasks. Clearing
-      // `active` records this once.
+    if (this.deps.isWaiting?.(sessionId)) {
+      // The run stays open in its conversation, but no longer holds back other tasks.
       this.record(scheduleId, {
         at: this.now(),
         scheduledFor: null,
@@ -206,11 +213,17 @@ export class Scheduler {
         reason: WAITING,
         sessionId,
       })
+      this.parked.add(sessionId)
       this.active = null
-      return false
-    }
-    if (sessionId && this.deps.isRunning(sessionId)) return true
-    this.active = null
+    } else if (!this.deps.isRunning(sessionId)) this.active = null
+  }
+
+  /** No side effects: settle keeps `active` and `parked` current. */
+  private busy() {
+    if (this.active?.starting) return true
+    if (this.active?.sessionId && this.deps.isRunning(this.active.sessionId)) return true
+    for (const sessionId of this.parked)
+      if (this.deps.isRunning(sessionId) && !this.deps.isWaiting?.(sessionId)) return true
     return false
   }
 
