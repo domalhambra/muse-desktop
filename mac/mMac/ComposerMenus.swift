@@ -39,8 +39,11 @@ struct ComposerPopup<Row: View>: View {
         }
         .padding(5)
       }
-      // As tall as the rows, up to Electron's 290 points.
-      .frame(maxHeight: 290)
+      .scrollIndicators(.visible)
+      // As tall as the rows, up to 306 points: Electron's 290 fit exactly ten rows, so an
+      // eleventh (/btw) sat under the edge with nothing to say the list scrolls. 306 shows about
+      // half of the eleventh row, and the scroller shows while the list can scroll.
+      .frame(maxHeight: 306)
       .fixedSize(horizontal: false, vertical: true)
       .onChange(of: selected) { proxy.scrollTo(selected) }
     }
