@@ -28,7 +28,8 @@ extension Workspace {
     }
   }
 
-  /// Reads the project's PRs. A reply for a project the person has left is dropped.
+  /// Reads the project's PRs. A reply for a project the person has left is dropped. A failure
+  /// sets `changeCardsError`.
   public func loadChangeCards() async {
     let project = self.project
     guard !project.isEmpty else { return }
@@ -37,9 +38,11 @@ extension Workspace {
       guard project == self.project else { return }
       changeCards = cards
       changeCardsProject = project
+      changeCardsError = nil
     } catch {
+      // The sheet shows it with Retry, in place of its loading row.
       guard project == self.project else { return }
-      errorMessage = error.localizedDescription
+      changeCardsError = error.localizedDescription
     }
   }
 

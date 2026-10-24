@@ -197,7 +197,16 @@ struct ProposedChangesSheet: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 12) {
           // Until the cards are this project's, a load is under way: never another project's cards.
-          if workspace.changeCardsProject != workspace.project {
+          if let error = workspace.changeCardsError {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+              Text(error).foregroundStyle(.themeSecondary).fixedSize(horizontal: false, vertical: true)
+              Spacer(minLength: 4)
+              Button("Retry") { Task { await workspace.loadChangeCards() } }
+                .controlSize(.small)
+                .accessibilityLabel("Read the pull requests again")
+                .accessibilityIdentifier("proposed-changes-retry")
+            }
+          } else if workspace.changeCardsProject != workspace.project {
             HStack(spacing: 8) {
               ProgressView().controlSize(.small)
               Text("Reading the pull requests\u{2026}").foregroundStyle(.themeSecondary)

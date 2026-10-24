@@ -160,9 +160,30 @@ private func count(_ backend: ScriptedBackend, _ method: String) -> Int {
   await workspace.loadChangeCards()
   let card = workspace.changeCards[0]
   let first = Task { await workspace.accept(card) }
-  while count(backend, "pr-merge") == 0 { await Task.yield() }
+  try await eventually { lastId(backend, "pr-merge") != nil }
   #expect(workspace.merging.contains(9))
   await workspace.accept(card)
   #expect(count(backend, "pr-merge") == 1)
-  first.cancel()
+  backend.push(reply(lastId(backend, "pr-merge")!, "false"))
+  await first.value
+  #expect(workspace.merging.isEmpty)
+}
+
+@MainActor @Test func aFailedCardsReadShowsItsErrorUntilAGoodReadOrASwitch() async throws {
+  let calls = Counter()
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    guard method == "pr-list" else { return [reply(id, "null")] }
+    return calls.next() == 2 ? [reply(id, "[\(pr)]")] : [failure(id, "gh failed")]
+  }
+  workspace.project = "/p"
+  await workspace.loadChangeCards()
+  #expect(workspace.changeCardsError == "gh failed")
+  #expect(workspace.changeCardsProject == nil)
+  #expect(workspace.errorMessage == nil)
+  await workspace.loadChangeCards()
+  #expect(workspace.changeCardsError == nil && workspace.changeCardsProject == "/p")
+  await workspace.loadChangeCards()
+  #expect(workspace.changeCardsError == "gh failed")
+  workspace.project = "/q"
+  #expect(workspace.changeCardsError == nil)
 }

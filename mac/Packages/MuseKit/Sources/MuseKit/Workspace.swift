@@ -39,6 +39,7 @@ public final class Workspace {
       // Change cards belong to one project: another one's must never show or merge here.
       changeCards = []
       changeCardsProject = nil
+      changeCardsError = nil
       if !project.isEmpty, beginsRunning == 0 { startBadgeRead([project]) }
     }
   }
@@ -105,6 +106,9 @@ public final class Workspace {
   public internal(set) var changeCards: [PullRequest] = []
   /// The project `changeCards` were read for, or nil until a read lands. A project switch clears both.
   public internal(set) var changeCardsProject: String?
+  /// Why the last read of the current project's cards failed, or nil. A good read or a project
+  /// switch clears it.
+  public internal(set) var changeCardsError: String?
   /// The PR numbers an Accept or a Merge when ready is sending, so a double click sends one.
   public internal(set) var merging: Set<Int> = []
   public internal(set) var decidingApprovals: Set<String> = []
