@@ -29,6 +29,7 @@ export type ScheduleEntry = { schedule: Schedule; nextRunAt: number | null; hist
 
 const HISTORY = 50
 const BUSY = 'Another scheduled task was running.'
+const WAITING = 'Waiting for your approval.'
 
 export type SchedulerDeps = {
   file: string
@@ -39,12 +40,17 @@ export type SchedulerDeps = {
   start: (schedule: Schedule) => Promise<string>
   /** True while the session's turn runs. */
   isRunning: (sessionId: string) => boolean
+  /**
+   * True while the session waits for the person: a tool approval or a question. Such a run no
+   * longer holds back other tasks. Never waiting when omitted.
+   */
+  isWaiting?: (sessionId: string) => boolean
   emit: (event: AppEvent) => void
 }
 
 export class Scheduler {
   private store: Store = { schedules: [], history: {}, lastCheckedAt: 0 }
-  private active: { starting: boolean; sessionId?: string } | null = null
+  private active: { scheduleId: string; starting: boolean; sessionId?: string } | null = null
   private timer?: ReturnType<typeof setInterval>
   private writes: Promise<void> = Promise.resolve()
   private ticking: Promise<void> | null = null
@@ -125,16 +131,14 @@ export class Scheduler {
     this.store.schedules = existing
       ? this.store.schedules.map((entry) => (entry.id === schedule.id ? schedule : entry))
       : [...this.store.schedules, schedule]
-    await this.write()
-    this.deps.emit({ type: 'schedules-changed' })
+    await this.writeAndEmit()
     return this.list().find((entry) => entry.schedule.id === schedule.id)!
   }
 
   async remove(id: string) {
     this.store.schedules = this.store.schedules.filter((schedule) => schedule.id !== id)
     delete this.store.history[id]
-    await this.write()
-    this.deps.emit({ type: 'schedules-changed' })
+    await this.writeAndEmit()
   }
 
   async setEnabled(id: string, enabled: boolean) {
@@ -143,8 +147,7 @@ export class Scheduler {
     this.store.schedules = this.store.schedules.map((schedule) =>
       schedule.id === id ? { ...schedule, enabled } : schedule,
     )
-    await this.write()
-    this.deps.emit({ type: 'schedules-changed' })
+    await this.writeAndEmit()
   }
 
   async runNow(id: string) {
@@ -168,6 +171,8 @@ export class Scheduler {
 
   private async check() {
     const now = this.now()
+    // Each minute, so a run that comes to wait for an approval says so then, not at the next due task.
+    this.busy()
     for (const schedule of this.store.schedules) {
       const since = Math.max(this.store.lastCheckedAt, schedule.createdAt)
       let due: number | null
@@ -175,7 +180,7 @@ export class Scheduler {
         due = dueTime(schedule, since, now, this.deps.tz)
       } catch (error) {
         // An unreadable stored cron or time zone: record it once, then go on to the others.
-        this.recordProblem(schedule.id, now, error)
+        this.recordProblem(schedule, now, error)
         continue
       }
       if (due === null) continue
@@ -190,16 +195,30 @@ export class Scheduler {
   private busy() {
     if (!this.active) return false
     if (this.active.starting) return true
-    if (this.active.sessionId && this.deps.isRunning(this.active.sessionId)) return true
+    const { scheduleId, sessionId } = this.active
+    if (sessionId && this.deps.isWaiting?.(sessionId)) {
+      // The run stays open in its conversation, but no longer holds back other tasks. Clearing
+      // `active` records this once.
+      this.record(scheduleId, {
+        at: this.now(),
+        scheduledFor: null,
+        outcome: 'started',
+        reason: WAITING,
+        sessionId,
+      })
+      this.active = null
+      return false
+    }
+    if (sessionId && this.deps.isRunning(sessionId)) return true
     this.active = null
     return false
   }
 
   private async run(schedule: Schedule, scheduledFor: number | null) {
-    this.active = { starting: true }
+    this.active = { scheduleId: schedule.id, starting: true }
     try {
       const sessionId = await this.deps.start(schedule)
-      this.active = { starting: false, sessionId }
+      this.active = { scheduleId: schedule.id, starting: false, sessionId }
       this.record(schedule.id, { at: this.now(), scheduledFor, outcome: 'started', sessionId })
       this.deps.emit({
         type: 'schedule-run-started',
@@ -219,12 +238,18 @@ export class Scheduler {
     await this.write()
   }
 
-  private recordProblem(id: string, now: number, error: unknown) {
-    const detail = error instanceof Error ? error.message : String(error)
-    const reason = `Muse could not read this schedule: ${detail}`
-    const last = this.store.history[id]?.at(-1)
+  private recordProblem(schedule: Schedule, now: number, error: unknown) {
+    // A stored custom cron the form would refuse gets the form's sentence; anything else (the
+    // Mac's time zone, say) gets a general one. The raw text goes to stderr.
+    const reason =
+      (schedule.preset === 'custom' ? checkCron(schedule.cron ?? '') : undefined) ??
+      'mMac could not work out when this task runs.'
+    const last = this.store.history[schedule.id]?.at(-1)
     if (last?.outcome === 'failed' && last.reason === reason) return
-    this.record(id, { at: now, scheduledFor: null, outcome: 'failed', reason })
+    console.error(
+      `mMac could not read scheduled task ${schedule.id}: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    this.record(schedule.id, { at: now, scheduledFor: null, outcome: 'failed', reason })
   }
 
   private record(id: string, run: ScheduleRun) {
@@ -234,10 +259,22 @@ export class Scheduler {
     this.deps.emit({ type: 'schedules-changed' })
   }
 
+  /**
+   * A failed write still emits: memory has the change but the file may not, and other windows
+   * reload what is true now. The caller still sees the failure.
+   */
+  private async writeAndEmit() {
+    try {
+      await this.write()
+    } finally {
+      this.deps.emit({ type: 'schedules-changed' })
+    }
+  }
+
   /** A temporary file with mode 600, renamed over the store: no half-written file after a crash. */
-  // Each write waits for the one before but not on its success, so one failure (a full disk, a
-  // missing folder) does not fail every later write. The caller still sees its own failure.
   private write() {
+    // Each write waits for the one before but not on its success, so one failure (a full disk, a
+    // missing folder) does not fail every later write. The caller still sees its own failure.
     const data = JSON.stringify(this.store, null, 2)
     const next = this.writes
       .catch(() => {})

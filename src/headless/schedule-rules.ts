@@ -55,8 +55,9 @@ export function checkCron(expression: string): string | undefined {
   try {
     CronExpressionParser.parse(expression)
     return undefined
-  } catch (error) {
-    return `Muse could not read this schedule: ${error instanceof Error ? error.message : String(error)}`
+  } catch {
+    // cron-parser's own text names its internals; the form shows one plain sentence.
+    return 'mMac could not read this schedule. Check that each field is in range.'
   }
 }
 

@@ -27,18 +27,21 @@ function harness(start = vi.fn(async () => 'session-1')) {
   let now = Date.parse('2026-10-26T08:00:00Z')
   const events: AppEvent[] = []
   const running = new Set<string>()
+  const waiting = new Set<string>()
   const scheduler = new Scheduler({
     file: join(dir, 'schedules.json'),
     now: () => now,
     tz: 'UTC',
     start,
     isRunning: (sessionId) => running.has(sessionId),
+    isWaiting: (sessionId) => waiting.has(sessionId),
     emit: (event) => events.push(event),
   })
   return {
     scheduler,
     events,
     running,
+    waiting,
     start,
     at: (iso: string) => {
       now = Date.parse(iso)
@@ -162,7 +165,9 @@ describe('Scheduler', () => {
     const entries = h.scheduler.list()
     expect(entries[1].history[0]).toMatchObject({ outcome: 'started' })
     expect(entries[0].history[0]).toMatchObject({ outcome: 'failed' })
-    expect(entries[0].history[0].reason).toMatch(/could not read this schedule/)
+    expect(entries[0].history[0].reason).toBe(
+      'A custom schedule has five fields: minute, hour, day, month, weekday.',
+    )
     // The same problem is recorded once, not every minute.
     h.at('2026-10-26T09:01:30Z')
     await h.scheduler.tick()
@@ -286,5 +291,54 @@ describe('Scheduler', () => {
     expect(h.scheduler.list()).toEqual([])
     const stored = JSON.parse(await readFile(join(dir, 'schedules.json'), 'utf8'))
     expect(stored.history).toEqual({})
+  })
+
+  it('a run waiting for approval lets the next due task start, and says so once', async () => {
+    const h = harness(vi.fn(async () => `session-${h.start.mock.calls.length}`))
+    await h.scheduler.load()
+    const first = await h.scheduler.save(input)
+    const second = await h.scheduler.save({ ...input, minute: 30 })
+    h.at('2026-10-26T09:00:30Z')
+    await h.scheduler.tick()
+    expect(h.start).toHaveBeenCalledTimes(1)
+    // The first run's turn is still open, blocked on a tool approval.
+    h.running.add('session-1')
+    h.waiting.add('session-1')
+    h.at('2026-10-26T09:01:30Z')
+    await h.scheduler.tick()
+    h.at('2026-10-26T09:02:30Z')
+    await h.scheduler.tick()
+    const waited = h.scheduler.list().find((entry) => entry.schedule.id === first.schedule.id)!
+    expect(waited.history.map((run) => run.reason ?? null)).toEqual([
+      'Waiting for your approval.',
+      null,
+    ])
+    expect(waited.history[0]).toMatchObject({ outcome: 'started', sessionId: 'session-1' })
+    h.at('2026-10-26T09:30:30Z')
+    await h.scheduler.tick()
+    expect(h.start).toHaveBeenCalledTimes(2)
+    const ran = h.scheduler.list().find((entry) => entry.schedule.id === second.schedule.id)!
+    expect(ran.history[0]).toMatchObject({ outcome: 'started', sessionId: 'session-2' })
+  })
+
+  it('a failed write still emits, so other windows reload the true state', async () => {
+    const folder = join(dir, 'later')
+    const events: AppEvent[] = []
+    const scheduler = new Scheduler({
+      file: join(folder, 'schedules.json'),
+      now: () => Date.parse('2026-10-26T08:00:00Z'),
+      tz: 'UTC',
+      start: async () => 'session-1',
+      isRunning: () => false,
+      emit: (event) => events.push(event),
+    })
+    await scheduler.load()
+    await expect(scheduler.save(input)).rejects.toThrow(/ENOENT/)
+    expect(events).toEqual([{ type: 'schedules-changed' }])
+    const id = scheduler.list()[0].schedule.id
+    await expect(scheduler.setEnabled(id, false)).rejects.toThrow(/ENOENT/)
+    expect(events).toHaveLength(2)
+    await expect(scheduler.remove(id)).rejects.toThrow(/ENOENT/)
+    expect(events).toHaveLength(3)
   })
 })

@@ -223,17 +223,43 @@ export function createBackend({
     typeof (error as { code?: unknown } | null)?.code === 'string' &&
     /^E[A-Z]+$/.test((error as { code: string }).code)
 
-  /** A scheduled run: no Ask, so the folder must already be trusted. Every error is a sentence. */
+  const START_FAILED = 'mMac could not start this scheduled task.'
+  /** A reason the person can act on, shown after START_FAILED. */
+  class StartProblem extends Error {}
+
+  /**
+   * A scheduled run: no Ask, so the folder must already be trusted. History shows START_FAILED,
+   * with a plain reason where one is known; Muse's own text goes to stderr only.
+   */
   async function startScheduled(schedule: Schedule) {
-    if (quitting()) throw new Error('mMac is quitting.')
+    try {
+      return await startScheduledRun(schedule)
+    } catch (error) {
+      if (error instanceof StartProblem) throw new Error(`${START_FAILED} ${error.message}`)
+      console.error(
+        `mMac could not start scheduled task ${schedule.id}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      throw new Error(START_FAILED)
+    }
+  }
+
+  async function startScheduledRun(schedule: Schedule) {
+    if (quitting()) throw new StartProblem('mMac is quitting.')
     const folder = await knownProject(schedule.folder).catch((error: unknown) => {
-      throw systemError(error)
-        ? new Error('The folder for this task no longer exists, or mMac cannot open it.')
-        : error
+      // knownProject's own refusal is already a sentence; a Node error would name a path.
+      throw new StartProblem(
+        systemError(error)
+          ? 'The folder for this task no longer exists, or mMac cannot open it.'
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      )
     })
     const trusted = current().trustedProjects
     if (!trusted.includes(folder) && !trusted.includes(projectRoot(folder)))
-      throw new Error('The folder is not trusted in mMac. Open it and send a message there first.')
+      throw new StartProblem(
+        'The folder is not trusted in mMac. Open it and send a message there first.',
+      )
     const view = await muse.create(folder, schedule.modelId ?? undefined, {
       worktree: schedule.worktree,
     })
@@ -253,6 +279,16 @@ export function createBackend({
       throw error
     }
     return sessionId
+  }
+
+  /** True while the session waits for the person: a tool approval or a question. */
+  function scheduledWaiting(sessionId: string) {
+    try {
+      const view = muse.getView(sessionId)
+      return view.approvals.length > 0 || view.questions.length > 0
+    } catch {
+      return false
+    }
   }
 
   /** True while the turn runs, or was sent and has not yet started. A gone session is not. */
@@ -312,6 +348,7 @@ export function createBackend({
         tz: schedulerOptions.tz,
         start: startScheduled,
         isRunning: scheduledRunning,
+        isWaiting: scheduledWaiting,
         emit,
       })
       await scheduler.load()
@@ -653,7 +690,7 @@ export function createBackend({
 
   // The PR monitor and the change cards, through gh. Reads need no trust Ask; merges ask first.
   const gh = { env: ghEnv, folders: ghFolders }
-  const prNumber = z.number().int().positive()
+  const prNumber = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
 
   async function conversationFolder(sessionId: string) {
     const root = muse.getSession(sessionId).workspaceRoot
