@@ -140,10 +140,15 @@ struct ReadOnlyTextView: NSViewRepresentable {
   static func configure(_ scroll: NSScrollView, textView: NSTextView, wraps: Bool) {
     scroll.hasHorizontalScroller = !wraps
     textView.isHorizontallyResizable = !wraps
-    textView.autoresizingMask = wraps ? [.width] : []
+    // Both ways the text view follows the scroll view's width. It is made zero-wide, before the
+    // scroll view has a frame; without `.width` an unwrapped text view stayed zero-wide, as TextKit 2
+    // does not widen it to its lines, and the Files preview drew an empty body under "41 lines".
+    // Apple's recipe for text that does not wrap keeps the mask, too.
+    textView.autoresizingMask = [.width]
     textView.textContainer?.widthTracksTextView = wraps
+    textView.frame.size.width =
+      wraps ? scroll.contentSize.width : max(textView.frame.width, scroll.contentSize.width)
     if wraps {
-      textView.frame.size.width = scroll.contentSize.width
       textView.textContainer?.containerSize = NSSize(
         width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
     } else {
