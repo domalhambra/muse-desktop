@@ -1,6 +1,7 @@
 import AppKit
 import MuseKit
 import SwiftUI
+import os
 
 @main
 struct MMacApp: App {
@@ -60,10 +61,11 @@ struct MMacApp: App {
     // One window. The backend belongs to the app, so closing this window keeps it.
     Window("mMac", id: Self.mainWindow) {
       RootView(controller: delegate.controller)
-        .frame(minWidth: 820, minHeight: 560)
+        .frame(minWidth: WindowLayout.windowMinWidth, minHeight: WindowLayout.windowMinHeight)
         .themed(delegate.controller)
         .defaultAppStorage(Self.appStorage)
     }
+    .defaultSize(width: WindowLayout.defaultWidth, height: WindowLayout.defaultHeight)
     // A test run does not reopen its window at the next launch.
     .restorationBehavior(Self.keepsWindowState ? .automatic : .disabled)
     .commands {
@@ -159,17 +161,24 @@ private struct CommandMenuCommand: View {
 /// Edit → Voice Input (⌥V): starts or stops voice input from anywhere in the conversation window,
 /// as Electron's window-wide Option-V. A menu key equivalent, so the composer never types "√".
 private struct VoiceCommand: View {
+  private static let log = Logger(subsystem: "com.domalhambra.mmac", category: "voice")
   let controller: AppController
 
   var body: some View {
     Button("Voice Input") {
-      guard canRun, let voice = controller.voice else { return }
+      let connected = controller.workspace?.isConnected == true ? "connected" : "disconnected"
+      let phase = controller.voice.map { "\($0.phase), \(connected)" } ?? "no voice session"
+      guard canRun, let voice = controller.voice else {
+        Self.log.debug("Voice Input: \(phase, privacy: .public), not run")
+        return
+      }
+      Self.log.debug("Voice Input: \(phase, privacy: .public), toggled")
       Task { await voice.toggle() }
     }
     .keyboardShortcut("v", modifiers: .option)
-    // On whenever a Workspace exists, so ⌥V is always taken here: a disabled item would let the
-    // key fall through and type "√" into the draft. When voice cannot run, the press does nothing,
-    // as Electron's handler prevents the default and its toggle returns early.
+    // On whenever a Workspace exists. When voice cannot run, the press does nothing, as Electron's
+    // handler prevents the default and its toggle returns early. A focused text view gets ⌥V
+    // before the menu, so the composer hands the key here itself (`ComposerTextView.keyDown`).
     .disabled(controller.voice == nil)
   }
 

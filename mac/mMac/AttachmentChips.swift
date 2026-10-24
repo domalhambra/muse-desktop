@@ -2,6 +2,7 @@ import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
+import os
 
 /// The paperclip, as Electron's: a multi-select open panel for images and text files.
 struct AttachButton: View {
@@ -46,6 +47,7 @@ struct AttachButton: View {
 /// The composer's attachments, as Electron's chips. They belong to the composer, not to a
 /// conversation.
 struct AttachmentChips: View {
+  private static let log = Logger(subsystem: "com.domalhambra.mmac", category: "attachments")
   let workspace: Workspace
 
   var body: some View {
@@ -53,6 +55,10 @@ struct AttachmentChips: View {
       ForEach(workspace.attachments) { attachment in
         // A chip in the send in flight cannot go: the backend is reading it.
         AttachmentChip(attachment: attachment, canRemove: !workspace.isSending(attachment.id)) {
+          // Workspace refuses a chip in the send in flight.
+          let refused = workspace.isSending(attachment.id)
+          Self.log.debug(
+            "Remove chip \(attachment.id, privacy: .public): \(refused ? "refused" : "accepted", privacy: .public)")
           Task { await workspace.removeAttachment(attachment.id) }
         }
       }
@@ -63,7 +69,8 @@ struct AttachmentChips: View {
   }
 }
 
-/// One chip: an icon, the name and a remove button.
+/// One chip: an icon, the name and a remove button. The chip's identifier sits on its name, a leaf
+/// element: on a group, SwiftUI folds a lone chip into `attachment-chips`, and its id goes.
 struct AttachmentChip: View {
   let attachment: Attachment
   var canRemove = true
@@ -73,6 +80,7 @@ struct AttachmentChip: View {
     HStack(spacing: 5) {
       Image(systemName: attachment.kind == "image" ? "photo" : "doc.text").accessibilityHidden(true)
       Text(attachment.name).lineLimit(1).truncationMode(.middle)
+        .accessibilityIdentifier("attachment-chip-\(attachment.id)")
       Button(action: remove) {
         Image(systemName: "xmark").font(.caption2.weight(.semibold))
       }
@@ -89,8 +97,6 @@ struct AttachmentChip: View {
     .frame(maxWidth: 200, alignment: .leading)
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.15)))
-    .accessibilityElement(children: .contain)
-    .accessibilityIdentifier("attachment-chip-\(attachment.id)")
   }
 }
 

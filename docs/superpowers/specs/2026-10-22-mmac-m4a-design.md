@@ -6,7 +6,7 @@ Status: approved. Designed with Dom on 2026-10-22, one section at a time. Dom ap
 
 M4a builds the last seven parity features, measures mMac's size against the Electron app, checks parity, and removes Electron's shell when every parity item has passing automated tests.
 
-M4b follows it. M4b holds the proof work: the UI tests, written and run three times, and the live isolated run of M2, M3 and M4a.
+M4b follows it. M4b holds the proof work: the UI tests, written and run three times, and the live isolated run of M2, M3 and M4a. Its first live session ran on 2026-10-23 and 2026-10-24, and its failures are fixed. The UI runs and the rest of the live run wait for the end: see the Status in `docs/superpowers/plans/2026-10-23-mmac-m4b.md`.
 
 ## Scope
 

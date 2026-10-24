@@ -6,13 +6,40 @@
 // the second conversation a quota stop, serves two scheduled tasks and two pull requests, and its
 // pr-merge Asks before it replies. A `send` of "crash now" ends the
 // process with code 1, as a backend that crashes does.
+// The M4a methods answer with the real backend's shapes: `export` writes its file with mode 0600,
+// `attachments` checks each file and keeps it under an `att-<n>` id, and `send` takes those ids.
+// `terminal`, `cli-terminal` and `voice` open nothing: no Terminal window, and no microphone.
+// FAKE_BACKEND_OFFLINE=1 starts disconnected until mMac calls `connect`. FAKE_BACKEND_NO_PROJECT=1
+// starts with no recent project, so mMac starts on All projects.
 // Each request and Ask answer is appended to the file FAKE_BACKEND_LOG names, with the fake's
 // start and every reply it writes, so a failed test shows how far the fake got.
-import { appendFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  closeSync,
+  fchmodSync,
+  openSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from 'node:fs'
+import { basename, isAbsolute } from 'node:path'
 import { createInterface } from 'node:readline'
 
 const logFile = process.env.FAKE_BACKEND_LOG
-const record = (entry) => logFile && appendFileSync(logFile, `${JSON.stringify(entry)}\n`)
+// FAKE_BACKEND_COPY names a second file, outside the test's temporary folder, that
+// mac/scripts/ui-tests.sh keeps after the run. Its folder may not exist when no script set it up.
+const copyFile = process.env.FAKE_BACKEND_COPY
+const record = (entry) => {
+  const line = `${JSON.stringify(entry)}\n`
+  if (logFile) appendFileSync(logFile, line)
+  if (copyFile) {
+    try {
+      appendFileSync(copyFile, line)
+    } catch {
+      // No folder: the run is not the script's, so there is nothing to keep.
+    }
+  }
+}
 const write = (message) => {
   if ('id' in message) {
     record({ reply: message.id, ok: message.ok, ...(message.ok ? {} : { error: message.error }) })
@@ -74,7 +101,7 @@ const side = {
 const preferences = {
   theme: 'muse',
   cliPath: '',
-  recentProjects: [project],
+  recentProjects: process.env.FAKE_BACKEND_NO_PROJECT === '1' ? [] : [project],
   trustedProjects: [project],
   reasoningEffort: 'high',
   archivedSessionIds: [],
@@ -325,6 +352,84 @@ const pullRequest = (number, base, head) => ({
 const pulls = [pullRequest(1, 'main', 'usage'), pullRequest(2, 'usage', 'chart')]
 const scheduleEntry = (id) => schedules.find((entry) => entry.schedule.id === id)
 
+let offline = process.env.FAKE_BACKEND_OFFLINE === '1'
+const sessionById = (sessionId) =>
+  sessionId === 'fake-1'
+    ? session
+    : others.find((entry) => entry.session.sessionId === sessionId)?.session
+
+// The composer's attachments, as src/headless/attachments.ts keeps them: id → the chip.
+const attachments = new Map()
+let attachmentCount = 0
+const m4aMethods = {
+  // As muse-host.ts's compact: the CLI's status.
+  compact: () => ({ status: 'started' }),
+  // As backend.ts's export: an absolute path, mode 0600 on the open file before any content, and
+  // the path back.
+  export: (sessionId, path) => {
+    if (typeof path !== 'string' || !isAbsolute(path))
+      throw new Error('Choose a full path for the exported file.')
+    const shown = view(sessionId)
+    const content = [
+      `# ${shown.session.name || 'Muse conversation'}`,
+      `Project: ${shown.session.workspaceRoot || 'None'}`,
+      ...shown.items.map(
+        (item) =>
+          `## ${item.kind === 'userMessage' ? 'You' : item.kind === 'agentMessage' ? 'Muse' : item.kind}\n\n${item.text ?? item.statusLine ?? ''}`,
+      ),
+    ].join('\n\n')
+    const fd = openSync(path, 'w', 0o600)
+    try {
+      fchmodSync(fd, 0o600)
+      writeSync(fd, `${content}\n`)
+    } finally {
+      closeSync(fd)
+    }
+    return path
+  },
+  // As attachments.ts's register: every file is checked, then all are kept, or none.
+  attachments: (paths) => {
+    if (paths.some((path) => !isAbsolute(path)))
+      throw new Error('Choose files by their full paths.')
+    if (paths.length > 5) throw new Error('Select up to five files at a time.')
+    const chosen = paths.map((path) => {
+      let info
+      try {
+        info = statSync(path)
+      } catch {
+        info = null
+      }
+      if (!info?.isFile() || info.size > 2 * 1024 * 1024)
+        throw new Error(`${basename(path)} must be a file smaller than 2 MB.`)
+      return {
+        id: `att-${++attachmentCount}`,
+        name: basename(path),
+        kind: /\.(png|jpe?g|webp|gif)$/i.test(path) ? 'image' : 'text',
+        size: info.size,
+      }
+    })
+    for (const chip of chosen) attachments.set(chip.id, chip)
+    return chosen
+  },
+  'remove-attachment': (id) => {
+    attachments.delete(id)
+  },
+  // As backend.ts's voice: the clip is deleted after it is read. No CLI runs.
+  voice: (path) => {
+    if (typeof path !== 'string' || !isAbsolute(path) || !/\.wav$/i.test(path))
+      throw new Error('The recording is not a supported PCM audio clip. Please record it again.')
+    rmSync(path, { force: true })
+    return 'Fake transcription.'
+  },
+  'cancel-voice': () => null,
+  // Terminal never opens: the real methods run osascript.
+  terminal: () => null,
+  'cli-terminal': () => null,
+}
+
+const reportLimits = () =>
+  setTimeout(() => write({ event: { type: 'usage-changed', limits } }), 100)
+
 const methods = {
   // As backend.ts does: a client that speaks another protocol gets an error reply.
   hello: (theirs) => {
@@ -335,8 +440,19 @@ const methods = {
   start: (options) => {
     bridgeToken = options?.bridgeToken ?? ''
     // As MuseHost does when Muse reports limits: an event with the same value `usage` returns.
-    setTimeout(() => write({ event: { type: 'usage-changed', limits } }), 100)
-    return { preferences, status: ready }
+    // An offline host reports none until connect.
+    if (!offline) reportLimits()
+    return {
+      preferences,
+      status: offline
+        ? { state: 'error', message: 'The fake Muse Code is offline.', path: '/usr/local/bin/muse' }
+        : ready,
+    }
+  },
+  connect: () => {
+    offline = false
+    reportLimits()
+    return ready
   },
   sessions: () => ({
     sessions: [session, ...others.map((entry) => entry.session)],
@@ -344,9 +460,15 @@ const methods = {
   }),
   models: () => models,
   open: (sessionId) => view(sessionId),
-  send: ({ text }) => {
+  send: ({ text, attachments: ids = [] }) => {
     // A crash: no reply, and stdout closes with the process.
     if (text === 'crash now') process.exit(1)
+    // As backend.ts's send: at most five, text or a file, and only ids it still holds.
+    if (ids.length > 5) throw new Error('You can attach up to five files per message.')
+    if (!text.trim() && !ids.length) throw new Error('Write a message or attach a file first.')
+    if (ids.some((id) => !attachments.has(id)))
+      throw new Error('An attachment expired. Select it again.')
+    for (const id of ids) attachments.delete(id)
     return null
   },
   'set-model': (_, modelId) => {
@@ -424,6 +546,7 @@ const methods = {
   'schedule-remove': () => null,
   'pr-status': (sessionId) => (sessionId === 'fake-1' ? pulls[0] : null),
   'pr-list': () => pulls,
+  ...m4aMethods,
   shutdown: () => {
     setTimeout(() => process.exit(0), 50)
     return true
@@ -464,13 +587,16 @@ createInterface({ input: process.stdin })
       })
       return
     }
-    // A rename Asks while mMac's rename sheet is still open, as a trust prompt can.
+    // A rename Asks while mMac's rename sheet is still open, as a trust prompt can. The renamed
+    // conversation's event goes before the reply, so mMac shows the new name once rename returns.
     if (message.method === 'rename') {
       pending = {
         id: message.id,
         value: () => {
-          session.name = message.args[1]
-          update()
+          const [sessionId, name] = message.args
+          const renamed = sessionById(sessionId)
+          if (renamed) renamed.name = name
+          write({ event: { type: 'session', view: view(sessionId) } })
           write({ event: { type: 'sessions-changed' } })
         },
       }

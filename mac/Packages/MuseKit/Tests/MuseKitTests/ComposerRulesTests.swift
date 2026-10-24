@@ -100,6 +100,16 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
   ])
 }
 
+/// The M4b live run counted 10 rows in the popup and 11 in Help. Both read `allCases`: the slash
+/// popup's full list (`menu(for: "/")`) and the Help sheet's list (HelpSheet.swift) are the same
+/// eleven, `/btw` last. Electron's 290-point cap fit exactly ten rows, which hid `/btw`; the popup
+/// is now capped at 306 points, so half of `/btw`'s row shows and hints that the list scrolls.
+@Test func thePopupAndTheHelpSheetListTheSameCommands() {
+  #expect(ComposerCommand.menu(for: "/") == ComposerCommand.allCases)
+  #expect(ComposerCommand.menu(for: "/").last == .btw)
+  #expect(ComposerCommand.menu(for: "/b") == [.btw])
+}
+
 @Test func theMenuOpensOnlyForASlashAndLettersOnTheWholeDraft() {
   #expect(ComposerCommand.menu(for: "/").count == 11)
   #expect(ComposerCommand.menu(for: "/mo") == [.model])

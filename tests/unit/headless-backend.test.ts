@@ -1889,3 +1889,130 @@ describe('headless backend, M5b pull requests', () => {
     expect(asks).toHaveLength(0)
   })
 })
+
+// The M4b live run showed raw text: "ENOENT: … realpath '…/.muse/worktrees/…'" and
+// "session/compact command … rejected: compaction_unavailable". Each becomes a plain sentence.
+describe('headless backend, M4b plain errors', () => {
+  const GONE = 'This conversation’s worktree folder no longer exists.'
+  const message = { sessionId: 's1', text: 'hi', attachments: [], effort: 'high', mode: 'steer' }
+
+  it('refuses a send in a removed worktree with a plain sentence and sends nothing', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', '20261023-a695')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: worktree })) })
+    const { call, start } = harness(muse, [0])
+    await start()
+    const failure = call('send', message)
+    await expect(failure).rejects.toThrow(GONE)
+    await expect(failure).rejects.not.toThrow(/ENOENT|realpath|worktrees/)
+    expect(muse.send).not.toHaveBeenCalled()
+  })
+
+  it('shows the same sentence when the inspector reads a removed worktree', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', project)
+    await expect(call('git-status', worktree)).rejects.toThrow(GONE)
+    await expect(call('files', worktree, '')).rejects.toThrow(GONE)
+  })
+
+  it('says a missing file inside a live worktree is a missing file, not a removed worktree', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    await mkdir(worktree, { recursive: true })
+    const { call, start } = harness()
+    await start()
+    await call('add-project', project)
+    const failure = call('read-file', worktree, 'gone.txt')
+    await expect(failure).rejects.toThrow(/^This file no longer exists\.$/)
+  })
+
+  it('says a removed worktree root is gone when the conversation reads it', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: worktree })) })
+    const { call, start } = harness(muse, [0])
+    await start()
+    await expect(call('compact', 's1')).rejects.toThrow(
+      /^This conversation’s worktree folder no longer exists\.$/,
+    )
+  })
+
+  it('logs the raw ENOENT text and the rejection reason, never showing them', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const project = await folder('project')
+      const worktree = join(project, '.muse', 'worktrees', 'w1')
+      const muse = fakeMuse({
+        getSession: vi.fn(() => session({ workspaceRoot: worktree })),
+        rename: vi.fn(async () => {
+          throw new Error('session/rename command abc rejected: some_new_reason')
+        }),
+      })
+      const { call, start } = harness(muse, [0])
+      await start()
+      await expect(call('compact', 's1')).rejects.toThrow('worktree folder no longer exists')
+      const lines = () => log.mock.calls.map((args) => args.join(' '))
+      expect(lines().some((line) => line.includes('ENOENT') && line.includes(worktree))).toBe(true)
+      muse.getSession = vi.fn(() => session({ workspaceRoot: project }))
+      await expect(call('rename', 's1', 'New name')).rejects.toThrow('Muse Code refused')
+      expect(lines().some((line) => line.includes('some_new_reason'))).toBe(true)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('says a missing project folder is gone, without its path', async () => {
+    const { call, start } = harness()
+    await start()
+    const failure = call('add-project', join(dir, 'missing'))
+    await expect(failure).rejects.toThrow('This folder no longer exists.')
+    await expect(failure).rejects.not.toThrow(/ENOENT|missing/)
+  })
+
+  it('turns a compaction refusal into a plain sentence', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse({
+      getSession: vi.fn(() => session({ workspaceRoot: project })),
+      compact: vi.fn(async () => {
+        throw new Error(
+          'session/compact command 0193a1b2-0000-7000-8000-000000000000 rejected: compaction_unavailable',
+        )
+      }),
+    })
+    const { call, start } = harness(muse, [0])
+    await start()
+    await expect(call('compact', 's1')).rejects.toThrow(
+      /^This model cannot compact the conversation\.$/,
+    )
+  })
+
+  it('turns any other command refusal into a plain sentence, without the code', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse({
+      getSession: vi.fn(() => session({ workspaceRoot: project })),
+      rename: vi.fn(async () => {
+        throw new Error('session/rename command abc rejected: some_new_reason')
+      }),
+    })
+    const { call, start } = harness(muse, [0])
+    await start()
+    const failure = call('rename', 's1', 'New name')
+    await expect(failure).rejects.toThrow(/^Muse Code refused this request\.$/)
+  })
+
+  it('keeps every other error as it was', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse({
+      getSession: vi.fn(() => session({ workspaceRoot: project })),
+      send: vi.fn(async () => {
+        throw new Error('Muse rejected the message.')
+      }),
+    })
+    const { call, start } = harness(muse, [0])
+    await start()
+    await expect(call('send', message)).rejects.toThrow(/^Muse rejected the message\.$/)
+  })
+})
