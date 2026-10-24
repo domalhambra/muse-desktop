@@ -12,7 +12,7 @@ private typealias Item = ComposerRowFit.Item
 /// body size about 20 points (Attach, Voice), the separator 1, the worktree toggle as a bordered
 /// button about 32, Send at `.title2` about 24. The pop-up pickers' minimum (proposed zero width)
 /// is about 40, an arrow and its bezel; their ideals hold "Claude Sonnet 4.5", "Medium" and
-/// "Auto-edit". The labels at the system font and the hint at `.caption` are their text widths.
+/// "Auto-edit". The labels at the system font and the hint at `.caption` use estimated text widths.
 private let realisticRow: [Item] = [
   Item(minimum: 20, ideal: 20, kind: .fixed),  // Attach
   Item(minimum: 1, ideal: 1, kind: .fixed),  // separator
@@ -110,11 +110,12 @@ private func indices(_ kind: ComposerRowFit.Kind) -> [Int] {
 }
 
 @Test func theComposerRowsMinimumFitsTheConversationColumnsMinimum() {
+  // Proves the fit for the estimated widths above; the end-of-build UI test checks the real controls.
   #expect(minimum <= WindowMetrics.contentMin - 2 * WindowMetrics.composerPadding)
 }
 
 @Test func theInspectorShowsTitlesOnlyWhenEverySegmentFits() {
-  // Six titles at the system font, measured widths with fractions; each is rounded up.
+  // Six illustrative title widths with fractions, not measured ones; each is rounded up.
   let titles: [CGFloat] = [54.2, 27.6, 46.1, 34.9, 43.3, 47.0]
   let needed = InspectorTabFit.titledWidth(titles)
   #expect(needed == 55 + 28 + 47 + 35 + 44 + 47 + 6 * InspectorTabFit.segmentPadding)
