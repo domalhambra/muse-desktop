@@ -19,6 +19,7 @@ import type {
   ConnectionStatus,
   MuseSession,
   SessionView,
+  SubscriptionLimits,
 } from '../../src/shared/protocol'
 import type { AgentApi, AgentPolicy } from '../../src/main/agent-api'
 import { splitHunks } from '../../src/main/git'
@@ -93,6 +94,7 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     ),
     runShell: vi.fn(async () => {}),
     configDir: () => join(dir, 'muse-config'),
+    limits: null as SubscriptionLimits | null,
     ...overrides,
   } satisfies Muse
 }
@@ -400,6 +402,21 @@ describe('headless backend, M1 methods', () => {
     expect(muse.runShell).toHaveBeenCalledWith('s1', 'echo hi')
     await expect(call('shell', 's1', '')).rejects.toThrow()
     await expect(call('shell', 's1', 'x'.repeat(10001))).rejects.toThrow()
+  })
+
+  it('returns the latest limits, or null', async () => {
+    const limits = {
+      observedAt: 1,
+      tier: 'pro',
+      window: { usedPercent: 42, resetsAt: 2, minutes: 300 },
+      weekly: { usedPercent: 18, resetsAt: 3 },
+    }
+    const { call, start } = harness(fakeMuse({ limits }))
+    await start()
+    await expect(call('usage')).resolves.toEqual(limits)
+    const empty = harness(fakeMuse())
+    await empty.start()
+    await expect(empty.call('usage')).resolves.toBeNull()
   })
 
   it('passes an approval choice through after the trust check', async () => {

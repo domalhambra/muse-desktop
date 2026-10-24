@@ -78,6 +78,7 @@ export type Muse = Pick<
   | 'readOutput'
   | 'listWorktrees'
   | 'configDir'
+  | 'limits'
 >
 
 export type BackendDeps = {
@@ -405,6 +406,9 @@ export function createBackend({
     await sessionProject(sessionId)
     return muse.runShell(sessionId, z.string().min(1).max(10000).parse(command))
   })
+
+  // The subscription's limits as Muse last observed them; `usage-changed` carries each new value.
+  method('usage', () => muse.limits)
 
   method('approve', async (session, approval, choice) => {
     const sessionId = id.parse(session)

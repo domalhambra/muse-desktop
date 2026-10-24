@@ -303,6 +303,8 @@ public final class Workspace {
         self.refreshDelay = nil
         await self.refreshSessions()
       }
+    case .usageChanged:
+      break
     case .error(let message):
       errorMessage = message
     case .other:

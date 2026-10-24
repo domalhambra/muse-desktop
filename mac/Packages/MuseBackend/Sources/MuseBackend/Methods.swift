@@ -122,6 +122,11 @@ extension BackendClient {
     _ = try await request("shell", [.string(sessionId), .string(command)])
   }
 
+  /// The subscription's limits as Muse last observed them, or nil before any observation.
+  public func usage() async throws -> SubscriptionLimits? {
+    try await call("usage", [])
+  }
+
   public func approve(sessionId: String, approvalId: String, choiceId: String) async throws {
     _ = try await request("approve", [.string(sessionId), .string(approvalId), .string(choiceId)])
   }

@@ -509,13 +509,16 @@ public struct SessionView: Codable, Equatable, Sendable {
   public var usage: Usage?
   public var context: ContextUsage?
   public var todos: [TodoItem]?
+  public var cost: SessionCost?
+  public var quota: QuotaStop?
   public let error: String?
   public let historyNotice: String?
 
   public init(
     session: Session, items: [TranscriptItem] = [], approvals: [Approval] = [],
     questions: [UserQuestion] = [], usage: Usage? = nil, error: String? = nil,
-    historyNotice: String? = nil, context: ContextUsage? = nil, todos: [TodoItem]? = nil
+    historyNotice: String? = nil, context: ContextUsage? = nil, todos: [TodoItem]? = nil,
+    cost: SessionCost? = nil, quota: QuotaStop? = nil
   ) {
     self.session = session
     self.items = items
@@ -526,6 +529,8 @@ public struct SessionView: Codable, Equatable, Sendable {
     self.historyNotice = historyNotice
     self.context = context
     self.todos = todos
+    self.cost = cost
+    self.quota = quota
   }
 }
 
@@ -539,6 +544,59 @@ public struct ContextUsage: Codable, Equatable, Sendable {
     self.used = used
     self.window = window
     self.pressure = pressure
+  }
+}
+
+/// The subscription's rolling window and weekly block, as Muse last observed them. Times are epoch
+/// milliseconds; percentages may exceed 100.
+public struct SubscriptionLimits: Codable, Equatable, Sendable {
+  public struct Window: Codable, Equatable, Sendable {
+    public let usedPercent: Int
+    public let resetsAt: Double
+    public let minutes: Int
+    public init(usedPercent: Int, resetsAt: Double, minutes: Int) {
+      self.usedPercent = usedPercent
+      self.resetsAt = resetsAt
+      self.minutes = minutes
+    }
+  }
+  public struct Weekly: Codable, Equatable, Sendable {
+    public let usedPercent: Int
+    public let resetsAt: Double
+    public init(usedPercent: Int, resetsAt: Double) {
+      self.usedPercent = usedPercent
+      self.resetsAt = resetsAt
+    }
+  }
+  public let observedAt: Double
+  public let tier: String
+  public let window: Window
+  public let weekly: Weekly
+  public init(observedAt: Double, tier: String, window: Window, weekly: Weekly) {
+    self.observedAt = observedAt
+    self.tier = tier
+    self.window = window
+    self.weekly = weekly
+  }
+}
+
+/// The conversation's estimated cost. `partial` when a reply had no price.
+public struct SessionCost: Codable, Equatable, Sendable {
+  public let usd: Double
+  public let partial: Bool
+  public init(usd: Double, partial: Bool) {
+    self.usd = usd
+    self.partial = partial
+  }
+}
+
+/// Which limit stopped the turn, and when it resets (epoch milliseconds).
+public struct QuotaStop: Codable, Equatable, Sendable {
+  public let kind: String
+  public let resetsAt: Double
+  public init(kind: String, resetsAt: Double) {
+    self.kind = kind
+    self.resetsAt = resetsAt
   }
 }
 
@@ -579,12 +637,13 @@ public enum AppEvent: Decodable, Equatable, Sendable {
   case connection(ConnectionStatus)
   case session(SessionView)
   case sessionsChanged
+  case usageChanged(SubscriptionLimits?)
   case preferences(Preferences)
   case error(String)
   /// An event mMac does not use, such as `menu`.
   case other(String)
 
-  private enum Keys: String, CodingKey { case type, status, view, message, preferences }
+  private enum Keys: String, CodingKey { case type, status, view, message, preferences, limits }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: Keys.self)
@@ -593,6 +652,7 @@ public enum AppEvent: Decodable, Equatable, Sendable {
     case "connection": self = .connection(try container.decode(ConnectionStatus.self, forKey: .status))
     case "session": self = .session(try container.decode(SessionView.self, forKey: .view))
     case "sessions-changed": self = .sessionsChanged
+    case "usage-changed": self = .usageChanged(try container.decodeIfPresent(SubscriptionLimits.self, forKey: .limits))
     case "preferences": self = .preferences(try container.decode(Preferences.self, forKey: .preferences))
     case "error": self = .error(try container.decode(String.self, forKey: .message))
     default: self = .other(type)
