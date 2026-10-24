@@ -81,6 +81,9 @@ struct MainView: View {
     .sheet(isPresented: $sheets.help) {
       HelpSheet { controller.sheets.help = false }
     }
+    .sheet(isPresented: $sheets.proposedChanges) {
+      ProposedChangesSheet(workspace: workspace) { controller.sheets.proposedChanges = false }
+    }
     .modifier(VoiceCancellation(voice: controller.voice))
     .alert(
       "Muse",

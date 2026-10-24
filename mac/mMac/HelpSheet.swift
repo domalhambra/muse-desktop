@@ -47,6 +47,15 @@ struct HelpSheet: View {
               row(KeyCap(text: shortcut.keys), shortcut.action)
             }
           }
+          VStack(alignment: .leading, spacing: 6) {
+            Text("PROPOSED CHANGES").font(.caption2.weight(.semibold)).foregroundStyle(.themeSecondary)
+              .accessibilityAddTraits(.isHeader)
+            Text(
+              "Your project has a master copy. A pull request is a proposed edit on a draft copy. Accepting it merges the draft into the master copy. Branches, commits and diffs are under Show details on each card."
+            )
+            .foregroundStyle(.themeSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+          }
           Text("For every other CLI command, use Muse Code in the project inspector to open the full CLI in Terminal.")
             .foregroundStyle(.themeSecondary)
             .fixedSize(horizontal: false, vertical: true)
