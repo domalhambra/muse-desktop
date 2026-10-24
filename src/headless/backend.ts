@@ -218,6 +218,7 @@ export function createBackend({
 
   /** A scheduled run: no Ask, so the folder must already be trusted. Every error is a sentence. */
   async function startScheduled(schedule: Schedule) {
+    if (quitting()) throw new Error('mMac is quitting.')
     const folder = await knownProject(schedule.folder).catch((error: unknown) => {
       throw systemError(error)
         ? new Error('The folder for this task no longer exists, or mMac cannot open it.')
@@ -261,10 +262,13 @@ export function createBackend({
       return true
     }
     const waiting = scheduledTurns.get(sessionId)
+    // A clock that stepped back makes the wait negative: count that as expired too.
+    const waited = waiting ? schedulerNow() - waiting.since : -1
     if (
       waiting &&
       session.updatedAt === waiting.updatedAt &&
-      schedulerNow() - waiting.since < TURN_START_LIMIT
+      waited >= 0 &&
+      waited < TURN_START_LIMIT
     )
       return true
     scheduledTurns.delete(sessionId)
@@ -802,7 +806,10 @@ export function createBackend({
     stopBridges: () => bridges?.stop() ?? Promise.resolve(),
     /** Cancels a transcription in progress: the quit path. */
     stopVoice: () => cancelVoice(),
-    /** Stops the scheduled tasks' timer: the quit path. */
-    stopScheduler: () => scheduler?.stop(),
+    /** Stops the scheduled tasks' timer and settles after the check and write in progress: the quit path. */
+    stopScheduler: () => {
+      scheduler?.stop()
+      return scheduler?.idle() ?? Promise.resolve()
+    },
   }
 }

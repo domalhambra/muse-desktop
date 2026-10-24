@@ -83,6 +83,15 @@ export class Scheduler {
     this.timer = undefined
   }
 
+  /**
+   * Settles after the check in progress, if any, and the last store write: the quit path waits
+   * for it so lastCheckedAt is saved. A failed check was already logged; a failed write rejects.
+   */
+  async idle() {
+    await this.ticking?.catch(() => {})
+    await this.writes
+  }
+
   list(): ScheduleEntry[] {
     const now = this.now()
     return this.store.schedules.map((schedule) => ({

@@ -1663,15 +1663,84 @@ describe('headless backend, scheduled tasks', () => {
     )
   })
 
-  it('keeps tasks in the data folder across a restart, and stops on the quit path', async () => {
+  it('keeps tasks in the data folder across a restart', async () => {
     const project = await folder('project')
     const first = harness()
     await first.start()
     await first.call('add-project', project)
     await first.call('schedule-save', task(project))
-    first.backend.stopScheduler()
+    await first.backend.stopScheduler()
     const second = harness()
     await second.start()
     expect((await second.call('schedule-list')) as unknown[]).toHaveLength(1)
+  })
+
+  it('stops counting a run when the clock steps back', async () => {
+    let now = Date.parse('2026-10-21T08:00:00Z')
+    const muse = fakeMuse()
+    const project = await folder('project')
+    const h = harness(muse, [0], { scheduler: { timer: false, tz: 'UTC', now: () => now } })
+    await h.start()
+    await h.call('add-project', project)
+    await h.call('create', project)
+    const saved = (await h.call('schedule-save', task(project))) as { schedule: { id: string } }
+    await h.call('schedule-run', saved.schedule.id)
+    now -= 60_000
+    await h.call('schedule-run', saved.schedule.id)
+    expect(muse.send).toHaveBeenCalledTimes(2)
+  })
+
+  describe('with the minute timer', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('starts the timer after connect, and the quit path clears it', async () => {
+      const h = harness(fakeMuse(), [], { scheduler: { tz: 'UTC' } })
+      expect(vi.getTimerCount()).toBe(0)
+      await h.start()
+      expect(vi.getTimerCount()).toBe(1)
+      await h.backend.stopScheduler()
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('starts nothing after quit during a slow check, and still saves the check', async () => {
+      let now = Date.parse('2026-10-21T08:00:30Z')
+      let failCreate: (error: Error) => void = () => {}
+      const muse = fakeMuse()
+      const project = await folder('project')
+      const h = harness(muse, [0], { scheduler: { tz: 'UTC', now: () => now } })
+      await h.start()
+      await h.call('add-project', project)
+      await h.call('create', project)
+      await h.call('schedule-save', { ...task(project), name: 'First', preset: 'hourly' })
+      await h.call('schedule-save', { ...task(project), name: 'Second', preset: 'hourly' })
+      await h.backend.stopScheduler() // Let the start-up check and the saves finish.
+      vi.mocked(muse.create).mockClear()
+      vi.mocked(muse.create).mockImplementationOnce(
+        () => new Promise((_resolve, reject) => (failCreate = reject)),
+      )
+      // A second backend on the same data folder: its first check finds both tasks due.
+      const second = harness(muse, [], { scheduler: { tz: 'UTC', now: () => now } })
+      now = Date.parse('2026-10-21T09:00:30Z')
+      await second.start()
+      await vi.waitFor(() => expect(muse.create).toHaveBeenCalledTimes(1))
+      second.setQuitting()
+      const stopped = second.backend.stopScheduler()
+      failCreate(new Error('Muse closed.'))
+      await stopped
+      expect(muse.create).toHaveBeenCalledTimes(1)
+      const store = JSON.parse(await readFile(join(dir, 'data', 'schedules.json'), 'utf8')) as {
+        lastCheckedAt: number
+        schedules: { id: string; name: string }[]
+        history: Record<string, { reason?: string }[]>
+      }
+      expect(store.lastCheckedAt).toBe(now)
+      const later = store.schedules.find((schedule) => schedule.name === 'Second')!
+      expect(store.history[later.id].at(-1)?.reason).toBe('mMac is quitting.')
+    })
   })
 })
