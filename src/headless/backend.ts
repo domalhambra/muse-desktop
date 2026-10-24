@@ -42,7 +42,7 @@ import { projectRoot, worktreeParent } from '../shared/worktree'
 import { Attachments } from './attachments'
 import { Bridges, type BridgeFactories } from './bridges'
 import { exportMarkdown, exportTitle } from './export'
-import { plainError, realFolder } from './plain-errors'
+import { MissingFolder, plainError, realFolder } from './plain-errors'
 import { prList, prMerge, prMergeWhenReady, prStatus } from './pull-request'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
 import { Scheduler } from './schedule'
@@ -252,9 +252,10 @@ export function createBackend({
   async function startScheduledRun(schedule: Schedule) {
     if (quitting()) throw new StartProblem('mMac is quitting.')
     const folder = await knownProject(schedule.folder).catch((error: unknown) => {
-      // knownProject's own refusal is already a sentence; a Node error would name a path.
+      // knownProject's own refusal is already a sentence; a Node error would name a path. A
+      // missing folder keeps this task's own sentence, not realFolder's general one.
       throw new StartProblem(
-        systemError(error)
+        systemError(error) || error instanceof MissingFolder
           ? 'The folder for this task no longer exists, or mMac cannot open it.'
           : error instanceof Error
             ? error.message

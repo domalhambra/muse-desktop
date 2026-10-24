@@ -27,6 +27,9 @@ function missing(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && fs.code === 'ENOENT' && PATH_CALLS.has(fs.syscall ?? '')
 }
 
+/** realFolder's error for a folder that is gone. Its message is already a plain sentence. */
+export class MissingFolder extends Error {}
+
 /**
  * realpath for a project, worktree or conversation folder. A missing folder becomes a plain
  * sentence: the worktree one when `path` is a Muse worktree's root, else the folder one.
@@ -37,7 +40,7 @@ export async function realFolder(path: string): Promise<string> {
   } catch (error) {
     if (!missing(error)) throw error
     console.error(`A folder is missing: ${error.message}`)
-    throw new Error(WORKTREE_ROOT.test(path) ? WORKTREE_GONE : FOLDER_GONE)
+    throw new MissingFolder(WORKTREE_ROOT.test(path) ? WORKTREE_GONE : FOLDER_GONE)
   }
 }
 
