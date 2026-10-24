@@ -58,6 +58,19 @@ public enum ScheduleRules {
 
   public static func finishedNotice(name: String) -> String { "Scheduled task \(name) finished" }
 
+  /// What a permission mode means for a run nobody watches, or nil for a mode this list does not
+  /// know. A run that waits still counts as running, so the backend skips other tasks until it ends.
+  public static func unattendedNote(_ approvalMode: String) -> String? {
+    switch ApprovalMode(rawValue: approvalMode) {
+    case .allowAll: "The run uses every tool without asking."
+    case .promptUnmatched:
+      "A tool no rule allows makes the run stop and ask; it waits for you, and other tasks skip until it ends."
+    case .onRequest: "The run can stop and ask; it waits for you, and other tasks skip until it ends."
+    case .denyUnmatched: "A tool no rule allows is refused, so the run never waits for you."
+    case nil: nil
+    }
+  }
+
   /// The form's fields for an existing task. The id makes Save change it rather than add one.
   public static func input(from schedule: Schedule) -> ScheduleInput {
     ScheduleInput(
@@ -77,8 +90,8 @@ public enum ScheduleRules {
     return date.formatted(style)
   }
 
-  /// "today 3:40 PM"; "Mon 9:00 AM" within a week either way, where a weekday names one day;
-  /// otherwise "Oct 3, 9:00 AM".
+  /// "today 3:40 PM"; "Mon 9:00 AM" one to six calendar days away either way, where a weekday
+  /// names one day; otherwise "Oct 3, 9:00 AM". Days count between start-of-day dates, not hours.
   private static func when(_ epochMs: Double, now: Date, calendar: Calendar, locale: Locale) -> String {
     let date = Date(timeIntervalSince1970: epochMs / 1000)
     var time = Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar)
@@ -86,7 +99,8 @@ public enum ScheduleRules {
     if calendar.isDate(date, inSameDayAs: now) { return "today \(date.formatted(time))" }
     var english = calendar
     english.locale = Self.english
-    if abs(date.timeIntervalSince(now)) < 7 * 86_400 {
+    let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day
+    if let days, (1...6).contains(abs(days)) {
       var day = Date.FormatStyle(locale: Self.english, calendar: english).weekday(.abbreviated)
       day.timeZone = calendar.timeZone
       return "\(date.formatted(day)) \(date.formatted(time))"

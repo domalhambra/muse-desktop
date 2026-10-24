@@ -48,11 +48,15 @@ struct ChangeCardView: View {
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("Risk: \(risk.reason)")
       if let blocker {
-        Label(blocker, systemImage: "arrow.turn.up.left")
-          .font(.caption)
-          .foregroundStyle(.orange)
-          .lineLimit(1)
-          .accessibilityLabel(blocker)
+        // Orange on the icon only: orange caption text is too faint to read.
+        Label {
+          Text(blocker).foregroundStyle(.themeSecondary)
+        } icon: {
+          Image(systemName: "arrow.turn.up.left").foregroundStyle(.orange)
+        }
+        .font(.caption)
+        .lineLimit(2)
+        .accessibilityLabel(blocker)
       }
       FlowLayout(spacing: 6) {
         Button("Accept") { Task { await workspace.accept(pr) } }
@@ -69,7 +73,7 @@ struct ChangeCardView: View {
         }
         if conversationCard, pr.state == "OPEN", track.step == .checked, !track.failing {
           Button("Merge when ready") { Task { await workspace.mergeWhenReady(pr) } }
-            .disabled(merging)
+            .disabled(merging || blocker != nil)
             .accessibilityLabel("Merge PR \(pr.number) when its checks pass")
             .accessibilityIdentifier("change-merge-when-ready-\(pr.number)")
         }

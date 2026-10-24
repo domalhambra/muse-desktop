@@ -105,8 +105,20 @@ public enum ChangeCardRules {
     prs.first { $0.state == "OPEN" && $0.number != pr.number && $0.headRefName == pr.baseRefName }
   }
 
+  /// The merged PR whose head branch is this open PR's base: accepting this PR would land it in a
+  /// branch that was already accepted, so it must move onto that PR's own base first.
+  public static func mergedParent(of pr: PullRequest, in prs: [PullRequest]) -> PullRequest? {
+    guard pr.state == "OPEN" else { return nil }
+    return prs.first { $0.state == "MERGED" && $0.number != pr.number && $0.headRefName == pr.baseRefName }
+  }
+
+  /// Why Accept and Merge when ready stay off, or nil. mMac never moves the PR itself.
   public static func blocker(of pr: PullRequest, in prs: [PullRequest]) -> String? {
-    dependency(of: pr, in: prs).map { "Accept PR \($0.number) first" }
+    if let parent = dependency(of: pr, in: prs) { return "Accept PR \(parent.number) first" }
+    if let parent = mergedParent(of: pr, in: prs) {
+      return "Its draft copy was accepted; move it onto \(parent.baseRefName) first"
+    }
+    return nil
   }
 
   /// Newest first, with each PR after the one it depends on.
@@ -139,6 +151,8 @@ public enum ChangeCardRules {
         inSection = heading == "what changes for you" || heading == "summary"
         continue
       }
+      // Raw HTML, an image or a table row is not a sentence.
+      if line.hasPrefix("<") || line.hasPrefix("!") || line.hasPrefix("|") { continue }
       if inSection, !line.isEmpty { return firstSentence(plain(line)) }
     }
     return plain(title)

@@ -92,6 +92,23 @@ private func count(_ backend: ScriptedBackend, _ method: String) -> Int {
     workspace.shouldPollPullRequest(showingChanges: true, now: Date.now.addingTimeInterval(60)))
 }
 
+@MainActor @Test func aTurnThatEndsAllowsAFreshReadAfterAFirstLookFoundNoPullRequest() async throws {
+  let (workspace, _) = await makeWorkspace { _, _, id in [reply(id, "null")] }
+  workspace.view = try decodeView(viewJSON(sessionJSON("s1", status: "running")))
+  await workspace.refreshPullRequest()
+  #expect(workspace.pullRequest == nil)
+  #expect(!workspace.shouldPollPullRequest(showingChanges: true, now: Date.now.addingTimeInterval(600)))
+  // The turn ends: it may have made a PR, so the next look reads once more.
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
+  #expect(workspace.shouldPollPullRequest(showingChanges: true, now: .now))
+  await workspace.refreshPullRequest()
+  #expect(!workspace.shouldPollPullRequest(showingChanges: true, now: Date.now.addingTimeInterval(600)))
+  // Another conversation's turn ending does not.
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s2", status: "running")))))
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s2", status: "idle")))))
+  #expect(!workspace.shouldPollPullRequest(showingChanges: true, now: .now))
+}
+
 @MainActor @Test func askWhyOpensNoSideChatWhenTheOwnerDoesNotOpen() async throws {
   let worktrees =
     #"[{"path":"/p","branch":"refs/heads/main","isMain":true,"sessionIds":[]},{"path":"/p/.muse/worktrees/a","branch":"refs/heads/usage","isMain":false,"sessionIds":["s1"]}]"#

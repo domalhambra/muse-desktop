@@ -318,6 +318,11 @@ public final class Workspace {
             startBadgeRead([root])
           }
         }
+        // The turn may have made a PR: let the next look read once more, even after a first look
+        // found none.
+        if view?.session.status == "running", next.session.status != "running", pullRequestError == nil {
+          lastPullRequestPoll = nil
+        }
         view = next
       }
       if next.session.sessionId == sideView?.session.sessionId { sideView = next }

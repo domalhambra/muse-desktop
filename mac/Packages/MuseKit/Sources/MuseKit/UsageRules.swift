@@ -24,26 +24,30 @@ public enum UsageRules {
   }
 
   public static func footer(_ limits: SubscriptionLimits, now: Date) -> String {
-    let window = windowLabel(minutes: limits.window.minutes)
-    let first =
-      isStale(resetsAt: limits.window.resetsAt, observedAt: limits.observedAt, now: now)
-      ? "\(window) reset" : "\(window) \(limits.window.usedPercent)%"
-    let second =
-      isStale(resetsAt: limits.weekly.resetsAt, observedAt: limits.observedAt, now: now)
-      ? "Week reset" : "Week \(limits.weekly.usedPercent)%"
+    let parts = footerParts(limits, now: now)
+    let first = "\(parts.window) \(parts.windowPercent.map { "\($0)%" } ?? "reset")"
+    let second = parts.weekPercent.map { "Week \($0)%" } ?? "Week reset"
     return "\(first) \u{00B7} \(second)"
   }
 
   /// The footer as VoiceOver reads it: "5-hour 80 percent, week 20 percent", with no "·".
   public static func spokenFooter(_ limits: SubscriptionLimits, now: Date) -> String {
-    let window = windowLabel(minutes: limits.window.minutes)
-    let first =
-      isStale(resetsAt: limits.window.resetsAt, observedAt: limits.observedAt, now: now)
-      ? "\(window) reset" : "\(window) \(limits.window.usedPercent) percent"
-    let second =
-      isStale(resetsAt: limits.weekly.resetsAt, observedAt: limits.observedAt, now: now)
-      ? "week reset" : "week \(limits.weekly.usedPercent) percent"
+    let parts = footerParts(limits, now: now)
+    let first = "\(parts.window) \(parts.windowPercent.map { "\($0) percent" } ?? "reset")"
+    let second = parts.weekPercent.map { "week \($0) percent" } ?? "week reset"
     return "\(first), \(second)"
+  }
+
+  /// The window's label and each limit's percent, nil where the limit has reset since Muse saw it.
+  private static func footerParts(
+    _ limits: SubscriptionLimits, now: Date
+  ) -> (window: String, windowPercent: Int?, weekPercent: Int?) {
+    let windowStale = isStale(resetsAt: limits.window.resetsAt, observedAt: limits.observedAt, now: now)
+    let weekStale = isStale(resetsAt: limits.weekly.resetsAt, observedAt: limits.observedAt, now: now)
+    return (
+      windowLabel(minutes: limits.window.minutes), windowStale ? nil : limits.window.usedPercent,
+      weekStale ? nil : limits.weekly.usedPercent
+    )
   }
 
   /// The higher level of the limits whose numbers still hold.

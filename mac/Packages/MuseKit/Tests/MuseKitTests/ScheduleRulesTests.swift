@@ -42,7 +42,10 @@ private func schedule(_ preset: String = "daily", minute: Int = 0, cron: String?
   let today = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(13_200)), history: [])
   let monday = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(7 * 86_400 - 10_800)), history: [])
   #expect(ScheduleRules.nextRun(today, now: noon, calendar: utc, locale: locale) == "Next run today 3:40\u{202F}PM")
-  #expect(ScheduleRules.nextRun(monday, now: noon, calendar: utc, locale: locale) == "Next run Mon 9:00\u{202F}AM")
+  // Next Monday is seven calendar days away: "Mon" would read as today, so the date shows.
+  #expect(ScheduleRules.nextRun(monday, now: noon, calendar: utc, locale: locale) == "Next run Nov 2, 9:00\u{202F}AM")
+  let sunday = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(6 * 86_400 - 10_800)), history: [])
+  #expect(ScheduleRules.nextRun(sunday, now: noon, calendar: utc, locale: locale) == "Next run Sun 9:00\u{202F}AM")
   #expect(ScheduleRules.nextRun(ScheduleEntry(schedule: schedule(enabled: false), nextRunAt: nil, history: []), now: noon) == "Paused")
   #expect(ScheduleRules.nextRun(ScheduleEntry(schedule: schedule("manual"), nextRunAt: nil, history: []), now: noon) == "Runs only with Run now")
 }
@@ -80,6 +83,34 @@ private func schedule(_ preset: String = "daily", minute: Int = 0, cron: String?
   #expect(ScheduleRules.nextRun(later, now: noon, calendar: utc, locale: locale) == "Next run Nov 3, 9:00\u{202F}AM")
 }
 
+@Test func theWeekdayCutoffCountsCalendarDaysNotHours() {
+  // Monday 2026-10-19 23:00: 6 days 13 hours back, but seven calendar days, so the date shows.
+  let lateLastMonday = ms(noon.addingTimeInterval(-6 * 86_400 - 13 * 3_600))
+  #expect(ScheduleRules.historyLine(ScheduleRun(at: lateLastMonday, outcome: "started", sessionId: "s"), now: noon, calendar: utc, locale: locale)
+    == "Started Oct 19, 11:00\u{202F}PM")
+  // Tuesday 2026-10-20 0:30: six calendar days back, so the weekday names it.
+  let earlyTuesday = ms(noon.addingTimeInterval(-6 * 86_400 + 30 * 60 - 12 * 3_600))
+  #expect(ScheduleRules.historyLine(ScheduleRun(at: earlyTuesday, outcome: "started", sessionId: "s"), now: noon, calendar: utc, locale: locale)
+    == "Started Tue 12:30\u{202F}AM")
+  // Monday 2026-11-02 1:00: 6 days 13 hours ahead, seven calendar days, so the date shows.
+  let earlyNextMonday = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(6 * 86_400 + 13 * 3_600)), history: [])
+  #expect(ScheduleRules.nextRun(earlyNextMonday, now: noon, calendar: utc, locale: locale) == "Next run Nov 2, 1:00\u{202F}AM")
+  // Tuesday 0:10, eleven hours and fifty minutes ahead: tomorrow, so its weekday.
+  let tomorrow = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(12 * 3_600 + 10 * 60)), history: [])
+  #expect(ScheduleRules.nextRun(tomorrow, now: noon, calendar: utc, locale: locale) == "Next run Tue 12:10\u{202F}AM")
+  // Today at 23:59 stays today.
+  let tonight = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(12 * 3_600 - 60)), history: [])
+  #expect(ScheduleRules.nextRun(tonight, now: noon, calendar: utc, locale: locale) == "Next run today 11:59\u{202F}PM")
+}
+
+@Test func eachPermissionModeSaysWhatItMeansForAnUnattendedRun() {
+  #expect(ScheduleRules.unattendedNote("allowAll")?.contains("without asking") == true)
+  #expect(ScheduleRules.unattendedNote("promptUnmatched")?.contains("waits for you") == true)
+  #expect(ScheduleRules.unattendedNote("onRequest")?.contains("waits for you") == true)
+  #expect(ScheduleRules.unattendedNote("denyUnmatched")?.contains("never waits") == true)
+  #expect(ScheduleRules.unattendedNote("somethingNew") == nil)
+}
+
 @Test func theSentencesKeepEnglishDayNamesInAnotherLocale() {
   // German times have no AM or PM; the day and month names stay English.
   let german = Locale(identifier: "de_DE")
@@ -87,7 +118,7 @@ private func schedule(_ preset: String = "daily", minute: Int = 0, cron: String?
   calendar.locale = german
   #expect(ScheduleRules.trigger(schedule("weekly"), calendar: calendar, locale: german) == "Mondays at 9:00")
   let monday = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(7 * 86_400 - 10_800)), history: [])
-  #expect(ScheduleRules.nextRun(monday, now: noon, calendar: calendar, locale: german) == "Next run Mon 9:00")
+  #expect(ScheduleRules.nextRun(monday, now: noon, calendar: calendar, locale: german) == "Next run Nov 2, 9:00")
   let later = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(8 * 86_400 - 10_800)), history: [])
   #expect(ScheduleRules.nextRun(later, now: noon, calendar: calendar, locale: german) == "Next run Nov 3, 9:00")
 }

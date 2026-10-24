@@ -67,6 +67,8 @@ struct SchedulesPane: View {
   /// the Workspace's own alert is in the conversation window.
   private func perform(_ action: @escaping @MainActor () async -> Void, then: (@MainActor () -> Void)? = nil) {
     Task {
+      // Only this action's own error moves to Settings, never one the conversation window showed.
+      workspace.errorMessage = nil
       await action()
       then?()
       if let error = workspace.errorMessage {
@@ -197,6 +199,12 @@ struct ScheduleForm: View {
           Text(input.approvalMode).tag(input.approvalMode)
         }
         ForEach(ApprovalMode.allCases) { mode in Text(mode.label).tag(mode.rawValue) }
+      }
+      if let note = ScheduleRules.unattendedNote(input.approvalMode) {
+        Text(note)
+          .font(.caption)
+          .foregroundStyle(.themeSecondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
       Picker(
         "Model", selection: Binding(get: { input.modelId ?? "" }, set: { input.modelId = $0.isEmpty ? nil : $0 })

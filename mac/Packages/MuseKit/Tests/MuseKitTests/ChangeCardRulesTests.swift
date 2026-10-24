@@ -62,7 +62,20 @@ private func check(_ state: String, _ name: String = "check") -> PullRequestChec
   #expect(ChangeCardRules.blocker(of: child, in: [child, other, base]) == "Accept PR 9 first")
   #expect(ChangeCardRules.blocker(of: base, in: [child, other, base]) == nil)
   let merged = PullRequest(number: 9, title: "Usage", state: "MERGED", baseRefName: "main", headRefName: "usage")
-  #expect(ChangeCardRules.blocker(of: child, in: [child, merged]) == nil)
+  #expect(ChangeCardRules.blocker(of: child, in: [child, merged]) == "Its draft copy was accepted; move it onto main first")
+  #expect(ChangeCardRules.blocker(of: other, in: [child, other, merged]) == nil)
+}
+
+@Test func aPullRequestOnAMergedBranchIsBlockedUntilMoved() {
+  // PR 12 sits on PR 9's branch; PR 9 was accepted into extensions, so 12 would land in a dead branch.
+  let merged = PullRequest(number: 9, title: "Usage", state: "MERGED", baseRefName: "extensions", headRefName: "usage")
+  let child = PullRequest(number: 12, title: "Limits", baseRefName: "usage", headRefName: "limits")
+  #expect(ChangeCardRules.blocker(of: child, in: [merged, child]) == "Its draft copy was accepted; move it onto extensions first")
+  // An open parent still asks for it first.
+  let open = PullRequest(number: 9, title: "Usage", baseRefName: "extensions", headRefName: "usage")
+  #expect(ChangeCardRules.blocker(of: child, in: [open, child]) == "Accept PR 9 first")
+  // The merged PR itself has no blocker.
+  #expect(ChangeCardRules.blocker(of: merged, in: [merged, child]) == nil)
 }
 
 @Test func theHeadlineComesFromTheTitleAndBodyNeverCode() {
@@ -98,6 +111,12 @@ private func check(_ state: String, _ name: String = "check") -> PullRequestChec
 @Test func theHeadlineSkipsTildeFencesAndIndentedCode() {
   let body = "~~~\n## Summary\nlet secret = 1\n~~~\n## Summary\n    let code = 1\nThe footer shows usage. More.\n"
   #expect(ChangeCardRules.headline(title: "Title", body: body) == "The footer shows usage.")
+}
+
+@Test func theHeadlineSkipsRawHtmlImagesAndTables() {
+  let body = "## Summary\n<img src=\"https://x/a.png\">\n![shot](https://x/b.png)\n| a | b |\nThe footer shows usage. More.\n"
+  #expect(ChangeCardRules.headline(title: "Title", body: body) == "The footer shows usage.")
+  #expect(ChangeCardRules.headline(title: "Title", body: "## Summary\n<!-- note -->\n") == "Title")
 }
 
 @Test func picturesKeepOnlyHttps() {
