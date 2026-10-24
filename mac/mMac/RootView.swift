@@ -49,15 +49,15 @@ struct MainView: View {
     NavigationSplitView {
       SidebarView(controller: controller, workspace: workspace)
         .navigationSplitViewColumnWidth(
-          min: WindowLayout.sidebarMin, ideal: WindowLayout.sidebarIdeal, max: WindowLayout.sidebarMax)
+          min: WindowMetrics.sidebarMin, ideal: WindowMetrics.sidebarIdeal, max: WindowMetrics.sidebarMax)
     } detail: {
       ConversationView(controller: controller, workspace: workspace)
         // Before the inspector, so the floor is the conversation's own and not the inspector's too.
-        .frame(minWidth: WindowLayout.contentMin)
+        .frame(minWidth: WindowMetrics.contentMin)
         .inspector(isPresented: $inspectorShown) {
           InspectorView(controller: controller, workspace: workspace, inspector: workspace.inspector)
             .inspectorColumnWidth(
-              min: WindowLayout.inspectorMin, ideal: WindowLayout.inspectorIdeal, max: WindowLayout.inspectorMax)
+              min: WindowMetrics.inspectorMin, ideal: WindowMetrics.inspectorIdeal, max: WindowMetrics.inspectorMax)
         }
         .toolbar {
           ToolbarItem(placement: .primaryAction) {
@@ -119,27 +119,6 @@ struct MainView: View {
       Task { await workspace.save(PreferencesPatch(theme: theme)) }
     }
   }
-}
-
-/// The columns' widths. The window's minimum is the sum of the three minimums, so the split view
-/// never has to overflow the window: at the default 900 points with the inspector open, each
-/// column is at or above its minimum. A column whose content wants more than its minimum must
-/// compress or clip that content, as the composer's row and the inspector's tabs do.
-enum WindowLayout {
-  static let sidebarMin: CGFloat = 240
-  static let sidebarIdeal: CGFloat = 260
-  static let sidebarMax: CGFloat = 420
-  static let contentMin: CGFloat = 360
-  static let inspectorMin: CGFloat = 280
-  static let inspectorIdeal: CGFloat = 340
-  static let inspectorMax: CGFloat = 420
-  /// The split view's two dividers.
-  static let dividers: CGFloat = 2
-  static let windowMinWidth = sidebarMin + contentMin + inspectorMin + dividers
-  static let windowMinHeight: CGFloat = 560
-  /// The size a window opens at when it has no saved frame, as the UI tests open it.
-  static let defaultWidth: CGFloat = 900
-  static let defaultHeight: CGFloat = 620
 }
 
 /// A full-window problem with a message, the backend's last error lines and actions.

@@ -61,11 +61,11 @@ struct MMacApp: App {
     // One window. The backend belongs to the app, so closing this window keeps it.
     Window("mMac", id: Self.mainWindow) {
       RootView(controller: delegate.controller)
-        .frame(minWidth: WindowLayout.windowMinWidth, minHeight: WindowLayout.windowMinHeight)
+        .frame(minWidth: WindowMetrics.windowMinWidth, minHeight: WindowMetrics.windowMinHeight)
         .themed(delegate.controller)
         .defaultAppStorage(Self.appStorage)
     }
-    .defaultSize(width: WindowLayout.defaultWidth, height: WindowLayout.defaultHeight)
+    .defaultSize(width: WindowMetrics.defaultWidth, height: WindowMetrics.defaultHeight)
     // A test run does not reopen its window at the next launch.
     .restorationBehavior(Self.keepsWindowState ? .automatic : .disabled)
     .commands {
