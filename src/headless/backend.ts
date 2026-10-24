@@ -42,7 +42,7 @@ import { projectRoot, worktreeParent } from '../shared/worktree'
 import { Attachments } from './attachments'
 import { Bridges, type BridgeFactories } from './bridges'
 import { exportMarkdown, exportTitle } from './export'
-import { plainError } from './plain-errors'
+import { plainError, realFolder } from './plain-errors'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
 import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
@@ -163,7 +163,7 @@ export function createBackend({
   }
 
   async function knownProject(value: unknown) {
-    const project = await realpath(pathSchema.parse(value))
+    const project = await realFolder(pathSchema.parse(value))
     const resolvedRecent = await Promise.all(
       current().recentProjects.map(async (entry) => {
         try {
@@ -199,7 +199,7 @@ export function createBackend({
   async function sessionProject(sessionId: string) {
     const session = muse.getSession(sessionId)
     if (!session.workspaceRoot) throw new Error('This conversation has no project folder.')
-    const project = await realpath(session.workspaceRoot)
+    const project = await realFolder(session.workspaceRoot)
     await trustProject(project)
     return project
   }
@@ -275,7 +275,7 @@ export function createBackend({
   })
 
   method('add-project', async (value) => {
-    const project = await realpath(pathSchema.parse(value))
+    const project = await realFolder(pathSchema.parse(value))
     if (!(await stat(project)).isDirectory()) throw new Error('Choose a folder, not a file.')
     await savePreferences({
       recentProjects: [
@@ -506,7 +506,7 @@ export function createBackend({
 
   method('worktree-remove', async (project, path) => {
     const root = projectRoot(await knownProject(project))
-    const target = await realpath(pathSchema.parse(path))
+    const target = await realFolder(pathSchema.parse(path))
     const entry = (await muse.listWorktrees(root)).find((worktree) => worktree.path === target)
     const busy = entry?.sessionIds.some((sessionId) => {
       try {
