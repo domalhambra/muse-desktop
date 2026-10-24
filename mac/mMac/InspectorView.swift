@@ -119,12 +119,15 @@ struct InspectorView: View {
         } else {
           Picker("Inspector view", selection: $inspector.tab) {
             ForEach(Array(InspectorTab.all.enumerated()), id: \.offset) { index, tab in
-              // The image's description is the segment's name for VoiceOver and the UI tests.
-              Image(nsImage: InspectorTab.icon(tab.symbol, named: titles[index])).tag(tab.tab)
+              // Each icon names its own tab, with the count, for VoiceOver, the UI tests and its
+              // tooltip; the image's description says the same.
+              Image(nsImage: InspectorTab.icon(tab.symbol, named: titles[index]))
+                .accessibilityLabel(titles[index])
+                .help(titles[index])
+                .tag(tab.tab)
             }
           }
           .frame(minWidth: 0, maxWidth: .infinity)
-          .help(titles[InspectorTab.all.firstIndex { $0.tab == inspector.tab } ?? 0])
         }
       }
       .pickerStyle(.segmented)

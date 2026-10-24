@@ -391,10 +391,15 @@ struct HoverTracker: NSViewRepresentable {
     override func mouseEntered(with event: NSEvent) { report(true) }
     override func mouseExited(with event: NSEvent) { report(false) }
 
-    /// A row that leaves the window, as the list reuses it, is no longer hovered.
+    /// A row that leaves the window, as the list reuses it, is no longer hovered. On the next turn
+    /// of the run loop: this can run inside a SwiftUI update, which must not change state.
     override func viewDidMoveToWindow() {
       super.viewDidMoveToWindow()
-      if window == nil { report(false) }
+      guard window == nil else { return }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.window == nil else { return }
+        self.report(false)
+      }
     }
 
     /// Clicks go to the row's views above it.
