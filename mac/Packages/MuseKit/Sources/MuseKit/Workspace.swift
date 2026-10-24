@@ -78,6 +78,10 @@ public final class Workspace {
   public internal(set) var sideOpening = false
   /// A subagent's session, shown read-only in a sheet from the Agents tab, or nil.
   public internal(set) var childView: SessionView?
+  /// The subscription's limits as Muse last observed them, or nil. The sidebar footer hides without
+  /// them. A connection that stops being ready clears them, so the footer never shows a number from a
+  /// backend that is gone.
+  public internal(set) var limits: SubscriptionLimits?
   /// The conversation being opened, for a spinner.
   public private(set) var openingSessionId: String?
   public internal(set) var models: [MuseModel] = []
@@ -178,6 +182,7 @@ public final class Workspace {
       defer { beginsRunning -= 1 }
       await refreshSessions()
       await loadModels()
+      await loadLimits()
       if let reopen = reopenSessionId {
         reopenSessionId = nil
         // Not over a conversation the person opened, is opening, or is sending a first message to
@@ -257,6 +262,7 @@ public final class Workspace {
     case .connection(let next):
       let becameReady = !status.isReady && next.isReady
       status = next
+      if !next.isReady { limits = nil }
       // `begin()` holds the Workspace while it runs; a backend stop fails its requests.
       if becameReady { Task { [weak self] in await self?.begin() } }
     case .preferences(let next):
@@ -303,8 +309,8 @@ public final class Workspace {
         self.refreshDelay = nil
         await self.refreshSessions()
       }
-    case .usageChanged:
-      break
+    case .usageChanged(let next):
+      limits = next
     case .error(let message):
       errorMessage = message
     case .other:
