@@ -50,3 +50,21 @@ private let entry = #"{"schedule":{"id":"a","name":"Morning review","prompt":"Re
   workspace.apply(.schedulesChanged)
   try await eventually { lists.value == 2 }
 }
+
+@MainActor @Test(.timeLimit(.minutes(1))) func anOlderListReplyKeepsTheNewerList() async throws {
+  // The first list request gets no scripted reply: the test sends it after the second one lands.
+  let lists = Counter()
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    guard method == "schedule-list" else { return [reply(id, "null")] }
+    return lists.next() == 1 ? [] : [reply(id, "[\(entry)]")]
+  }
+  let first = Task { await workspace.loadSchedules() }
+  try await eventually { lists.value == 1 }
+  await workspace.loadSchedules()
+  #expect(workspace.schedules.count == 1)
+  guard case .number(let id)? = backend.messages.first(where: { $0["method"] == "schedule-list" })?["id"]
+  else { Issue.record("no schedule-list id"); return }
+  backend.push(reply(Int(id), "[]"))
+  await first.value
+  #expect(workspace.schedules.count == 1)
+}

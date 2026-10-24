@@ -33,7 +33,7 @@ public enum ScheduleRules {
     case "weekdays": return "Weekdays at \(time)"
     case "weekly":
       var symbols = calendar
-      symbols.locale = locale
+      symbols.locale = english
       return "\(symbols.weekdaySymbols[((schedule.weekday % 7) + 7) % 7])s at \(time)"
     case "custom": return "Custom: \(schedule.cron ?? "")"
     default: return "Manual"
@@ -58,6 +58,9 @@ public enum ScheduleRules {
 
   public static func finishedNotice(name: String) -> String { "Scheduled task \(name) finished" }
 
+  /// The sentences are English, so day and month names are too. Times follow `locale`.
+  private static let english = Locale(identifier: "en_US")
+
   private static func clock(hour: Int, minute: Int, calendar: Calendar, locale: Locale) -> String {
     var style = Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar)
     style.timeZone = calendar.timeZone
@@ -65,14 +68,22 @@ public enum ScheduleRules {
     return date.formatted(style)
   }
 
-  /// "today 3:40 PM", or "Mon 9:00 AM" on another day.
+  /// "today 3:40 PM"; "Mon 9:00 AM" within a week either way, where a weekday names one day;
+  /// otherwise "Oct 3, 9:00 AM".
   private static func when(_ epochMs: Double, now: Date, calendar: Calendar, locale: Locale) -> String {
     let date = Date(timeIntervalSince1970: epochMs / 1000)
     var time = Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar)
     time.timeZone = calendar.timeZone
     if calendar.isDate(date, inSameDayAs: now) { return "today \(date.formatted(time))" }
-    var day = Date.FormatStyle(locale: locale, calendar: calendar).weekday(.abbreviated)
+    var english = calendar
+    english.locale = Self.english
+    if abs(date.timeIntervalSince(now)) < 7 * 86_400 {
+      var day = Date.FormatStyle(locale: Self.english, calendar: english).weekday(.abbreviated)
+      day.timeZone = calendar.timeZone
+      return "\(date.formatted(day)) \(date.formatted(time))"
+    }
+    var day = Date.FormatStyle(locale: Self.english, calendar: english).month(.abbreviated).day()
     day.timeZone = calendar.timeZone
-    return "\(date.formatted(day)) \(date.formatted(time))"
+    return "\(date.formatted(day)), \(date.formatted(time))"
   }
 }

@@ -1,9 +1,12 @@
 import MuseBackend
 
 extension Workspace {
-  /// Reads the task list. A failure keeps the list shown.
+  /// Reads the task list. A failure keeps the list shown. A reply that lands after a newer read
+  /// started is dropped, so an older list never replaces a newer one.
   public func loadSchedules() async {
-    guard let next = try? await client.schedules() else { return }
+    schedulesSequence += 1
+    let sequence = schedulesSequence
+    guard let next = try? await client.schedules(), sequence == schedulesSequence else { return }
     schedules = next
   }
 

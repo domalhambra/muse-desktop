@@ -90,6 +90,8 @@ public final class Workspace {
   public internal(set) var schedules: [ScheduleEntry] = []
   /// The sessions scheduled runs started, by session id, with the task's name: the finished notice names it.
   public internal(set) var scheduledRuns: [String: String] = [:]
+  /// Counts task-list reads. An older read that finishes later is dropped.
+  @ObservationIgnored var schedulesSequence = 0
   /// The conversation being opened, for a spinner.
   public private(set) var openingSessionId: String?
   public internal(set) var models: [MuseModel] = []

@@ -58,14 +58,36 @@ private func schedule(_ preset: String = "daily", minute: Int = 0, cron: String?
 
 @Test func historyLinesAndTheNotice() {
   let nine = ms(noon.addingTimeInterval(-10_800))
-  let lastMonday = ms(noon.addingTimeInterval(-7 * 86_400 - 10_800))
+  // Tuesday 2026-10-20 9:00, less than a week back, so the weekday names it.
+  let lastTuesday = ms(noon.addingTimeInterval(-6 * 86_400 - 10_800))
   #expect(ScheduleRules.historyLine(ScheduleRun(at: nine, outcome: "started", sessionId: "s"), now: noon, calendar: utc, locale: locale)
     == "Started today 9:00\u{202F}AM")
   #expect(ScheduleRules.historyLine(
-    ScheduleRun(at: lastMonday, outcome: "skipped", reason: "Another scheduled task was running."),
+    ScheduleRun(at: lastTuesday, outcome: "skipped", reason: "Another scheduled task was running."),
     now: noon, calendar: utc, locale: locale)
-    == "Skipped Mon 9:00\u{202F}AM: Another scheduled task was running.")
+    == "Skipped Tue 9:00\u{202F}AM: Another scheduled task was running.")
   #expect(ScheduleRules.historyLine(ScheduleRun(at: nine, outcome: "failed", reason: "No folder."), now: noon, calendar: utc, locale: locale)
     == "Failed today 9:00\u{202F}AM: No folder.")
   #expect(ScheduleRules.finishedNotice(name: "Morning review") == "Scheduled task Morning review finished")
+}
+
+@Test func aTimeAWeekOrMoreAwayShowsItsDate() {
+  // Monday 2026-10-19 9:00, a week and three hours back: "Mon" would read as today's weekday.
+  let weekAgo = ms(noon.addingTimeInterval(-7 * 86_400 - 10_800))
+  #expect(ScheduleRules.historyLine(ScheduleRun(at: weekAgo, outcome: "started", sessionId: "s"), now: noon, calendar: utc, locale: locale)
+    == "Started Oct 19, 9:00\u{202F}AM")
+  let later = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(8 * 86_400 - 10_800)), history: [])
+  #expect(ScheduleRules.nextRun(later, now: noon, calendar: utc, locale: locale) == "Next run Nov 3, 9:00\u{202F}AM")
+}
+
+@Test func theSentencesKeepEnglishDayNamesInAnotherLocale() {
+  // German times have no AM or PM; the day and month names stay English.
+  let german = Locale(identifier: "de_DE")
+  var calendar = utc
+  calendar.locale = german
+  #expect(ScheduleRules.trigger(schedule("weekly"), calendar: calendar, locale: german) == "Mondays at 9:00")
+  let monday = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(7 * 86_400 - 10_800)), history: [])
+  #expect(ScheduleRules.nextRun(monday, now: noon, calendar: calendar, locale: german) == "Next run Mon 9:00")
+  let later = ScheduleEntry(schedule: schedule(), nextRunAt: ms(noon.addingTimeInterval(8 * 86_400 - 10_800)), history: [])
+  #expect(ScheduleRules.nextRun(later, now: noon, calendar: calendar, locale: german) == "Next run Nov 3, 9:00")
 }
