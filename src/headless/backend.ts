@@ -44,7 +44,7 @@ import { Bridges, type BridgeFactories } from './bridges'
 import { exportMarkdown, exportTitle } from './export'
 import { prList, prMerge, prMergeWhenReady, prStatus } from './pull-request'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
-import { Scheduler } from './schedule'
+import { Scheduler, StartFailed } from './schedule'
 import type { Schedule } from './schedule-rules'
 import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
@@ -227,6 +227,16 @@ export function createBackend({
   /** A reason the person can act on, shown after START_FAILED. */
   class StartProblem extends Error {}
 
+  /** The mode or the prompt failed after create: the conversation exists but holds no prompt. */
+  class CreatedThenFailed extends Error {
+    constructor(
+      readonly sessionId: string,
+      override readonly cause: unknown,
+    ) {
+      super('created then failed')
+    }
+  }
+
   /**
    * A scheduled run: no Ask, so the folder must already be trusted. History shows START_FAILED,
    * with a plain reason where one is known; Muse's own text goes to stderr only.
@@ -236,11 +246,31 @@ export function createBackend({
       return await startScheduledRun(schedule)
     } catch (error) {
       if (error instanceof StartProblem) throw new Error(`${START_FAILED} ${error.message}`)
+      const cause = error instanceof CreatedThenFailed ? error.cause : error
       console.error(
-        `mMac could not start scheduled task ${schedule.id}: ${error instanceof Error ? error.message : String(error)}`,
+        `mMac could not start scheduled task ${schedule.id}: ${cause instanceof Error ? cause.message : String(cause)}`,
       )
+      if (error instanceof CreatedThenFailed) {
+        await archiveFailedRun(error.sessionId)
+        throw new StartFailed(START_FAILED, error.sessionId)
+      }
       throw new Error(START_FAILED)
     }
+  }
+
+  /**
+   * Archives a scheduled run's empty conversation as the app's Archive does, through the
+   * preferences, so it leaves the sidebar but the history can still open it.
+   */
+  async function archiveFailedRun(sessionId: string) {
+    const archived = current().archivedSessionIds
+    if (archived.includes(sessionId)) return
+    await savePreferences({ archivedSessionIds: [...archived, sessionId] }).catch(
+      (error: unknown) =>
+        console.error(
+          `mMac could not archive scheduled conversation ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    )
   }
 
   async function startScheduledRun(schedule: Schedule) {
@@ -264,9 +294,9 @@ export function createBackend({
       worktree: schedule.worktree,
     })
     const sessionId = view.session.sessionId
-    await muse.setApprovalMode(sessionId, schedule.approvalMode)
-    scheduledTurns.set(sessionId, { updatedAt: view.session.updatedAt, since: schedulerNow() })
     try {
+      await muse.setApprovalMode(sessionId, schedule.approvalMode)
+      scheduledTurns.set(sessionId, { updatedAt: view.session.updatedAt, since: schedulerNow() })
       await muse.send(
         sessionId,
         [{ type: 'text', text: schedule.prompt }],
@@ -276,7 +306,7 @@ export function createBackend({
       )
     } catch (error) {
       scheduledTurns.delete(sessionId)
-      throw error
+      throw new CreatedThenFailed(sessionId, error)
     }
     return sessionId
   }

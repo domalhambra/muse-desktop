@@ -31,12 +31,25 @@ const HISTORY = 50
 const BUSY = 'Another scheduled task was running.'
 const WAITING = 'Waiting for your approval.'
 
+/** A start that failed after it made the conversation. The run's history entry keeps its id. */
+export class StartFailed extends Error {
+  constructor(
+    message: string,
+    readonly sessionId: string,
+  ) {
+    super(message)
+  }
+}
+
 export type SchedulerDeps = {
   file: string
   now?: () => number
   /** IANA time zone for the cron rules; the Mac's own when omitted. Tests pass 'UTC'. */
   tz?: string
-  /** Creates the conversation, sets its mode and sends the prompt. Returns the session id. */
+  /**
+   * Creates the conversation, sets its mode and sends the prompt. Returns the session id. A
+   * StartFailed rejection names the conversation it made.
+   */
   start: (schedule: Schedule) => Promise<string>
   /** True while the session's turn runs. */
   isRunning: (sessionId: string) => boolean
@@ -246,6 +259,7 @@ export class Scheduler {
         scheduledFor,
         outcome: 'failed',
         reason: error instanceof Error ? error.message : String(error),
+        ...(error instanceof StartFailed ? { sessionId: error.sessionId } : {}),
       })
     }
     await this.write()

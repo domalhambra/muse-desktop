@@ -1661,6 +1661,34 @@ describe('headless backend, scheduled tasks', () => {
     errors.mockRestore()
   })
 
+  it('archives the new conversation when its mode or prompt fails, and the history keeps its id', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let next = 0
+    const muse = fakeMuse({
+      create: vi.fn(async (root: string) =>
+        view(session({ sessionId: `run-${++next}`, workspaceRoot: root })),
+      ),
+    })
+    const { call, id, events } = await trustedTask(muse)
+    vi.mocked(muse.send).mockRejectedValueOnce(new Error('MSP -32000: queue closed'))
+    await call('schedule-run', id)
+    vi.mocked(muse.setApprovalMode).mockRejectedValueOnce(new Error('MSP -32602: bad mode'))
+    await call('schedule-run', id)
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason: string; sessionId?: string }[]
+    }[]
+    expect(entry.history.map((run) => [run.outcome, run.reason, run.sessionId])).toEqual([
+      ['failed', 'mMac could not start this scheduled task.', 'run-3'],
+      ['failed', 'mMac could not start this scheduled task.', 'run-2'],
+    ])
+    const saved = events.filter((event) => event.type === 'preferences').at(-1)
+    expect(saved?.type === 'preferences' && saved.preferences.archivedSessionIds).toEqual([
+      'run-2',
+      'run-3',
+    ])
+    errors.mockRestore()
+  })
+
   it('a run waiting for a tool approval lets another task run, and says so once', async () => {
     let waiting = true
     const running = session({ activeTurnId: 't1', status: 'running' })

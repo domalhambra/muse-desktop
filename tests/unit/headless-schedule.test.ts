@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { Scheduler, type ScheduleInput } from '../../src/headless/schedule'
+import { Scheduler, StartFailed, type ScheduleInput } from '../../src/headless/schedule'
 import type { AppEvent } from '../../src/shared/protocol'
 
 const input: ScheduleInput = {
@@ -112,6 +112,23 @@ describe('Scheduler', () => {
     expect(h.scheduler.list()[0].history[0]).toMatchObject({
       outcome: 'failed',
       reason: 'The folder is not trusted in mMac.',
+    })
+  })
+
+  it('a start that failed after making the conversation keeps its id in the history', async () => {
+    const h = harness(
+      vi.fn(async () => {
+        throw new StartFailed('mMac could not start this scheduled task.', 'session-9')
+      }),
+    )
+    await h.scheduler.load()
+    await h.scheduler.save(input)
+    h.at('2026-10-26T09:00:30Z')
+    await h.scheduler.tick()
+    expect(h.scheduler.list()[0].history[0]).toMatchObject({
+      outcome: 'failed',
+      reason: 'mMac could not start this scheduled task.',
+      sessionId: 'session-9',
     })
   })
 
