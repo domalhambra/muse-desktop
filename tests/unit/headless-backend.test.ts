@@ -1689,6 +1689,31 @@ describe('headless backend, scheduled tasks', () => {
     errors.mockRestore()
   })
 
+  it('a failed start’s archive keeps an app Archive that was queued but not yet written', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let next = 0
+    const muse = fakeMuse({
+      create: vi.fn(async (root: string) =>
+        view(session({ sessionId: `run-${++next}`, workspaceRoot: root })),
+      ),
+    })
+    const { call, id, events } = await trustedTask(muse)
+    let appArchive: Promise<unknown> = Promise.resolve()
+    vi.mocked(muse.send).mockImplementationOnce(async () => {
+      // The person archives another conversation while the send fails: its write is queued.
+      appArchive = Promise.resolve(call('preferences', { archivedSessionIds: ['app-1'] }))
+      throw new Error('MSP -32000: queue closed')
+    })
+    await call('schedule-run', id)
+    await appArchive
+    const saved = events.filter((event) => event.type === 'preferences').at(-1)
+    expect(saved?.type === 'preferences' && saved.preferences.archivedSessionIds).toEqual([
+      'app-1',
+      'run-2',
+    ])
+    errors.mockRestore()
+  })
+
   it('a run waiting for a tool approval lets another task run, and says so once', async () => {
     let waiting = true
     const running = session({ activeTurnId: 't1', status: 'running' })

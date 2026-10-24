@@ -154,8 +154,15 @@ export function createBackend({
     return preferences
   }
 
-  async function savePreferences(patch: Partial<Preferences>) {
+  /**
+   * Queues one write. A function patch is built from the preferences when the write runs, after
+   * every earlier queued write, so a read-modify-write cannot erase one of them.
+   */
+  async function savePreferences(
+    change: Partial<Preferences> | ((preferences: Preferences) => Partial<Preferences>),
+  ) {
     const write = preferenceWrites.then(async () => {
+      const patch = typeof change === 'function' ? change(current()) : change
       const snapshot = preferencesSchema.parse({ ...current(), ...patch })
       await writePreferences(preferencePath, snapshot)
       preferences = snapshot
@@ -263,13 +270,12 @@ export function createBackend({
    * preferences, so it leaves the sidebar but the history can still open it.
    */
   async function archiveFailedRun(sessionId: string) {
-    const archived = current().archivedSessionIds
-    if (archived.includes(sessionId)) return
-    await savePreferences({ archivedSessionIds: [...archived, sessionId] }).catch(
-      (error: unknown) =>
-        console.error(
-          `mMac could not archive scheduled conversation ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
-        ),
+    await savePreferences(({ archivedSessionIds: archived }) => ({
+      archivedSessionIds: archived.includes(sessionId) ? archived : [...archived, sessionId],
+    })).catch((error: unknown) =>
+      console.error(
+        `mMac could not archive scheduled conversation ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+      ),
     )
   }
 
