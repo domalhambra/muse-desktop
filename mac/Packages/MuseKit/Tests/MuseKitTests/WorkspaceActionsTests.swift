@@ -646,3 +646,22 @@ private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
   await workspace.openNeighbor(forward: false)
   #expect(workspace.view?.session.sessionId == "s1")
 }
+
+/// The M4b live run: a send in a conversation whose worktree was removed. The backend refuses it
+/// with a plain sentence (src/headless/plain-errors.ts); the composer keeps the draft and shows it.
+@MainActor @Test func aSendInARemovedWorktreeKeepsTheDraftAndSaysWhy() async throws {
+  let gone = "This conversation\u{2019}s worktree folder no longer exists."
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "open": [reply(id, viewJSON(sessionJSON("s1", root: "/p/.muse/worktrees/w1")))]
+    case "send": [failure(id, gone)]
+    default: [reply(id, "null")]
+    }
+  }
+  await workspace.open("s1")
+  workspace.draft = "still here"
+  #expect(await workspace.send() == .notSent)
+  #expect(workspace.draft == "still here")
+  #expect(workspace.errorMessage == gone)
+  #expect(!(workspace.view?.items.contains { $0.itemId.hasPrefix("optimistic-") } ?? true))
+}

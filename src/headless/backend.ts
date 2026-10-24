@@ -42,6 +42,7 @@ import { projectRoot, worktreeParent } from '../shared/worktree'
 import { Attachments } from './attachments'
 import { Bridges, type BridgeFactories } from './bridges'
 import { exportMarkdown, exportTitle } from './export'
+import { plainError } from './plain-errors'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
 import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
@@ -131,7 +132,12 @@ export function createBackend({
       if (name !== 'hello' && !greeted) throw new Error('Send hello first.')
       if (!['hello', 'start', 'shutdown'].includes(name) && !preferences)
         throw new Error('Send start first.')
-      return action(...args)
+      try {
+        return await action(...args)
+      } catch (error) {
+        // Raw fs text and Muse's rejection codes become plain sentences: ./plain-errors.ts.
+        throw plainError(error)
+      }
     })
   }
 
