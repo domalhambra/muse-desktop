@@ -1,6 +1,6 @@
 # mMac parity with Claude Code Desktop: design
 
-Status: approved. Designed with Dom on 2026-10-23, one section at a time; Dom chose the features, the cut of row 10 and the milestone shape, and approved each section. Amended the same day: Dom added usage and limits (features 11 to 13) to M5b and approved that design one section at a time. Later the same day, Dom approved change cards as the main view of feature 10.
+Status: approved. Designed with Dom on 2026-10-23, one section at a time; Dom chose the features, the cut of row 10 and the milestone shape, and approved each section. Amended the same day: Dom added usage and limits (features 11 to 13) to M5b and approved that design one section at a time. Later the same day, Dom approved change cards as the main view of feature 10. M5a was built on 2026-10-23 and M5b on 2026-10-24; M5b's UI test runs and live checks are pending.
 
 ## Goal
 
@@ -192,11 +192,11 @@ The gate is "Prove a change" in `docs/changing-things.md`, unchanged, plus the n
 
 Each milestone is one PR from its own branch into the fork's `extensions` branch, cut after `mac-m4a` merges. Dom merges.
 
-| Milestone               | Holds                                                                   | Done when                                                                                                                                                  |
-| ----------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M4b                     | The proof of M2 to M4a: the UI tests three times, the live isolated run | Already planned in `2026-10-22-mmac-m4a.md`. Comes first.                                                                                                  |
-| M5a: session controls   | Features 1 to 8                                                         | Built 2026-10-23 (`mac-m5a`). Both `swift test` runs, the host, backend and parity tests, and the echo and fake-backend UI tests pass three runs in a row. |
-| M5b: usage and services | Features 11 to 13, then 9 and 10                                        | The host and backend usage tests, the two Vitest suites, their MuseKit tests and the fake-backend UI steps pass, three runs in a row.                      |
+| Milestone               | Holds                                                                   | Done when                                                                                                                                                                                                                                             |
+| ----------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M4b                     | The proof of M2 to M4a: the UI tests three times, the live isolated run | Already planned in `2026-10-22-mmac-m4a.md`. Comes first.                                                                                                                                                                                             |
+| M5a: session controls   | Features 1 to 8                                                         | Built 2026-10-23 (`mac-m5a`). Both `swift test` runs, the host, backend and parity tests, and the echo and fake-backend UI tests pass three runs in a row.                                                                                            |
+| M5b: usage and services | Features 11 to 13, then 9 and 10                                        | Built 2026-10-24 (`mac-m5b`). The typecheck, Vitest (265), MuseBackend (67), MuseKit (436) and `xcodebuild build-for-testing` pass. The fake-backend UI test is written and builds; its three runs and the live checks wait for the end of the build. |
 
 Recommended order inside M5a, by value over cost: permission modes, session shell, the context card with the changes indicator and the Tasks pane, side chat, keyboard parity, the file context menu, the subagent list, the preview pane. Inside M5b: usage and limits first, then scheduled tasks, then the PR monitor.
 
