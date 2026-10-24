@@ -883,3 +883,58 @@ public struct BridgeStatus: Codable, Equatable, Sendable {
     self.activeJobs = activeJobs
   }
 }
+
+// MARK: Pull requests
+
+/// One check on a pull request, normalized by the backend.
+public struct PullRequestCheck: Codable, Equatable, Sendable {
+  public let name: String
+  /// `passing`, `failing`, `pending` or `skipped`.
+  public let state: String
+  public init(name: String, state: String) {
+    self.name = name
+    self.state = state
+  }
+}
+
+/// A pull request as the PR monitor and the change cards use it (src/shared/protocol.ts).
+public struct PullRequest: Codable, Equatable, Sendable, Identifiable {
+  public let number: Int
+  public let title: String
+  public let url: String
+  /// `OPEN`, `CLOSED` or `MERGED`.
+  public let state: String
+  public let isDraft: Bool
+  public let reviewDecision: String?
+  public let mergeState: String
+  public let baseRefName: String
+  public let headRefName: String
+  public let mergedAt: String?
+  public let checks: [PullRequestCheck]
+  public let body: String
+  public let files: [String]
+  public let live: Bool
+  public var id: Int { number }
+
+  public init(
+    number: Int, title: String, url: String = "", state: String = "OPEN", isDraft: Bool = false,
+    reviewDecision: String? = nil, mergeState: String = "CLEAN", baseRefName: String = "main",
+    headRefName: String = "feature", mergedAt: String? = nil, checks: [PullRequestCheck] = [], body: String = "",
+    files: [String] = [], live: Bool = false
+  ) {
+    self.number = number
+    self.title = title
+    self.url = url
+    self.state = state
+    self.isDraft = isDraft
+    self.reviewDecision = reviewDecision
+    self.mergeState = mergeState
+    self.baseRefName = baseRefName
+    self.headRefName = headRefName
+    self.mergedAt = mergedAt
+    self.checks = checks
+    self.body = body
+    self.files = files
+    self.live = live
+  }
+}

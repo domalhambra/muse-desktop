@@ -257,6 +257,28 @@ extension BackendClient {
     _ = try await request("cancel-voice")
   }
 
+  // The PR monitor and the change cards.
+
+  /// The conversation folder's PR, or nil when its branch has none.
+  public func pullRequest(sessionId: String) async throws -> PullRequest? {
+    try await call("pr-status", [.string(sessionId)])
+  }
+
+  /// The project's open and recently merged PRs.
+  public func pullRequests(project: String) async throws -> [PullRequest] {
+    try await call("pr-list", [.string(project)])
+  }
+
+  /// True when Dom accepted the backend's Ask and gh merged it.
+  public func mergePullRequest(project: String, number: Int) async throws -> Bool {
+    try await call("pr-merge", [.string(project), .number(Double(number))])
+  }
+
+  /// True when Dom accepted the backend's Ask and gh set the PR to merge once its checks pass.
+  public func mergeWhenReady(sessionId: String, number: Int) async throws -> Bool {
+    try await call("pr-merge-when-ready", [.string(sessionId), .number(Double(number))])
+  }
+
   /// Asks the backend to quit, then waits for it to exit.
   /// Returns false when the person chose to keep Muse working.
   public func shutdown(timeout: Duration = .seconds(5)) async throws -> Bool {

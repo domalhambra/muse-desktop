@@ -42,6 +42,7 @@ import { projectRoot, worktreeParent } from '../shared/worktree'
 import { Attachments } from './attachments'
 import { Bridges, type BridgeFactories } from './bridges'
 import { exportMarkdown, exportTitle } from './export'
+import { prList, prMerge, prMergeWhenReady, prStatus } from './pull-request'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
 import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
@@ -99,6 +100,10 @@ export type BackendDeps = {
   bridgeFactories?: BridgeFactories
   /** Runs `muse voice transcribe`. Tests pass a fake; the default is src/main/voice.ts's. */
   voice?: { transcribe(data: Buffer, cliPath: string): Promise<string>; cancel(): Promise<void> }
+  /** The environment gh runs in. Tests point PATH at a fake gh; the default is the backend's. */
+  ghEnv?: NodeJS.ProcessEnv
+  /** Folders added to gh's PATH. Tests pass [] so the real gh is never found; the default is Homebrew's. */
+  ghFolders?: string[]
 }
 
 export function createBackend({
@@ -112,6 +117,8 @@ export function createBackend({
   agent,
   bridgeFactories,
   voice = new VoiceTranscriber(),
+  ghEnv,
+  ghFolders,
 }: BackendDeps) {
   const id = z.string().min(1).max(200)
   const pathSchema = z.string().min(1).max(4096)
@@ -526,6 +533,49 @@ export function createBackend({
   method('cli-terminal', async (project) =>
     openTerminal(terminalCommand(await knownProject(project), muse.status.path || 'muse', [])),
   )
+
+  // The PR monitor and the change cards, through gh. Reads need no trust Ask; merges ask first.
+  const gh = { env: ghEnv, folders: ghFolders }
+  const prNumber = z.number().int().positive()
+
+  async function conversationFolder(sessionId: string) {
+    const root = muse.getSession(sessionId).workspaceRoot
+    if (!root) throw new Error('This conversation has no project folder.')
+    return knownProject(root)
+  }
+
+  method('pr-status', async (session) => prStatus(await conversationFolder(id.parse(session)), gh))
+
+  method('pr-list', async (project) => prList(await knownProject(project), gh))
+
+  method('pr-merge', async (project, value) => {
+    const folder = await knownProject(project)
+    const number = prNumber.parse(value)
+    const choice = await ask({
+      kind: 'confirm',
+      title: `Accept pull request ${number}?`,
+      message:
+        'mMac merges it into its base branch with gh, as one squashed commit. GitHub keeps the branch.',
+      buttons: ['Accept', 'Cancel'],
+    })
+    if (choice !== 0) return false
+    await prMerge(folder, number, gh)
+    return true
+  })
+
+  method('pr-merge-when-ready', async (session, value) => {
+    const folder = await conversationFolder(id.parse(session))
+    const number = prNumber.parse(value)
+    const choice = await ask({
+      kind: 'confirm',
+      title: `Merge pull request ${number} when its checks pass?`,
+      message: 'GitHub merges it as one squashed commit once every required check passes.',
+      buttons: ['Merge when ready', 'Cancel'],
+    })
+    if (choice !== 0) return false
+    await prMergeWhenReady(folder, number, gh)
+    return true
+  })
 
   // MCP servers, as src/main/index.ts registers them: direct edits of Muse's settings.json.
   const mcpFile = () => settingsFile(muse.configDir())

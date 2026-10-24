@@ -1,7 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   GH_UNREADABLE,
   ghEnvironment,
@@ -10,72 +7,10 @@ import {
   prMergeWhenReady,
   prStatus,
 } from '../../src/headless/pull-request'
-
-let dir = ''
-let log = ''
-const folders: string[] = []
-/**
- * A fake gh on PATH: it logs its arguments, and prints the output whose key is a prefix of its
- * joined arguments. With `failure` it prints that to stderr and exits 1. With no matching key it
- * fails as gh does for a branch without a PR.
- */
-async function fakeGh(outputs: Record<string, unknown>, failure?: string) {
-  dir = await mkdtemp(join(tmpdir(), 'mmac-gh-'))
-  folders.push(dir)
-  log = join(dir, 'calls.log')
-  const script = `#!/usr/bin/env node
-const { appendFileSync } = require('node:fs')
-const args = process.argv.slice(2)
-appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n')
-const failure = ${JSON.stringify(failure ?? null)}
-if (failure) { process.stderr.write(failure); process.exit(1) }
-const outputs = ${JSON.stringify(outputs)}
-const key = Object.keys(outputs).find((prefix) => args.join(' ').startsWith(prefix))
-if (key === undefined) { process.stderr.write('no pull requests found for branch'); process.exit(1) }
-process.stdout.write(typeof outputs[key] === 'string' ? outputs[key] : JSON.stringify(outputs[key]))
-`
-  await writeFile(join(dir, 'gh'), script)
-  await chmod(join(dir, 'gh'), 0o755)
-  return { ...process.env, PATH: `${dir}:${process.env.PATH}` }
-}
-const calls = async () =>
-  (await readFile(log, 'utf8'))
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as string[])
-
-const raw = {
-  number: 9,
-  title: 'mMac now shows your usage limits',
-  url: 'https://github.com/o/r/pull/9',
-  state: 'OPEN',
-  isDraft: false,
-  reviewDecision: null,
-  mergeStateStatus: 'CLEAN',
-  baseRefName: 'main',
-  headRefName: 'usage',
-  mergedAt: null,
-  mergeCommit: null,
-  body: '## Summary\nShows limits.',
-  files: [{ path: 'docs/a.md' }],
-  statusCheckRollup: [
-    { __typename: 'CheckRun', name: 'check', status: 'COMPLETED', conclusion: 'SUCCESS' },
-    { __typename: 'CheckRun', name: 'lint', status: 'IN_PROGRESS', conclusion: '' },
-    { __typename: 'CheckRun', name: 'e2e', status: 'COMPLETED', conclusion: 'FAILURE' },
-    { __typename: 'CheckRun', name: 'docs', status: 'COMPLETED', conclusion: 'SKIPPED' },
-    { __typename: 'StatusContext', context: 'netlify', state: 'PENDING' },
-  ],
-}
+import { calls, fakeGh, raw, removeFakeGh } from './fake-gh'
 
 describe('pull requests through gh', () => {
-  beforeEach(() => {
-    dir = ''
-  })
-  afterEach(async () => {
-    await Promise.all(
-      folders.splice(0).map((folder) => rm(folder, { recursive: true, force: true })),
-    )
-  })
+  afterEach(removeFakeGh)
 
   it('reads the folder’s PR and normalizes its checks', async () => {
     const env = await fakeGh({ 'pr view': raw })
