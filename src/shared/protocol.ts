@@ -31,6 +31,14 @@ export const itemSchema = z.object({
   finalSummary: z.string().optional(),
   outputRef: z.object({ id: z.string(), byteLen: z.number().optional() }).passthrough().optional(),
   patchSummary: z.object({ added: z.number(), removed: z.number(), files: z.number() }).optional(),
+  /** `userShell`: the process exit code, when it exited by code. */
+  exitCode: z.number().optional(),
+  /** `sideChat`: the side session this row stands for. */
+  sideSessionId: z.string().optional(),
+  /** `subagent`: `accepted`, `starting`, `running`, `resultReady`, `closing`, `closed` or more. */
+  controlStatus: z.string().optional(),
+  /** `subagent`: the child's observed usage, updated in place. */
+  usage: z.object({ inputTokens: z.number(), outputTokens: z.number() }).passthrough().optional(),
   result: z
     .object({ text: z.string().optional(), summary: z.string().optional() })
     .passthrough()
@@ -54,6 +62,7 @@ export const sessionSchema = z.object({
   turnCount: z.number(),
   kind: z.string().optional(),
   approvalMode: z.object({ mode: z.string() }).passthrough().optional(),
+  worktree: z.object({ path: z.string(), origin: z.string() }).optional(),
 })
 export type MuseSession = z.infer<typeof sessionSchema>
 
@@ -127,6 +136,15 @@ export const effortSchema = z.enum([
 ])
 export type ReasoningEffort = z.infer<typeof effortSchema>
 
+/** Muse's approval modes. Closed: a client selects one, it never defines one (msp.d.ts, `ApprovalMode`). */
+export const approvalModeSchema = z.enum([
+  'allowAll',
+  'promptUnmatched',
+  'onRequest',
+  'denyUnmatched',
+])
+export type ApprovalMode = z.infer<typeof approvalModeSchema>
+
 const preferenceFields = {
   theme: z.enum(['muse', 'daylight', 'moonlight', 'grove', 'plush', 'system']),
   backgroundIntensity: z.number().min(0).max(100),
@@ -139,6 +157,9 @@ const preferenceFields = {
   fontSize: z.enum(['compact', 'comfortable', 'large']),
   reduceMotion: z.boolean(),
   notifyOnCompletion: z.boolean(),
+  bridgeFilesEnabled: z.boolean(),
+  bridgeMcpEnabled: z.boolean(),
+  bridgeMcpPort: z.number().int().min(1024).max(65535),
 }
 
 export const preferencesSchema = z.object({
@@ -153,6 +174,9 @@ export const preferencesSchema = z.object({
   fontSize: preferenceFields.fontSize.default('comfortable'),
   reduceMotion: preferenceFields.reduceMotion.default(false),
   notifyOnCompletion: preferenceFields.notifyOnCompletion.default(false),
+  bridgeFilesEnabled: preferenceFields.bridgeFilesEnabled.default(false),
+  bridgeMcpEnabled: preferenceFields.bridgeMcpEnabled.default(false),
+  bridgeMcpPort: preferenceFields.bridgeMcpPort.default(7735),
 })
 // Updates must never apply defaults to omitted fields or grant project trust.
 export const preferencesPatchSchema = z
@@ -163,12 +187,24 @@ export const preferencesPatchSchema = z
 export type Preferences = z.infer<typeof preferencesSchema>
 export type Theme = Exclude<Preferences['theme'], 'system'>
 
+/** `session/contextUsage`: counted-once occupancy and the host's pressure level. `window` is absent when the model has no limit. */
+export type ContextUsage = { used: number; window?: number; pressure: string }
+/** One todo of the agent's list, as `session/todoListChanged` carries it. */
+export const todoItemSchema = z.object({
+  text: z.string(),
+  status: z.string(),
+  activeForm: z.string().optional(),
+})
+export type TodoItem = z.infer<typeof todoItemSchema>
+
 export type SessionView = {
   session: MuseSession
   items: TranscriptItem[]
   approvals: Approval[]
   questions: UserQuestion[]
   usage?: { input: number; output: number; total: number }
+  context?: ContextUsage
+  todos?: TodoItem[]
   error?: string
   historyNotice?: string
 }
@@ -178,6 +214,41 @@ export type ConnectionStatus = {
   version?: string
   message?: string
   fingerprintWarning?: string
+  /** The CLI granted experimental MSP methods (worktrees, MCP listing). */
+  experimental?: boolean
+}
+export const worktreeEntrySchema = z.object({
+  path: z.string(),
+  branch: z.string().optional(),
+  isMain: z.boolean(),
+  sessionIds: z.array(z.string()),
+})
+export type WorktreeEntry = z.infer<typeof worktreeEntrySchema>
+/** An MCP server from Muse's settings.json. Secret values never leave the main process. */
+export type McpServerView = {
+  name: string
+  transport: 'stdio' | 'http'
+  enabled: boolean
+  command?: string
+  args?: string[]
+  url?: string
+  envNames?: string[]
+  headerNames?: string[]
+}
+export type McpServerInput =
+  | {
+      name: string
+      transport: 'stdio'
+      command: string
+      args: string[]
+      env: Record<string, string>
+    }
+  | { name: string; transport: 'http'; url: string; headers: Record<string, string> }
+export type BridgeStatus = {
+  folder: string
+  files: { enabled: boolean; running: boolean; error?: string }
+  mcp: { enabled: boolean; running: boolean; url: string; hasToken: boolean; error?: string }
+  activeJobs: number
 }
 export type UpdateStatus = {
   available: boolean
@@ -221,7 +292,26 @@ export interface DesktopAPI {
   chooseProject(): Promise<string | null>
   savePreferences(patch: Partial<Preferences>): Promise<Preferences>
   listSessions(cursor?: string): Promise<{ sessions: MuseSession[]; nextCursor: string | null }>
-  createSession(project: string, modelId?: string): Promise<SessionView>
+  createSession(
+    project: string,
+    modelId?: string,
+    options?: { worktree?: boolean },
+  ): Promise<SessionView>
+  listWorktrees(project: string): Promise<WorktreeEntry[]>
+  mergeWorktree(project: string, path: string): Promise<{ ok: boolean; output: string }>
+  removeWorktree(project: string, path: string): Promise<void>
+  mcpList(): Promise<{ file: string; servers: McpServerView[] }>
+  mcpAdd(server: McpServerInput): Promise<void>
+  mcpSetEnabled(name: string, enabled: boolean): Promise<void>
+  mcpRemove(name: string): Promise<void>
+  /** Runs Muse's own `muse mcp login|logout <name>` in Terminal. */
+  mcpLogin(name: string, logout?: boolean): Promise<void>
+  mcpRevealSettings(): Promise<void>
+  bridgeStatus(): Promise<BridgeStatus>
+  bridgeRevealFolder(): Promise<void>
+  /** Makes a new MCP bridge token, returns it once and invalidates the old one. */
+  bridgeRegenerateToken(): Promise<string>
+  bridgeCopyToken(): Promise<void>
   openSession(sessionId: string): Promise<SessionView>
   send(input: {
     sessionId: string
@@ -245,6 +335,10 @@ export interface DesktopAPI {
   cancelVoice(): Promise<void>
   gitStatus(project: string): Promise<GitStatus>
   gitDiff(project: string, path: string): Promise<string>
+  gitRawDiff(project: string, path: string): Promise<string>
+  gitRevertFile(project: string, path: string): Promise<void>
+  gitRevertHunk(project: string, path: string, index: number): Promise<void>
+  gitStageFile(project: string, path: string): Promise<void>
   listFiles(project: string, directory: string): Promise<ProjectFile[]>
   readFile(project: string, path: string): Promise<string>
   revealProject(project: string): Promise<void>

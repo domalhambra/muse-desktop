@@ -1,29 +1,26 @@
 # Design system
 
-Muse Desktop uses a persistent sidebar, one primary conversation pane, and an optional project inspector. Traffic lights sit in a draggable titlebar (using native inset traffic lights on macOS and matching custom traffic-light window controls on frameless Windows and Linux windows). Messages and the titlebar sit directly on the background without shadow panels or a header divider. The composer stays visible while conversation content scrolls; the view follows incoming messages only while the reader is near the bottom.
+mMac keeps the layout of upstream's Electron app in native SwiftUI: a sidebar, one conversation pane, and an optional inspector on the right. The window has the standard macOS title bar and toolbar. The composer stays visible while the transcript scrolls, and the transcript follows new messages only while the reader is near the bottom.
 
 ## Themes
 
-- **Muse:** the supplied electric-blue layout direction, translucent surfaces, a large exact Muse M watermark, and the waving mascot in the sidebar. The empty canvas leaves room for the brand and a focused composer.
-- **Daylight:** warm ivory, stone, soft natural light, and the mascot in a quiet studio.
-- **Moonlight:** navy and slate with restrained moonlit artwork.
-- **Grove:** sage, limestone, and a miniature garden.
-- **Plush:** a close-up of the cream mascot against cobalt blue, with reduced artwork presence while reading.
+Two themes, both dark:
 
-All five themes share the same interaction structure; Daylight, Moonlight, and Grove also show welcome prompts. Semantic CSS variables in `tokens.css` control color, contrast, reading size, and surfaces. Background intensity, system appearance, and reduced motion are user settings. The M is the supplied PNG, never a text glyph or a traced approximation. All artwork is local.
+- **Muse**, the default: electric blue with the Muse glow.
+- **Moonlight**: navy and slate.
+
+Their colors come from upstream's tokens.css, and live in `ThemePalette` in `mac/Packages/MuseKit/Sources/MuseKit/SettingsRules.swift`. `mac/mMac/Theme.swift` turns them into SwiftUI colors and applies the theme, the text size and Reduce motion at the root of each window. Change a color only there. Upstream's Daylight, Grove and Plush themes and its light mode are dropped (see the decisions in the main spec).
 
 ## Typography
 
-Functional text uses a cross-platform system font stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', 'Inter', 'Ubuntu', 'Cantarell', system-ui, sans-serif`) throughout. Shared tokens define 12 px captions and keyboard hints, 13 px supporting text, 14 px controls, and 15 px default conversation text. Section and page headings use a consistent weight hierarchy; code uses SF Mono, Cascadia Mono, JetBrains Mono, Menlo, or Consolas at readable sizes. Compact conversation text is 14 px; Large is 17 px. Layouts adapt through wrapping and spacing instead of shrinking small labels. Supporting text has stronger contrast in every theme. The welcome wordmark alone retains its expressive serif treatment.
+Functional text uses the system font. Conversation text has three sizes (`TextSize`): Compact is 14 points, Comfortable is 15 points and the default, and Large is 17 points. Code uses the system monospaced font. Layouts adapt through wrapping and spacing instead of shrinking small labels.
 
 ## Copy conventions
 
-Use sentence case and concise action labels. **Project** means a local folder; **conversation** means a Muse session. **Muse Code** names the installed CLI and its settings. **Settings** is used consistently across the sidebar, native menu, command menu, and dialog.
-
-Suggested prompts describe concrete tasks: Plan a feature, Explore the project, Review the code. Keyboard hints are `↵ Send` and `⇧ ↵ New line`. Status text reports facts such as Connected to Muse Code. Only the welcome headline and mascot greeting carry expressive copy. Avoid duplicate slogans around functional controls.
+Use sentence case and concise action labels. **Project** means a local folder; **conversation** means a Muse session. **Muse Code** names the installed CLI and its settings. **Settings** is used the same way in the sidebar, the menu bar, the command menu and the Settings window. Keyboard hints are `↵ Send` and `⇧ ↵ New line`. Status text reports facts, such as Connected to Muse Code. Electron's strings are the default: `docs/decisions.md` records each place mMac differs.
 
 ## Accessibility
 
-All icon buttons have accessible names and tooltips. Dialogs use native HTML modal behavior and restore focus. Dropdowns use theme-matched popovers with arrow keys, Home/End, type-ahead, Escape, outside-click dismissal, and a visible selected state. Controls support keyboard navigation; the command menu supports arrow keys and Return. The composer handles Shift–Return and IME composition. Text size and motion settings complement macOS preferences. Statuses include text, not color alone. Remote Markdown remains inert HTML-free content with explicit external-link handling.
+Icon buttons have accessibility labels and help tags. Alerts, sheets and panels are native. The command menu, the slash and mention popups and the sidebar work from the keyboard. The composer handles Shift–Return and input methods. Text size and Reduce motion work with macOS's own settings. Statuses include text, not color alone. Images in replies never load, so remote content cannot appear in the transcript. A subagent sheet is read-only.
 
-Artwork prompts and reference provenance are recorded in `image-prompts.json`, `plush-image-prompt.json`, and `../NOTICE.md`.
+The composer's Mode picker names Muse's four modes as Muse words them: Allow all, Prompt unmatched, On request, Deny unmatched. A mode Muse names that the picker does not know shows as Muse's own name for it. The side chat and child sheets' fields are native: no custom rounded-rectangle drawing, as in Dom's design standards.

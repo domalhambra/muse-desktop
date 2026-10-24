@@ -1,0 +1,443 @@
+import Foundation
+import Testing
+import MuseBackendTesting
+@testable import MuseBackend
+
+private let viewJSON = #"""
+  {"session":{"sessionId":"s1","workspaceRoot":"/p","status":"idle","updatedAt":"2026-10-21T00:00:00Z","createdAt":"2026-10-21T00:00:00Z","activeTurnId":null,"modelId":null,"turnCount":1},"items":[{"itemId":"i1","kind":"agentMessage","revision":1,"status":"completed","text":"Hello"}],"approvals":[],"questions":[]}
+  """#
+
+@Test func helloSendsTheProtocolNumber() async throws {
+  let backend = ScriptedBackend { message in
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let hello = try await client.hello()
+  #expect(hello.protocolVersion == 2)
+  #expect(hello.version == "0.2.0")
+  #expect(backend.messages == [["id": 1, "method": "hello", "args": [2]]])
+}
+
+@Test func aFailedReplyThrowsTheBackendMessage() async throws {
+  let backend = ScriptedBackend { _ in [#"{"id":1,"ok":false,"error":"Send start first."}"#] }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  await #expect(throws: BackendError.backend("Send start first.")) {
+    _ = try await client.sessions()
+  }
+}
+
+@Test(.timeLimit(.minutes(1))) func eventsArriveTypedAndInOrder() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  backend.push(#"{"event":{"type":"connection","status":{"state":"ready","version":"1.4.11"}}}"#)
+  backend.push(#"{"event":{"type":"session","view":\#(viewJSON)}}"#)
+  backend.push(#"{"event":{"type":"sessions-changed"}}"#)
+  backend.push(#"{"event":{"type":"menu","action":"new"}}"#)
+  backend.push(#"{"event":{"type":"error","message":"Could not read a Muse update."}}"#)
+  var received: [AppEvent] = []
+  for await event in client.events {
+    received.append(event)
+    if received.count == 5 { break }
+  }
+  #expect(received[0] == .connection(ConnectionStatus(state: "ready", path: nil, version: "1.4.11", message: nil)))
+  guard case .session(let view) = received[1] else { Issue.record("Expected a session event"); return }
+  #expect(view.items.first?.text == "Hello")
+  #expect(received[2] == .sessionsChanged)
+  #expect(received[3] == .other("menu"))
+  #expect(received[4] == .error("Could not read a Muse update."))
+}
+
+@Test(.timeLimit(.minutes(1))) func anAskIsAnsweredWhileItsRequestWaits() async throws {
+  // create is this client's first request, so its id is 1.
+  let backend = ScriptedBackend { message in
+    if message["method"] == "create" {
+      return [#"{"ask":3,"kind":"confirm","title":"Trust this project?","message":"Work with Muse in “p”?","buttons":["Trust project","Cancel"]}"#]
+    }
+    if message["answer"] == 3 { return [#"{"id":1,"ok":true,"value":\#(viewJSON)}"#] }
+    return []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { ask in
+    ask.buttons.firstIndex(of: "Trust project") ?? -1
+  })
+  await client.run()
+  let view = try await client.create(project: "/p")
+  #expect(view.session.sessionId == "s1")
+  #expect(backend.messages.contains { $0["answer"] == 3 && $0["choice"] == 0 })
+}
+
+@Test(.timeLimit(.minutes(1))) func waitingRequestsFailWhenTheBackendStops() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let reply = Task { try await client.sessions() }
+  try await waitFor { backend.messages.count == 1 }  // The request is really pending.
+  backend.close()
+  await #expect(throws: BackendError.stopped) { _ = try await reply.value }
+  for await _ in client.events {}  // The stream finishes instead of hanging.
+}
+
+@Test(.timeLimit(.minutes(1))) func shutdownForceStopsABackendThatDoesNotExit() async throws {
+  let backend = ScriptedBackend { message in
+    message["method"] == "shutdown" ? [#"{"id":1,"ok":true,"value":true}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  #expect(try await client.shutdown(timeout: .milliseconds(200)))
+  #expect(backend.forceStopped)
+}
+
+@Test(.timeLimit(.minutes(1))) func shutdownReturnsFalseWhenThePersonKeepsWorking() async throws {
+  let backend = ScriptedBackend { message in
+    message["method"] == "shutdown" ? [#"{"id":1,"ok":true,"value":false}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  #expect(try await client.shutdown(timeout: .milliseconds(200)) == false)
+  #expect(!backend.forceStopped)
+}
+
+@Test(.timeLimit(.minutes(1))) func shutdownDoesNotForceStopABackendThatExits() async throws {
+  let backend = ScriptedBackend { message in
+    message["method"] == "shutdown" ? [#"{"id":1,"ok":true,"value":true}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let quitting = Task { try await client.shutdown(timeout: .seconds(10)) }
+  try await waitFor { backend.messages.count == 1 }
+  backend.close()
+  #expect(try await quitting.value)
+  #expect(!backend.forceStopped)
+}
+
+@Test(.timeLimit(.minutes(1))) func aChoiceThatNamesNoButtonCancels() async throws {
+  let backend = ScriptedBackend { message in
+    if message["method"] == "create" {
+      return [#"{"ask":3,"kind":"confirm","title":"Trust this project?","message":"Work with Muse in “p”?","buttons":["Trust project","Cancel"]}"#]
+    }
+    if message["answer"] == 3 { return [#"{"id":1,"ok":true,"value":\#(viewJSON)}"#] }
+    return []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in 7 })
+  await client.run()
+  _ = try await client.create(project: "/p")
+  #expect(backend.messages.contains { $0 == ["answer": 3, "choice": -1] })
+}
+
+@Test(.timeLimit(.minutes(1))) func anUnreadableAskIsCancelled() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in 0 })
+  await client.run()
+  backend.push(#"{"ask":4,"kind":"confirm","title":"No buttons"}"#)
+  var events = client.events.makeAsyncIterator()
+  #expect(await events.next() == .error(BackendError.unreadable("An Ask could not be decoded.").localizedDescription))
+  #expect(backend.messages == [["answer": 4, "choice": -1]])
+}
+
+@Test(.timeLimit(.minutes(1))) func badLinesBecomeErrorEvents() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  backend.push(#"{"id":1e300,"ok":true,"value":null}"#)
+  backend.push("not JSON")
+  var events = client.events.makeAsyncIterator()
+  #expect(await events.next() == .error(BackendError.unreadable("A reply had an id that is not a whole number.").localizedDescription))
+  #expect(await events.next() == .error(BackendError.unreadable("A line could not be decoded.").localizedDescription))
+}
+
+@Test func aReplyOfTheWrongShapeIsUnreadable() async throws {
+  let backend = ScriptedBackend { _ in [#"{"id":1,"ok":true,"value":"not a hello"}"#] }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  await #expect(throws: BackendError.unreadable("The hello reply did not match what mMac expects.")) {
+    _ = try await client.hello()
+  }
+}
+
+@Test(.timeLimit(.minutes(1))) func settingsCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "start":
+      return [#"{"id":\#(id),"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#]
+    case "mcp-list":
+      return [#"{"id":\#(id),"ok":true,"value":{"file":"/c/settings.json","servers":[]}}"#]
+    case "bridge-status":
+      return [#"{"id":\#(id),"ok":true,"value":{"folder":"/b","files":{"enabled":false,"running":false},"mcp":{"enabled":false,"running":false,"url":"http://127.0.0.1:7735/mcp","hasToken":false},"activeJobs":0}}"#]
+    case "bridge-token":
+      return [#"{"id":\#(id),"ok":true,"value":"new-token"}"#]
+    default:
+      return [#"{"id":\#(id),"ok":true,"value":null}"#]
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let folder = URL(fileURLWithPath: "/d")
+  #expect(try await client.start(dataFolder: folder).preferences.bridgeMcpPort == 7735)
+  _ = try await client.start(dataFolder: folder, bridgeToken: "")
+  _ = try await client.start(dataFolder: folder, bridgeToken: "secret")
+  #expect(try await client.mcpList().file == "/c/settings.json")
+  try await client.mcpAdd(.stdio(name: "a", command: "node", args: ["x"], env: [:]))
+  try await client.mcpAdd(.http(name: "b", url: "https://e.com/mcp", headers: ["H": "v"]))
+  try await client.mcpSetEnabled("a", false)
+  try await client.mcpRemove("a")
+  try await client.mcpLogin("b")
+  try await client.mcpLogin("b", logout: true)
+  #expect(try await client.bridgeStatus().folder == "/b")
+  #expect(try await client.bridgeNewToken() == "new-token")
+  try await client.revertHunk(project: "/p", path: "a.txt", index: 1, expected: "@@ -1 +1 @@\n-a\n+b\n")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [
+    ["start", [["dataFolder": "/d"]]],
+    ["start", [["dataFolder": "/d"]]],
+    ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]],
+    ["mcp-list", []],
+    ["mcp-add", [["name": "a", "transport": "stdio", "command": "node", "args": ["x"], "env": [:]]]],
+    ["mcp-add", [["name": "b", "transport": "http", "url": "https://e.com/mcp", "headers": ["H": "v"]]]],
+    ["mcp-enabled", ["a", false]],
+    ["mcp-remove", ["a"]],
+    ["mcp-login", ["b", false]],
+    ["mcp-login", ["b", true]],
+    ["bridge-status", []],
+    ["bridge-token", []],
+    ["git-revert-hunk", ["/p", "a.txt", 1, "@@ -1 +1 @@\n-a\n+b\n"]],
+  ])
+}
+
+@Test(.timeLimit(.minutes(1))) func conversationCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "compact": return [#"{"id":\#(id),"ok":true,"value":{"status":"noop"}}"#]
+    case "export": return [#"{"id":\#(id),"ok":true,"value":"/t/Chat.md"}"#]
+    default: return [#"{"id":\#(id),"ok":true,"value":null}"#]
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  #expect(try await client.compact("s1") == CompactResult(status: "noop"))
+  let file = URL(fileURLWithPath: "/t/Chat.md")
+  #expect(try await client.export(sessionId: "s1", to: file, fallbackTitle: "First prompt") == "/t/Chat.md")
+  _ = try await client.export(sessionId: "s1", to: file, fallbackTitle: nil)
+  try await client.openTerminal(project: "/p")
+  try await client.openCLITerminal(project: "/p")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [
+    ["compact", ["s1"]],
+    ["export", ["s1", "/t/Chat.md", "First prompt"]],
+    ["export", ["s1", "/t/Chat.md"]],
+    ["terminal", ["/p"]],
+    ["cli-terminal", ["/p"]],
+  ])
+}
+
+@Test(.timeLimit(.minutes(1))) func attachmentCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "attachments":
+      return [#"{"id":\#(id),"ok":true,"value":[{"id":"a1","name":"shot.png","kind":"image","size":2048}]}"#]
+    default:
+      return [#"{"id":\#(id),"ok":true,"value":null}"#]
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let chosen = try await client.attachments([
+    URL(fileURLWithPath: "/p/shot.png"), URL(fileURLWithPath: "/p/notes.md"),
+  ])
+  #expect(chosen == [Attachment(id: "a1", name: "shot.png", kind: "image", size: 2048)])
+  try await client.removeAttachment("a1")
+  try await client.send(sessionId: "s1", text: "", effort: "low", mode: .steer, attachments: ["a1", "a2"])
+  try await client.send(sessionId: "s1", text: "hi")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [
+    ["attachments", [["/p/shot.png", "/p/notes.md"]]],
+    ["remove-attachment", ["a1"]],
+    ["send", [["sessionId": "s1", "text": "", "attachments": ["a1", "a2"], "effort": "low", "mode": "steer"]]],
+    ["send", [["sessionId": "s1", "text": "hi", "attachments": [], "effort": "high", "mode": "queue"]]],
+  ])
+}
+
+@Test(.timeLimit(.minutes(1))) func voiceCallsSendTheBackendsMethodsAndArguments() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    return message["method"] == "voice"
+      ? [#"{"id":\#(id),"ok":true,"value":"A voice draft to review."}"#]
+      : [#"{"id":\#(id),"ok":true,"value":null}"#]
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  #expect(try await client.voice(URL(fileURLWithPath: "/t/mmac-voice/clip.wav")) == "A voice draft to review.")
+  try await client.cancelVoice()
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [["voice", ["/t/mmac-voice/clip.wav"]], ["cancel-voice", []]])
+}
+
+/// Polls `condition` until it holds. The test's time limit ends a wait that never does.
+private func waitFor(_ condition: () -> Bool) async throws {
+  while !condition() { try await Task.sleep(for: .milliseconds(5)) }
+}
+
+@Test func lineSplitterJoinsALineSplitAcrossReads() {
+  var splitter = LineSplitter()
+  #expect(splitter.append(Data(#"{"a":1}"#.utf8) + Data([0x0A]) + Data(#"{"b""#.utf8)) == [Data(#"{"a":1}"#.utf8)])
+  #expect(splitter.append(Data(#":2}"#.utf8) + Data([0x0A])) == [Data(#"{"b":2}"#.utf8)])
+}
+
+@Test(.timeLimit(.minutes(1))) func aCancelledRequestStopsWaitingAndIgnoresItsLateReply() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let waiting = Task { try await client.sessions() }
+  while backend.messages.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+  waiting.cancel()
+  // The Reply to the cancelled request arrives a second later and must be ignored. If
+  // cancelling stopped nothing, this Reply ends the wait, and the expectation fails, not hangs.
+  let late = Task.detached {
+    try await Task.sleep(for: .seconds(1))
+    backend.push(#"{"id":1,"ok":true,"value":{"sessions":[],"nextCursor":null}}"#)
+  }
+  await #expect(throws: CancellationError.self) { _ = try await waiting.value }
+  try await late.value
+  let next = Task { try await client.sessions() }
+  while backend.messages.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+  backend.push(#"{"id":2,"ok":true,"value":{"sessions":[],"nextCursor":null}}"#)
+  #expect(try await next.value.sessions.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func forceStopStopsTheTransportAndFailsWaitingRequests() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let waiting = Task { try await client.request("sessions") }
+  try await waitFor { backend.messages.contains { $0["method"] == "sessions" } }
+  client.forceStop()
+  #expect(backend.forceStopped)
+  await #expect(throws: BackendError.stopped) { try await waiting.value }
+}
+
+@Test(.timeLimit(.minutes(1))) func aRequestCancelledBeforeItStartsSendsNothing() async throws {
+  let backend = ScriptedBackend()
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let task = Task {
+    // Wait for the cancel below before the request starts.
+    while !Task.isCancelled { await Task.yield() }
+    return try await client.request("sessions")
+  }
+  task.cancel()
+  await #expect(throws: CancellationError.self) { try await task.value }
+  #expect(backend.messages.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func theHandshakeSendsHelloThenStart() async throws {
+  let backend = ScriptedBackend { message in
+    guard case .number(let number)? = message["id"] else { return [] }
+    let id = Int(number)
+    switch message["method"] {
+    case "hello": return [#"{"id":\#(id),"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#]
+    case "start": return [#"{"id":\#(id),"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#]
+    default: return []
+    }
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let started = try await client.handshake(
+    dataFolder: URL(fileURLWithPath: "/d"), bridgeToken: "secret", helloTimeout: .seconds(10),
+    startTimeout: .seconds(10))
+  #expect(started.status.state == "ready")
+  let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
+  #expect(sent == [["hello", [2]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
+}
+
+@Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersHelloFailsTheHandshake() async throws {
+  // Alive, reading its input, and silent: mMac must not wait on it for ever.
+  let backend = ScriptedBackend { _ in [] }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let timeout = Duration.milliseconds(200)
+  await #expect(throws: BackendError.noAnswer(method: "hello", after: timeout)) {
+    _ = try await client.handshake(
+      dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: timeout, startTimeout: .seconds(10))
+  }
+  #expect(backend.messages.map { $0["method"] } == ["hello"])
+}
+
+@Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersStartFailsTheHandshake() async throws {
+  let backend = ScriptedBackend { message in
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let timeout = Duration.milliseconds(200)
+  await #expect(throws: BackendError.noAnswer(method: "start", after: timeout)) {
+    _ = try await client.handshake(
+      dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: .seconds(10), startTimeout: timeout)
+  }
+  #expect(BackendError.noAnswer(method: "start", after: .seconds(45)).localizedDescription
+    == "The Muse backend did not answer start within 45 seconds.")
+}
+
+@Test func theHandshakeGivesStartLongerThanHello() {
+  // start waits for Muse to connect: `muse --version` (6 s a candidate), then Muse's initialize
+  // (15 s, muse-host.ts), then the bridges. Its limit must outlast Muse's own 15-second message.
+  #expect(BackendClient.helloTimeout == .seconds(15))
+  #expect(BackendClient.startTimeout == .seconds(45))
+}
+
+@Test(.timeLimit(.minutes(1))) func startHasItsOwnLimitAfterHello() async throws {
+  // hello answers at once; start answers after hello's limit has passed but within its own.
+  let backend = ScriptedBackend { message in
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let late = Task {
+    try await Task.sleep(for: .milliseconds(500))
+    backend.push(#"{"id":2,"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#)
+  }
+  let started = try await client.handshake(
+    dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: .milliseconds(200), startTimeout: .seconds(10))
+  try await late.value
+  #expect(started.status.state == "ready")
+}
+
+@Test(.timeLimit(.minutes(1))) func aReplyAfterTheTimeoutIsIgnoredAndTheClientStillWorks() async throws {
+  // hello (id 1) is never answered in time. sessions (id 2) is answered at once.
+  let backend = ScriptedBackend { message in
+    message["method"] == "sessions" ? [#"{"id":2,"ok":true,"value":"fresh"}"#] : []
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let timeout = Duration.milliseconds(200)
+  await #expect(throws: BackendError.noAnswer(method: "hello", after: timeout)) {
+    _ = try await client.handshake(
+      dataFolder: URL(fileURLWithPath: "/d"), helloTimeout: timeout, startTimeout: timeout)
+  }
+  // The late hello Reply arrives now. Nothing waits for id 1, so it is dropped.
+  backend.push(#"{"id":1,"ok":true,"value":"stale"}"#)
+  #expect(try await client.request("sessions") == "fresh")
+  #expect(backend.messages.map { $0["method"] } == ["hello", "sessions"])
+}
+
+@Test func theM5aFieldsDecodeAndStayOptional() throws {
+  let json = #"""
+    {"session":{"sessionId":"s1","workspaceRoot":"/p","status":"idle","updatedAt":"2026-10-23T00:00:00Z","createdAt":"2026-10-23T00:00:00Z","activeTurnId":null,"modelId":null,"turnCount":1,"approvalMode":{"mode":"onRequest","source":"startup"}},"items":[{"itemId":"sh","kind":"userShell","revision":1,"status":"completed","commandText":"echo hi","visibleOutput":"hi\n","exitCode":0,"durationMs":12},{"itemId":"sub","kind":"subagent","revision":1,"status":"completed","objective":"Count","controlStatus":"closed","usage":{"inputTokens":100,"outputTokens":20,"cachedTokens":0}},{"itemId":"side","kind":"sideChat","revision":1,"status":"completed","sideSessionId":"side-1"}],"approvals":[],"questions":[],"context":{"used":4200,"window":10000,"pressure":"normal"},"todos":[{"text":"Run the tests","status":"pending"}]}
+    """#
+  let view = try JSONDecoder().decode(SessionView.self, from: Data(json.utf8))
+  #expect(view.session.approvalMode?.mode == "onRequest")
+  #expect(view.items[0].exitCode == 0)
+  #expect(view.items[1].usage == TranscriptItem.ItemUsage(inputTokens: 100, outputTokens: 20))
+  #expect(view.items[2].sideSessionId == "side-1")
+  #expect(view.context == ContextUsage(used: 4200, window: 10000, pressure: "normal"))
+  #expect(view.todos == [TodoItem(text: "Run the tests", status: "pending")])
+  let old = try JSONDecoder().decode(SessionView.self, from: Data(viewJSON.utf8))
+  #expect(old.context == nil && old.todos == nil && old.session.approvalMode == nil)
+}
