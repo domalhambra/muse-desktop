@@ -1,8 +1,9 @@
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  GH_UNREADABLE,
   ghEnvironment,
   prList,
   prMerge,
@@ -12,9 +13,15 @@ import {
 
 let dir = ''
 let log = ''
-/** A fake gh on PATH: it logs its arguments and prints what FAKE_GH_<n> holds for the nth call. */
+const folders: string[] = []
+/**
+ * A fake gh on PATH: it logs its arguments, and prints the output whose key is a prefix of its
+ * joined arguments. With `failure` it prints that to stderr and exits 1. With no matching key it
+ * fails as gh does for a branch without a PR.
+ */
 async function fakeGh(outputs: Record<string, unknown>, failure?: string) {
   dir = await mkdtemp(join(tmpdir(), 'mmac-gh-'))
+  folders.push(dir)
   log = join(dir, 'calls.log')
   const script = `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
@@ -63,6 +70,11 @@ const raw = {
 describe('pull requests through gh', () => {
   beforeEach(() => {
     dir = ''
+  })
+  afterEach(async () => {
+    await Promise.all(
+      folders.splice(0).map((folder) => rm(folder, { recursive: true, force: true })),
+    )
   })
 
   it('reads the folder’s PR and normalizes its checks', async () => {
@@ -128,5 +140,69 @@ describe('pull requests through gh', () => {
     expect(ghEnvironment({ PATH: '/usr/bin' }).PATH).toBe(
       '/usr/bin:/opt/homebrew/bin:/usr/local/bin',
     )
+  })
+
+  it('shows gh’s own words, not the command line', async () => {
+    const env = await fakeGh({}, 'HTTP 502: Bad Gateway')
+    const error = await prStatus('/tmp', { env, folders: [] }).catch((caught: Error) => caught)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe('HTTP 502: Bad Gateway')
+    expect((error as Error).message).not.toContain('Command failed')
+    expect((error as Error).message).not.toContain('--json')
+  })
+
+  it('marks a PR merged into the default branch live without asking for deployments', async () => {
+    const env = await fakeGh({
+      'pr list': [
+        {
+          ...raw,
+          number: 3,
+          state: 'MERGED',
+          mergedAt: '2026-10-20T00:00:00Z',
+          mergeCommit: { oid: 'd' },
+        },
+      ],
+      'repo view': { nameWithOwner: 'o/r', defaultBranchRef: { name: 'main' } },
+    })
+    const list = await prList('/tmp', { env, folders: [] })
+    expect(list[0].live).toBe(true)
+    expect((await calls()).some((args) => args[0] === 'api')).toBe(false)
+  })
+
+  it('looks up deployments for the five newest merged PRs only', async () => {
+    const mergedPr = (number: number, day: number) => ({
+      ...raw,
+      number,
+      state: 'MERGED',
+      baseRefName: 'extensions',
+      mergedAt: `2026-10-${String(day).padStart(2, '0')}T00:00:00Z`,
+      mergeCommit: { oid: `sha${number}` },
+    })
+    // The oldest comes first in list order, so the cut must follow mergedAt.
+    const env = await fakeGh({
+      'pr list': [
+        mergedPr(1, 1),
+        mergedPr(2, 2),
+        mergedPr(3, 3),
+        mergedPr(4, 4),
+        mergedPr(5, 5),
+        mergedPr(6, 6),
+      ],
+      'repo view': { nameWithOwner: 'o/r', defaultBranchRef: { name: 'main' } },
+      'api repos/o/r/deployments?sha=': [],
+    })
+    const list = await prList('/tmp', { env, folders: [] })
+    expect(list.every((pr) => !pr.live)).toBe(true)
+    const looked = (await calls())
+      .filter((args) => args[0] === 'api')
+      .map((args) => /sha=(\w+)/.exec(args[1])?.[1])
+      .sort()
+    expect(looked).toEqual(['sha2', 'sha3', 'sha4', 'sha5', 'sha6'])
+  })
+
+  it('gives a plain message when gh’s data does not fit', async () => {
+    const env = await fakeGh({ 'pr view': { number: 'nine' }, 'pr list': 'not json' })
+    await expect(prStatus('/tmp', { env, folders: [] })).rejects.toThrow(GH_UNREADABLE)
+    await expect(prList('/tmp', { env, folders: [] })).rejects.toThrow(GH_UNREADABLE)
   })
 })

@@ -12,6 +12,7 @@ const FIELDS =
 export const GH_MISSING =
   'GitHub CLI (gh) is not installed. Install it, then run gh auth login in Terminal.'
 export const GH_SIGNED_OUT = 'GitHub CLI is not signed in. Run gh auth login in Terminal.'
+export const GH_UNREADABLE = 'gh returned data mMac could not read.'
 const DEPLOYMENT_CHECKS = 5
 
 /** mMac starts from Finder with a short PATH; Homebrew puts gh in one of these. */
@@ -43,8 +44,22 @@ async function gh(args: string[], cwd: string, options: Options = {}): Promise<s
     if (failure.code === 'ENOENT') throw new Error(GH_MISSING)
     const text = `${failure.stderr ?? ''}${failure.message}`
     if (/gh auth login|not logged in/i.test(text)) throw new Error(GH_SIGNED_OUT)
-    throw new Error(text.trim() || 'gh failed.')
+    // Only stderr: failure.message repeats the command line ("Command failed: gh pr view --json …").
+    throw new Error(failure.stderr?.trim() || 'gh failed.')
   }
+}
+
+/** Parses gh's JSON output; a shape mismatch becomes a plain message, never a raw ZodError. */
+function read<T>(schema: z.ZodType<T>, text: string): T {
+  let json: unknown
+  try {
+    json = JSON.parse(text)
+  } catch {
+    throw new Error(GH_UNREADABLE)
+  }
+  const result = schema.safeParse(json)
+  if (!result.success) throw new Error(GH_UNREADABLE)
+  return result.data
 }
 
 const rollupSchema = z.array(
@@ -115,7 +130,7 @@ function toPullRequest(raw: Raw, live = false): PullRequest {
 export async function prStatus(folder: string, options: Options = {}): Promise<PullRequest | null> {
   try {
     return toPullRequest(
-      rawSchema.parse(JSON.parse(await gh(['pr', 'view', '--json', FIELDS], folder, options))),
+      read(rawSchema, await gh(['pr', 'view', '--json', FIELDS], folder, options)),
     )
   } catch (error) {
     if (error instanceof Error && /no pull requests found/i.test(error.message)) return null
@@ -124,65 +139,55 @@ export async function prStatus(folder: string, options: Options = {}): Promise<P
 }
 
 async function deployed(nwo: string, oid: string, folder: string, options: Options) {
-  const deployments = z
-    .array(z.object({ id: z.number() }))
-    .parse(
-      JSON.parse(
-        await gh(['api', `repos/${nwo}/deployments?sha=${oid}&per_page=1`], folder, options),
-      ),
-    )
+  const deployments = read(
+    z.array(z.object({ id: z.number() })),
+    await gh(['api', `repos/${nwo}/deployments?sha=${oid}&per_page=1`], folder, options),
+  )
   if (!deployments.length) return false
-  const statuses = z
-    .array(z.object({ state: z.string() }))
-    .parse(
-      JSON.parse(
-        await gh(
-          ['api', `repos/${nwo}/deployments/${deployments[0].id}/statuses?per_page=1`],
-          folder,
-          options,
-        ),
-      ),
-    )
+  const statuses = read(
+    z.array(z.object({ state: z.string() })),
+    await gh(
+      ['api', `repos/${nwo}/deployments/${deployments[0].id}/statuses?per_page=1`],
+      folder,
+      options,
+    ),
+  )
   return statuses[0]?.state === 'success'
 }
 
 /** Open and recently merged PRs; closed-unmerged ones are dropped. */
 export async function prList(project: string, options: Options = {}): Promise<PullRequest[]> {
-  const raws = z
-    .array(rawSchema)
-    .parse(
-      JSON.parse(
-        await gh(
-          ['pr', 'list', '--state', 'all', '--limit', '30', '--json', FIELDS],
-          project,
-          options,
-        ),
-      ),
-    )
-    .filter((raw) => raw.state !== 'CLOSED')
-  const repo = z
-    .object({ nameWithOwner: z.string(), defaultBranchRef: z.object({ name: z.string() }) })
-    .parse(
-      JSON.parse(
-        await gh(['repo', 'view', '--json', 'nameWithOwner,defaultBranchRef'], project, options),
-      ),
-    )
-  let checked = 0
-  const result: PullRequest[] = []
-  for (const raw of raws) {
-    let live = false
-    if (raw.state === 'MERGED') {
-      if (raw.baseRefName === repo.defaultBranchRef.name) live = true
-      else if (raw.mergeCommit && checked < DEPLOYMENT_CHECKS) {
-        checked += 1
-        live = await deployed(repo.nameWithOwner, raw.mergeCommit.oid, project, options).catch(
-          () => false,
-        )
-      }
-    }
-    result.push(toPullRequest(raw, live))
-  }
-  return result
+  const raws = read(
+    z.array(rawSchema),
+    await gh(['pr', 'list', '--state', 'all', '--limit', '30', '--json', FIELDS], project, options),
+  ).filter((raw) => raw.state !== 'CLOSED')
+  const repo = read(
+    z.object({ nameWithOwner: z.string(), defaultBranchRef: z.object({ name: z.string() }) }),
+    await gh(['repo', 'view', '--json', 'nameWithOwner,defaultBranchRef'], project, options),
+  )
+  const live = new Set<number>()
+  const merged = raws.filter((raw) => raw.state === 'MERGED')
+  for (const raw of merged) if (raw.baseRefName === repo.defaultBranchRef.name) live.add(raw.number)
+  // The five newest merged PRs, by mergedAt (list order breaks ties), are the only ones worth a
+  // deployment lookup; older ones off the default branch stay not live.
+  const newest = merged
+    .map((raw, index) => ({ raw, index }))
+    .sort((a, b) => (b.raw.mergedAt ?? '').localeCompare(a.raw.mergedAt ?? '') || a.index - b.index)
+    .slice(0, DEPLOYMENT_CHECKS)
+    .map(({ raw }) => raw)
+  await Promise.all(
+    newest
+      .flatMap((raw) =>
+        !live.has(raw.number) && raw.mergeCommit
+          ? [{ number: raw.number, oid: raw.mergeCommit.oid }]
+          : [],
+      )
+      .map(async ({ number, oid }) => {
+        if (await deployed(repo.nameWithOwner, oid, project, options).catch(() => false))
+          live.add(number)
+      }),
+  )
+  return raws.map((raw) => toPullRequest(raw, live.has(raw.number)))
 }
 
 export async function prMerge(folder: string, number: number, options: Options = {}) {
