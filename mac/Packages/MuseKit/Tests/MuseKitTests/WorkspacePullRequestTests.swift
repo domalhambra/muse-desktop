@@ -229,3 +229,35 @@ private func count(_ backend: ScriptedBackend, _ method: String) -> Int {
   workspace.project = "/q"
   #expect(workspace.changeCardsError == nil)
 }
+
+@MainActor @Test func aParentThatMergesLaterUpdatesTheChildsBlockerOnTheNextPoll() async throws {
+  let parentOpen = #"{"number":9,"title":"Usage","url":"u","state":"OPEN","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"main","headRefName":"usage","mergedAt":null,"checks":[],"body":"","files":[],"live":false}"#
+  let parentMerged = parentOpen.replacingOccurrences(of: #""state":"OPEN""#, with: #""state":"MERGED""#)
+    .replacingOccurrences(of: #""mergedAt":null"#, with: #""mergedAt":"2026-10-24T00:00:00Z""#)
+  let child = #"{"number":10,"title":"Usage chart","url":"u","state":"OPEN","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"usage","headRefName":"usage-chart","mergedAt":null,"checks":[],"body":"","files":[],"live":false}"#
+  let lists = Counter()
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "pr-list": return [reply(id, lists.next() == 1 ? "[\(parentOpen)]" : "[\(parentMerged)]")]
+    case "pr-status": return [reply(id, child)]
+    default: return [reply(id, "null")]
+    }
+  }
+  workspace.project = "/p"
+  workspace.view = try decodeView(viewJSON(sessionJSON("s1")))
+  let start = Date.now
+  await workspace.loadChangeCards()
+  func blocker() -> String? {
+    workspace.pullRequest.flatMap { ChangeCardRules.blocker(of: $0, in: workspace.conversationCardSiblings($0)) }
+  }
+  await workspace.refreshPullRequest(now: start.addingTimeInterval(30))
+  #expect(blocker() == "Accept PR 9 first")
+  // Within the 60 seconds of the last card read: the cards are not read again.
+  #expect(count(backend, "pr-list") == 1)
+  await workspace.refreshPullRequest(now: start.addingTimeInterval(61))
+  #expect(count(backend, "pr-list") == 2)
+  #expect(blocker() == "Its draft copy was accepted; move it onto main first")
+  // The move-it note names no PR that could still change: no further card read.
+  await workspace.refreshPullRequest(now: start.addingTimeInterval(200))
+  #expect(count(backend, "pr-list") == 2)
+}

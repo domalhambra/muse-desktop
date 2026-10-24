@@ -40,6 +40,7 @@ public final class Workspace {
       changeCards = []
       changeCardsProject = nil
       changeCardsError = nil
+      lastChangeCardsLoad = nil
       if !project.isEmpty, beginsRunning == 0 { startBadgeRead([project]) }
     }
   }
@@ -119,6 +120,8 @@ public final class Workspace {
   /// Why the last read of the current project's cards failed, or nil. A good read or a project
   /// switch clears it.
   public internal(set) var changeCardsError: String?
+  /// When the project's cards were last read, so the poll reads them again at most once a minute.
+  @ObservationIgnored var lastChangeCardsLoad: Date?
   /// The PR numbers an Accept or a Merge when ready is sending, so a double click sends one.
   public internal(set) var merging: Set<Int> = []
   public internal(set) var decidingApprovals: Set<String> = []
