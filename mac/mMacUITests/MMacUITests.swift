@@ -53,8 +53,13 @@ final class MMacUITests: XCTestCase {
     // ApplePersistenceIgnoreState skips the windows AppKit saved from Dom's own runs: a test run
     // turns restoration off for the main window (`MMacApp`), so restoring that state would open
     // no window at all, and SwiftUI then opens none either.
+    // "NSWindow Frame main" in the argument domain overrides any frame AppKit saved in Dom's
+    // standard defaults, which it applies before `WindowStateGuard` clears the autosave name, and
+    // writes nothing. It opens every test at the default 900-point width (`WindowLayout`): a
+    // window frame is its content's width, and 620 points of content under a 28-point title bar.
     app.launchArguments = [
       "-MMacRepository", repository.path, "-NSQuitAlwaysKeepsWindows", "NO", "-ApplePersistenceIgnoreState", "YES",
+      "-NSWindow Frame main", "120 120 900 648",
     ]
     app.launch()
     XCTAssertTrue(
@@ -441,8 +446,8 @@ final class MMacUITests: XCTestCase {
       .firstMatch
     XCTAssertTrue(hook.waitForExistence(timeout: 10))
 
-    // Off again from the View menu's shortcut. A run of these tests must leave the real defaults
-    // as they were, even after the inspector closes.
+    // Off again from the View menu's shortcut, so the tests' own defaults suite ends as it began,
+    // with the inspector closed.
     app.typeKey("i", modifierFlags: [.command, .option])
     waitForValue(toggle, "Hidden")
 
@@ -1024,7 +1029,8 @@ final class MMacUITests: XCTestCase {
     let app = try launchFake(log: log)
     waitUntilConnected(app)
     let window = app.windows["main"]
-    // A test run has no saved frame, so the window opens at its default size.
+    // `launch` passes a 900-point frame in the argument domain, so a frame saved in Dom's own
+    // defaults cannot change the width under test.
     XCTAssertEqual(window.frame.width, 900, accuracy: 1, "The window opened at \(window.frame)")
 
     // A new conversation in the fake's Git project: the worktree toggle is in the row too.
@@ -1063,7 +1069,7 @@ final class MMacUITests: XCTestCase {
     assertInside(app.buttons["New conversation"].firstMatch, window, "The sidebar's New conversation after Files")
     assertInside(send, window, "Send after Files")
 
-    // Off again, so the run leaves the real defaults as they were.
+    // Off again, so the tests' own defaults suite ends with the inspector closed.
     app.typeKey("i", modifierFlags: [.command, .option])
     waitForValue(toggle, "Hidden")
     quit(app)
@@ -1172,7 +1178,7 @@ final class MMacUITests: XCTestCase {
     app.typeKey("[", modifierFlags: [.command, .shift])
     XCTAssertTrue(shellRow.waitForExistence(timeout: 10))
 
-    // Off again, so the run leaves the real defaults as they were.
+    // Off again, so the tests' own defaults suite ends with the inspector closed.
     app.typeKey("i", modifierFlags: [.command, .option])
     waitForValue(toggle, "Hidden")
     quit(app)
