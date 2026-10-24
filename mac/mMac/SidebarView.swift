@@ -231,6 +231,7 @@ struct SidebarView: View {
             .contentShape(.rect)
           }
           .buttonStyle(.plain)
+          .disabled(sessionId == nil)
           .help(entry.schedule.name)
           .accessibilityElement(children: .combine)
           .accessibilityHint(sessionId == nil ? "No run yet" : "Opens the latest run")

@@ -3,10 +3,18 @@ import MuseKit
 import SwiftUI
 
 /// Settings › Scheduled, as Desktop's Scheduled page.
+/// Errors from its actions show in the Settings window's alert, through `settings`.
 struct SchedulesPane: View {
-  let workspace: Workspace
+  let settings: SettingsModel
   @State private var editing: ScheduleInput?
   @State private var deleting: ScheduleEntry?
+  /// The name in the Delete alert's title. Kept after the alert closes, so the title never reads
+  /// with an empty name while it animates away.
+  @State private var deletingName = ""
+  /// A switch's new value until the backend's list confirms or refuses it, so it does not flicker.
+  @State private var pendingEnabled: [String: Bool] = [:]
+
+  private var workspace: Workspace { settings.workspace }
 
   var body: some View {
     Form {
@@ -43,13 +51,27 @@ struct SchedulesPane: View {
       ScheduleForm(workspace: workspace, input: item.input) { editing = nil }
     }
     .alert(
-      "Delete the scheduled task \(deleting?.schedule.name ?? "")?",
-      isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
-    ) {
+      "Delete the scheduled task \(deletingName)?",
+      isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+      presenting: deleting
+    ) { entry in
       Button("Cancel", role: .cancel) { deleting = nil }
       Button("Delete", role: .destructive) {
-        if let id = deleting?.schedule.id { Task { await workspace.removeSchedule(id: id) } }
         deleting = nil
+        perform { await workspace.removeSchedule(id: entry.schedule.id) }
+      }
+    }
+  }
+
+  /// Runs a Workspace action, then moves any error it reported to the Settings window's alert:
+  /// the Workspace's own alert is in the conversation window.
+  private func perform(_ action: @escaping @MainActor () async -> Void, then: (@MainActor () -> Void)? = nil) {
+    Task {
+      await action()
+      then?()
+      if let error = workspace.errorMessage {
+        settings.errorMessage = error
+        workspace.errorMessage = nil
       }
     }
   }
@@ -62,17 +84,23 @@ struct SchedulesPane: View {
       HStack(alignment: .firstTextBaseline) {
         Text(schedule.name).bold().lineLimit(2)
           .frame(maxWidth: .infinity, alignment: .leading)
+        let enabled = pendingEnabled[schedule.id] ?? schedule.enabled
         Toggle(
           "Active",
           isOn: Binding(
-            get: { schedule.enabled },
-            set: { value in Task { await workspace.setScheduleEnabled(id: schedule.id, enabled: value) } })
+            get: { enabled },
+            set: { value in
+              pendingEnabled[schedule.id] = value
+              // The reload after the call gives the backend's value, kept or refused.
+              perform({ await workspace.setScheduleEnabled(id: schedule.id, enabled: value) }) {
+                if pendingEnabled[schedule.id] == value { pendingEnabled[schedule.id] = nil }
+              }
+            })
         )
         .toggleStyle(.switch)
         .labelsHidden()
-        .accessibilityLabel("Active")
-        .accessibilityHint(schedule.name)
-        .help(schedule.enabled ? "Active: runs on its schedule" : "Paused: runs only with Run now")
+        .accessibilityLabel("\(schedule.name) active")
+        .help(enabled ? "Active: runs on its schedule" : "Paused: runs only with Run now")
         .accessibilityIdentifier("schedule-active-\(schedule.id)")
       }
       // "Paused" is written out, so the switch's colour is never the only sign.
@@ -81,14 +109,15 @@ struct SchedulesPane: View {
         .foregroundStyle(.themeSecondary)
         .lineLimit(2)
       HStack(spacing: 8) {
-        Button("Run now") { Task { await workspace.runSchedule(id: schedule.id) } }
-          .accessibilityHint(schedule.name)
+        Button("Run now") { perform { await workspace.runSchedule(id: schedule.id) } }
+          .accessibilityLabel("Run \(schedule.name) now")
           .accessibilityIdentifier("schedule-run-\(schedule.id)")
         Button("Edit") { editing = ScheduleRules.input(from: schedule) }
           .accessibilityLabel("Edit \(schedule.name)")
           .accessibilityIdentifier("schedule-edit-\(schedule.id)")
         Spacer(minLength: 0)
         Button(role: .destructive) {
+          deletingName = schedule.name
           deleting = entry
         } label: {
           Label("Delete", systemImage: "trash")
@@ -188,11 +217,15 @@ struct ScheduleForm: View {
       }
     }
     .formStyle(.grouped)
+    // Escape and Command-period close a sheet without its Cancel button.
+    .interactiveDismissDisabled(saving)
     .frame(minWidth: 380, idealWidth: 460, maxWidth: 560)
     .toolbar {
-      ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: done) }
+      // Not while saving: the form stays until the backend answers, then closes or shows why.
+      ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: done).disabled(saving) }
       ToolbarItem(placement: .confirmationAction) {
         Button("Save") {
+          guard !saving else { return }
           saving = true
           Task {
             message = await workspace.saveSchedule(input)

@@ -85,3 +85,18 @@ private let entry = #"{"schedule":{"id":"a","name":"Morning review","prompt":"Re
   // A later turn in that conversation is an ordinary one.
   #expect(workspace.finishScheduledRun(idle, previous: "running") == nil)
 }
+
+@MainActor @Test func aRunWhoseTurnEndedBeforeItsEventLeavesNoName() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "schedule-list" ? [reply(id, "[\(entry)]")] : [reply(id, "null")]
+  }
+  // s1's turn ran and ended before the started event arrived: no notice will come, so no name stays.
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "running")))))
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
+  workspace.apply(.scheduleRunStarted(scheduleId: "a", name: "Morning review", sessionId: "s1"))
+  #expect(workspace.scheduledRuns["s1"] == nil)
+  // s2 is still running: its name is kept for the finished notice.
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s2", status: "running")))))
+  workspace.apply(.scheduleRunStarted(scheduleId: "a", name: "Morning review", sessionId: "s2"))
+  #expect(workspace.scheduledRuns["s2"] == "Morning review")
+}

@@ -67,7 +67,7 @@ struct SettingsView: View {
       case .museCode: MuseCodePane(settings: settings)
       case .mcp: McpPane(settings: settings)
       case .bridges: BridgesPane(settings: settings)
-      case .scheduled: SchedulesPane(workspace: settings.workspace)
+      case .scheduled: SchedulesPane(settings: settings)
       }
     } else {
       ContentUnavailableView(

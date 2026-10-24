@@ -343,7 +343,9 @@ public final class Workspace {
     case .error(let message):
       errorMessage = message
     case .scheduleRunStarted(_, let name, let sessionId):
-      scheduledRuns[sessionId] = name
+      // Only while its turn has not ended: a turn that finished before this event has already
+      // passed `turnFinished`, so a name kept now would label a later turn instead.
+      if lastStatus[sessionId] == nil || lastStatus[sessionId] == "running" { scheduledRuns[sessionId] = name }
       Task { [weak self] in await self?.loadSchedules() }
     case .schedulesChanged:
       Task { [weak self] in await self?.loadSchedules() }
