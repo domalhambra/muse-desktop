@@ -62,8 +62,35 @@ describe('schedule rules', () => {
       at('2026-10-19T09:00:00Z'),
     )
     expect(dueTime(weekly, 0, at('2026-10-26T08:59:00Z'), 'UTC')).toBe(at('2026-10-19T09:00:00Z'))
+    // A last fire more than seven days old never comes due.
+    const monthly = { ...base, preset: 'custom' as const, cron: '0 9 1 * *' }
+    expect(dueTime(monthly, 0, at('2026-10-11T00:00:00Z'), 'UTC')).toBeNull()
     expect(dueTime({ ...base, preset: 'manual' }, 0, now, 'UTC')).toBeNull()
     expect(dueTime({ ...base, enabled: false }, 0, now, 'UTC')).toBeNull()
+  })
+
+  // These pin cron-parser 5.10.2's daylight-saving behaviour, so an upgrade cannot change it
+  // silently. They record what the code does today, not what scheduled tasks should do: on the
+  // spring-forward day dueTime skips the 2:30 run that nextRun predicts, and on the fall-back
+  // day dueTime returns 1:30 twice, an hour apart, where nextRun skips the repeat.
+  it('pins the library behaviour across daylight-saving changes in Los Angeles', () => {
+    const tz = 'America/Los_Angeles'
+    const spring = { ...base, hour: 2, minute: 30 }
+    // 2026-03-08: 2:30 PST does not exist; nextRun gives 3:30 PDT.
+    expect(nextRun(spring, at('2026-03-07T12:00:00Z'), tz)).toBe(at('2026-03-08T10:30:00Z'))
+    expect(dueTime(spring, at('2026-03-08T10:29:30Z'), at('2026-03-08T10:30:30Z'), tz)).toBeNull()
+    expect(dueTime(spring, at('2026-03-08T06:00:00Z'), at('2026-03-08T18:00:00Z'), tz)).toBeNull()
+
+    const fall = { ...base, hour: 1, minute: 30 }
+    // 2026-11-01: 1:30 happens at 08:30Z (PDT) and again at 09:30Z (PST).
+    expect(nextRun(fall, at('2026-10-31T12:00:00Z'), tz)).toBe(at('2026-11-01T08:30:00Z'))
+    expect(nextRun(fall, at('2026-11-01T08:30:00Z'), tz)).toBe(at('2026-11-02T09:30:00Z'))
+    expect(dueTime(fall, at('2026-11-01T08:29:30Z'), at('2026-11-01T08:30:30Z'), tz)).toBe(
+      at('2026-11-01T08:30:00Z'),
+    )
+    expect(dueTime(fall, at('2026-11-01T09:29:30Z'), at('2026-11-01T09:30:30Z'), tz)).toBe(
+      at('2026-11-01T09:30:00Z'),
+    )
   })
 
   it('gives the next run, or null for manual', () => {
