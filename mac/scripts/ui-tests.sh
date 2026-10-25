@@ -140,6 +140,17 @@ for (( run = 1; run <= runs; run++ )); do
   pid=$!
   start=$SECONDS
   while kill -0 $pid 2>/dev/null; do
+    # A backend that never answers hello fails every test, and XCTest's failure snapshot can then
+    # hang until the watchdog. Stop at once instead.
+    if grep -q "No answer to hello in time" $activity/app.log 2>/dev/null; then
+      print "Run $run: the backend did not answer mMac's hello. Stopping it." | tee -a $log
+      print "A new ad-hoc build loses the Documents folder permission, and Node then waits in getcwd()." | tee -a $log
+      print "Turn on Documents Folder for mMac in System Settings › Privacy & Security › Files & Folders." | tee -a $log
+      stop_run
+      stop_log_stream
+      collect_requests
+      break
+    fi
     if (( SECONDS - start > WATCHDOG )); then
       print "Run $run passed $WATCHDOG seconds. Stopping it." | tee -a $log
       stop_run
