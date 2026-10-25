@@ -14,6 +14,9 @@ struct SidebarView: View {
   @State private var pickerGeneration = 0
   /// The row the arrow keys moved to. Nil when the highlight follows the open conversation.
   @State private var highlighted: String?
+  /// The one row the pointer is over. Kept here, not in each row, so entering a row hides the
+  /// pin button of any other, even when that row missed its exit (end run, 2026-10-25).
+  @State private var hoveredRow: String?
   /// Read in `body`, so a change redraws the list: after a deselect, or at midnight.
   @State private var redraw = 0
 
@@ -165,6 +168,14 @@ struct SidebarView: View {
               guard highlighted == session.sessionId else { return }
               highlighted = nil
               Task { await workspace.open(session.sessionId) }
+            },
+            hovering: hoveredRow == session.sessionId,
+            hover: { inside in
+              if inside {
+                hoveredRow = session.sessionId
+              } else if hoveredRow == session.sessionId {
+                hoveredRow = nil
+              }
             }
           ) {
             Task { await workspace.togglePin(session.sessionId) }
@@ -289,10 +300,12 @@ struct SessionRow: View {
   var pinned = false
   /// A click on the row outside the pin button.
   var open: () -> Void = {}
+  /// While the pointer is over the row, the pin button replaces the time, as in Electron.
+  var hovering = false
+  /// Reports the pointer entering (true) and leaving (false) the row.
+  var hover: @MainActor (Bool) -> Void = { _ in }
   /// The hover button's action.
   var togglePin: () -> Void = {}
-  /// While the pointer is over the row, the pin button replaces the time, as in Electron.
-  @State private var hovering = false
 
   var body: some View {
     HStack(spacing: 8) {
@@ -312,7 +325,7 @@ struct SessionRow: View {
     }
     // Not `onHover`: in the live run it never fired on these sidebar rows, though the row's
     // tooltip showed. `HoverTracker`'s tracking area works whether or not mMac is the active app.
-    .background(HoverTracker { hovering = $0 })
+    .background(HoverTracker(onChange: hover))
     .help(SessionTitle.of(session))
     // VoiceOver reaches the pin without hovering.
     .accessibilityAction(named: pinned ? "Unpin conversation" : "Pin conversation", togglePin)
@@ -404,8 +417,10 @@ struct HoverTracker: NSViewRepresentable {
       report(visibleRect.contains(point))
     }
 
-    override func mouseEntered(with event: NSEvent) { report(true) }
-    override func mouseExited(with event: NSEvent) { report(false) }
+    // Every real enter and exit goes through: the sidebar holds the one hovered row, and a row
+    // that missed an exit must still report its next enter.
+    override func mouseEntered(with event: NSEvent) { report(true, always: true) }
+    override func mouseExited(with event: NSEvent) { report(false, always: true) }
 
     /// A row that leaves the window, as the list reuses it, is no longer hovered. On the next turn
     /// of the run loop: this can run inside a SwiftUI update, which must not change state.
@@ -421,8 +436,8 @@ struct HoverTracker: NSViewRepresentable {
     /// Clicks go to the row's views above it.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    private func report(_ hovering: Bool) {
-      guard hovering != inside else { return }
+    private func report(_ hovering: Bool, always: Bool = false) {
+      guard always || hovering != inside else { return }
       inside = hovering
       onChange?(hovering)
     }
