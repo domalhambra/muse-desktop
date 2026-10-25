@@ -430,10 +430,26 @@ struct HoverTracker: NSViewRepresentable {
     override func updateTrackingAreas() {
       super.updateTrackingAreas()
       if let area { removeTrackingArea(area) }
-      let area = NSTrackingArea(
-        rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+      // A new area takes the pointer to be outside, so it would never report the exit of a pointer
+      // that is inside now: the hover's own layout change (the pin button replaces the time)
+      // rebuilds the area under the pointer, and the button stayed on a row the pointer had left
+      // (end run, 2026-10-25). `.assumeInside` keeps a hovered row's exit, and the check after
+      // adding the area matches the state to where the pointer is.
+      var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+      if inside { options.insert(.assumeInside) }
+      let area = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
       addTrackingArea(area)
       self.area = area
+      // On the next turn of the run loop: this can run inside a layout pass, which must not change
+      // SwiftUI state.
+      DispatchQueue.main.async { [weak self] in self?.matchPointer() }
+    }
+
+    /// Reports whether the pointer is over the view now, as read outside the event stream.
+    private func matchPointer() {
+      guard let window else { return }
+      let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+      report(visibleRect.contains(point))
     }
 
     override func mouseEntered(with event: NSEvent) { report(true) }
