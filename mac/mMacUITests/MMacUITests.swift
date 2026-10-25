@@ -109,11 +109,19 @@ final class MMacUITests: XCTestCase {
     waitForValue(status, "Connected to Muse Code", timeout: 30, file: file, line: line)
   }
 
+  /// The sidebar row titled `title`: the list cell that holds the title. A click or hover goes
+  /// to the cell, not to the title's text. Until the pointer has been over a row, an accessibility
+  /// hit test at the text finds the cell, so XCTest calls the text not hittable and the click
+  /// fails in some launches (end run, 2026-10-25).
+  private func sidebarRow(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+    app.outlines.cells.containing(NSPredicate(format: "value == %@ OR label == %@", title, title)).firstMatch
+  }
+
   /// Opens the fake conversation and presses Escape on the Ask it raises first. Escape must choose
   /// the last button.
   private func openFakeConversation(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
     waitUntilConnected(app, file: file, line: line)
-    let row = app.staticTexts["Fake conversation"]
+    let row = sidebarRow(app, "Fake conversation")
     XCTAssertTrue(row.waitForExistence(timeout: 10), file: file, line: line)
     row.click()
     XCTAssertTrue(
@@ -242,7 +250,7 @@ final class MMacUITests: XCTestCase {
   /// Opens the second fake conversation, which raises no Ask and has no cards.
   private func openSecondConversation(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
     waitUntilConnected(app, file: file, line: line)
-    let row = app.staticTexts["Second fake conversation"].firstMatch
+    let row = sidebarRow(app, "Second fake conversation")
     XCTAssertTrue(row.waitForExistence(timeout: 10), file: file, line: line)
     row.click()
     XCTAssertTrue(
@@ -627,14 +635,14 @@ final class MMacUITests: XCTestCase {
     let composer = self.composer(app)
 
     // A draft in the second conversation.
-    app.staticTexts["Second fake conversation"].firstMatch.click()
+    sidebarRow(app, "Second fake conversation").click()
     XCTAssertTrue(app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10))
     composer.click()
     composer.typeText("A draft to keep")
     XCTAssertEqual(composer.value as? String, "A draft to keep")
 
     // The third conversation sends the message that stops the fake.
-    app.staticTexts["Third fake conversation"].firstMatch.click()
+    sidebarRow(app, "Third fake conversation").click()
     XCTAssertTrue(app.staticTexts["The third conversation says hello."].waitForExistence(timeout: 10))
     waitForValue(composer, "")
     composer.click()
@@ -654,7 +662,7 @@ final class MMacUITests: XCTestCase {
     let opens = try Self.requests(log, "open").map { $0["args"] as? NSArray }
     XCTAssertEqual(opens.filter { $0 == ["fake-3"] }.count, 2, "\(opens)")
     XCTAssertEqual(opens.last, ["fake-3"])
-    app.staticTexts["Second fake conversation"].firstMatch.click()
+    sidebarRow(app, "Second fake conversation").click()
     XCTAssertTrue(app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10))
     waitForValue(composer, "A draft to keep")
 
@@ -711,7 +719,7 @@ final class MMacUITests: XCTestCase {
     waitUntilConnected(app)
 
     // The pin button shows while the pointer is over the row, in place of the time.
-    let second = app.staticTexts["Second fake conversation"].firstMatch
+    let second = sidebarRow(app, "Second fake conversation")
     XCTAssertTrue(second.waitForExistence(timeout: 10))
     second.hover()
     let pin = app.buttons["pin-button"]
@@ -725,7 +733,7 @@ final class MMacUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Pinned"].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.images["Pinned"].waitForExistence(timeout: 5))
     // A pinned row shows the button too, as Unpin. Off the row first, so the hover is a new one.
-    app.staticTexts["Third fake conversation"].firstMatch.hover()
+    sidebarRow(app, "Third fake conversation").hover()
     second.hover()
     let unpin = app.buttons["pin-button"]
     XCTAssertTrue(unpin.wait(for: \.label, toEqual: "Unpin Second fake conversation", timeout: 5), app.debugDescription)
@@ -739,7 +747,7 @@ final class MMacUITests: XCTestCase {
     XCTAssertTrue(app.menuItems["Unpin conversation"].waitForNonExistence(timeout: 5))
 
     // Archive from the context menu: the row leaves the list.
-    let third = app.staticTexts["Third fake conversation"].firstMatch
+    let third = sidebarRow(app, "Third fake conversation")
     third.rightClick()
     let archive = app.menuItems["Archive in Desktop"]
     XCTAssertTrue(archive.waitForExistence(timeout: 5))
@@ -1006,7 +1014,7 @@ final class MMacUITests: XCTestCase {
     for button in [finder, terminal, museCode] { XCTAssertFalse(button.isEnabled, "\(button) is enabled") }
 
     // A conversation in the project selects it: the three buttons turn on.
-    let row = app.staticTexts["Second fake conversation"].firstMatch
+    let row = sidebarRow(app, "Second fake conversation")
     XCTAssertTrue(row.waitForExistence(timeout: 10))
     row.click()
     XCTAssertTrue(app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10))
