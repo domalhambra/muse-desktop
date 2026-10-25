@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // The arithmetic of mMac's layout: the composer's row, the window's columns and the inspector's
@@ -73,10 +74,11 @@ public enum ComposerRowFit {
 }
 
 /// The window's and the columns' widths. The window's minimum is the sum of the three columns'
-/// minimums and the two dividers, so the split view never has to overflow the window: at the
-/// default 900 points with the inspector open, each column is at or above its minimum. A column
-/// whose content wants more than its minimum must compress or clip that content, as the
-/// composer's row and the inspector's tabs do.
+/// minimums and the two dividers. A column whose content wants more than its minimum must
+/// compress or clip that content, as the composer's row and the inspector's tabs do. The split
+/// view does not shrink the sidebar to make room for the inspector: it opens the inspector at its
+/// ideal width and runs past the window's edges instead (979 points in a 900-point window, seen
+/// on 2026-10-24). `WindowFit` gives the window the width the split view takes.
 public enum WindowMetrics {
   public static let sidebarMin: CGFloat = 240
   public static let sidebarIdeal: CGFloat = 260
@@ -94,6 +96,25 @@ public enum WindowMetrics {
   public static let defaultHeight: CGFloat = 620
   /// The composer's padding on each side, inside the conversation column.
   public static let composerPadding: CGFloat = 12
+}
+
+/// The window frame that holds a split view wider than the window's content. The window grows by
+/// the overflow, as far as the screen allows, and keeps its left edge unless that would put its
+/// right edge off the screen. The height and the vertical position do not change.
+public enum WindowFit {
+  /// The frame for `window`, whose content is `contentWidth` wide and holds a split view
+  /// `splitWidth` wide, on a screen whose visible frame is `screen`. Nil when the split view
+  /// fits, or when the window cannot grow.
+  public static func grown(window: CGRect, contentWidth: CGFloat, splitWidth: CGFloat, screen: CGRect) -> CGRect? {
+    let overflow = splitWidth - contentWidth
+    // Half a point is rounding, not overflow.
+    guard overflow > 0.5 else { return nil }
+    let width = min(window.width + overflow.rounded(.up), screen.width)
+    guard width > window.width else { return nil }
+    var x = window.minX
+    if x + width > screen.maxX { x = max(screen.minX, screen.maxX - width) }
+    return CGRect(x: x, y: window.minY, width: width, height: window.height)
+  }
 }
 
 /// The inspector's tab bar: titled segments when all of them fit, icons otherwise.

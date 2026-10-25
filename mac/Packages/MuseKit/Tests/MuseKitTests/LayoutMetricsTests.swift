@@ -125,3 +125,33 @@ private func indices(_ kind: ComposerRowFit.Kind) -> [Int] {
   // Not measured yet: titles, as the bar first draws.
   #expect(InspectorTabFit.showsTitles(available: 0, titleWidths: titles))
 }
+
+// The split view's overflow, as the live check measured it: 979 points in a 900-point window.
+private let screen = CGRect(x: 0, y: 0, width: 1512, height: 944)
+
+@Test func aWindowGrowsByTheSplitViewsOverflow() {
+  let window = CGRect(x: 341, y: 198, width: 900, height: 648)
+  let grown = WindowFit.grown(window: window, contentWidth: 900, splitWidth: 979, screen: screen)
+  #expect(grown == CGRect(x: 341, y: 198, width: 979, height: 648))
+}
+
+@Test func aSplitViewThatFitsLeavesTheWindowAlone() {
+  let window = CGRect(x: 341, y: 198, width: 900, height: 648)
+  #expect(WindowFit.grown(window: window, contentWidth: 900, splitWidth: 900, screen: screen) == nil)
+  #expect(WindowFit.grown(window: window, contentWidth: 900, splitWidth: 900.4, screen: screen) == nil)
+  #expect(WindowFit.grown(window: window, contentWidth: 900, splitWidth: 640, screen: screen) == nil)
+}
+
+@Test func aWindowNearTheRightEdgeMovesLeftToGrow() {
+  let window = CGRect(x: 600, y: 100, width: 900, height: 620)
+  let grown = WindowFit.grown(window: window, contentWidth: 900, splitWidth: 979, screen: screen)
+  #expect(grown == CGRect(x: 1512 - 979, y: 100, width: 979, height: 620))
+}
+
+@Test func aWindowNeverGrowsPastTheScreen() {
+  let window = CGRect(x: 0, y: 0, width: 1500, height: 620)
+  let grown = WindowFit.grown(window: window, contentWidth: 1500, splitWidth: 1600, screen: screen)
+  #expect(grown == CGRect(x: 0, y: 0, width: 1512, height: 620))
+  let full = CGRect(x: 0, y: 0, width: 1512, height: 620)
+  #expect(WindowFit.grown(window: full, contentWidth: 1512, splitWidth: 1600, screen: screen) == nil)
+}
