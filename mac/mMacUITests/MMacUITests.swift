@@ -722,7 +722,8 @@ final class MMacUITests: XCTestCase {
     let second = sidebarRow(app, "Second fake conversation")
     XCTAssertTrue(second.waitForExistence(timeout: 10))
     second.hover()
-    let pin = app.buttons["pin-button"]
+    // Each row's own button: the row the pointer left can still show its button for a moment.
+    let pin = second.buttons["pin-button"]
     XCTAssertTrue(pin.waitForExistence(timeout: 5), app.debugDescription)
     // On screen, not only in the tree: the live run found the id but saw no button.
     XCTAssertTrue(pin.isHittable, "The pin button is not hittable: \(pin.frame)")
@@ -733,10 +734,13 @@ final class MMacUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Pinned"].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.images["Pinned"].waitForExistence(timeout: 5))
     // A pinned row shows the button too, as Unpin. Off the row first, so the hover is a new one.
-    sidebarRow(app, "Third fake conversation").hover()
+    let thirdRow = sidebarRow(app, "Third fake conversation")
+    thirdRow.hover()
     second.hover()
-    let unpin = app.buttons["pin-button"]
+    let unpin = second.buttons["pin-button"]
     XCTAssertTrue(unpin.wait(for: \.label, toEqual: "Unpin Second fake conversation", timeout: 5), app.debugDescription)
+    // The row the pointer left hides its button.
+    XCTAssertTrue(thirdRow.buttons["pin-button"].waitForNonExistence(timeout: 5), app.debugDescription)
     XCTAssertTrue(unpin.isHittable, "The unpin button is not hittable: \(unpin.frame)")
     // The pin did not open the row.
     XCTAssertTrue(try Self.requests(log, "open").isEmpty)
