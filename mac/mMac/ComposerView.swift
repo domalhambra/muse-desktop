@@ -64,12 +64,19 @@ struct ComposerView: View {
           // Above the field, 10 points clear, as Electron's `.slash-menu`.
           .alignmentGuide(.top) { $0[.bottom] + 10 }
       }
-      HStack(spacing: 10) {
-        AttachButton(workspace: workspace)
-        Divider().frame(height: 16)
+      // At the default 900-point window with the inspector open, the row is narrower than its
+      // controls: `ComposerRowLayout` hides the hint, then the labels, then compresses the pickers,
+      // and Send stays inside the window.
+      ComposerRowLayout {
+        AttachButton(workspace: workspace).fixedSize()
+        // Not a `Divider`: a custom layout has no axis to draw one against.
+        Rectangle().fill(.separator).frame(width: 1, height: 16)
         if let voice = controller.voice {
-          VoiceButton(voice: voice, workspace: workspace)
+          VoiceButton(voice: voice, workspace: workspace).fixedSize()
         }
+        // The pickers' labels are drawn beside them, so the row can hide them when it is narrow.
+        // The pickers keep their names for VoiceOver.
+        ComposerRowLabel("Model").accessibilityHidden(true).composerRowRole(.label)
         Picker("Model", selection: modelSelection) {
           if !workspace.models.contains(where: { $0.modelId == workspace.modelId }) {
             Text(workspace.modelId.isEmpty ? "CLI default" : workspace.modelId).tag(workspace.modelId)
@@ -78,11 +85,13 @@ struct ComposerView: View {
             Text(model.displayLabel.isEmpty ? model.modelId : model.displayLabel).tag(model.modelId)
           }
         }
-        .fixedSize()
+        .labelsHidden()
         // The stock bezel: the theme's light accent under a white label is unreadable.
         .tint(nil)
         .disabled(workspace.submitting || workspace.models.isEmpty)
         .accessibilityIdentifier("model-picker")
+        .composerRowRole(.picker)
+        ComposerRowLabel("Reasoning effort").accessibilityHidden(true).composerRowRole(.label)
         Picker("Reasoning effort", selection: effortSelection) {
           ForEach(ReasoningEffort.allCases) { effort in Text(effort.label).tag(effort.rawValue) }
           // A newer CLI's effort that this list does not know still shows, including one being
@@ -92,9 +101,11 @@ struct ComposerView: View {
             Text(shown).tag(shown)
           }
         }
-        .fixedSize()
+        .labelsHidden()
         .tint(nil)
         .accessibilityIdentifier("effort-picker")
+        .composerRowRole(.picker)
+        ComposerRowLabel("Mode").accessibilityHidden(true).composerRowRole(.label)
         Picker("Mode", selection: modeSelection) {
           ForEach(ApprovalMode.allCases) { mode in Text(mode.label).tag(mode.rawValue) }
           // A newer CLI's mode, or none yet (a new conversation), still has a row.
@@ -103,13 +114,12 @@ struct ComposerView: View {
             Text(shown.isEmpty ? "Mode" : ApprovalMode.label(for: shown)).tag(shown)
           }
         }
-        // Compressible: a fifth fixed-size picker would widen the detail column's minimum and
-        // push the inspector off the window.
-        .fixedSize(horizontal: false, vertical: true)
+        .labelsHidden()
         .tint(nil)
         .disabled(workspace.view == nil || workspace.submitting)
         .help("How much Muse may do without asking. A change applies to Muse\u{2019}s next action.")
         .accessibilityIdentifier("mode-picker")
+        .composerRowRole(.picker)
         if workspace.canStartInWorktree {
           let label =
             workspace.startInWorktree
@@ -119,12 +129,15 @@ struct ComposerView: View {
             Image(systemName: "arrow.triangle.branch")
           }
           .toggleStyle(.button)
+          .fixedSize()
           .disabled(workspace.submitting)
           .accessibilityLabel(label)
           .help(label)
         }
-        Spacer()
-        Text("↵ Send · ⇧ ↵ New line").font(.caption).foregroundStyle(.themeMuted)
+        ComposerRowLabel("↵ Send · ⇧ ↵ New line")
+          .font(.caption)
+          .foregroundStyle(.themeMuted)
+          .composerRowRole(.hint)
         Button(action: submit) {
           if workspace.submitting {
             ProgressView().controlSize(.small)
@@ -133,10 +146,12 @@ struct ComposerView: View {
           }
         }
         .buttonStyle(.borderless)
+        .fixedSize()
         .disabled(!canSend)
         .accessibilityLabel(workspace.isRunning ? "Send follow-up" : "Send message")
         .accessibilityIdentifier("send-button")
         .help(workspace.isRunning ? "Send follow-up" : "Send message")
+        .composerRowRole(.send)
       }
       // On its own line, so a long note does not squeeze the row.
       if let footnote {
@@ -146,7 +161,8 @@ struct ComposerView: View {
           .accessibilityIdentifier("composer-footnote")
       }
     }
-    .padding(12)
+    // `WindowMetrics` holds it, so a test proves the row's minimum fits the column's.
+    .padding(WindowMetrics.composerPadding)
     // A drop outside the text lands here; the text view takes its own through `onDropFiles`.
     // File URLs only, so a web link dragged over the composer neither lights the ring nor drops.
     .onDrop(of: [.fileURL], isTargeted: $draggingOverComposer) { providers in
@@ -266,8 +282,10 @@ struct ComposerView: View {
       ProgressView().controlSize(.small)
       Text(
         Activity.isBackgroundOnly(workspace.view?.items ?? [])
-          ? "Finishing background tasks…" : "Muse is working…")
-      Text("Send a follow-up to queue or steer.").foregroundStyle(.themeSecondary)
+          ? "Finishing background tasks…" : "Muse is working…"
+      )
+      .lineLimit(1)
+      Text("Send a follow-up to queue or steer.").foregroundStyle(.themeSecondary).lineLimit(1)
       Spacer()
       Picker("Follow-up behavior", selection: $workspace.mode) {
         Text("Queue next").tag(SendMode.queue)

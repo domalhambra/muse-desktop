@@ -1,3 +1,4 @@
+import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
@@ -13,6 +14,9 @@ struct SidebarView: View {
   @State private var pickerGeneration = 0
   /// The row the arrow keys moved to. Nil when the highlight follows the open conversation.
   @State private var highlighted: String?
+  /// The one row the pointer is over. Kept here, not in each row, so entering a row hides the
+  /// pin button of any other, even when that row missed its exit (end run, 2026-10-25).
+  @State private var hoveredRow: String?
   /// Read in `body`, so a change redraws the list: after a deselect, or at midnight.
   @State private var redraw = 0
 
@@ -58,6 +62,19 @@ struct SidebarView: View {
           .foregroundStyle(.themeSecondary)
           .accessibilityElement(children: .combine)
           .accessibilityIdentifier("project-git-badge")
+        }
+        if !workspace.project.isEmpty {
+          Button {
+            controller.sheets.proposedChanges = true
+          } label: {
+            Label("Proposed changes", systemImage: "rectangle.stack.badge.person.crop").lineLimit(1)
+          }
+          .buttonStyle(.plain)
+          .font(.callout)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .contentShape(.rect)
+          .help("The project\u{2019}s pull requests, as change cards")
+          .accessibilityIdentifier("proposed-changes")
         }
       }
       history
@@ -141,6 +158,7 @@ struct SidebarView: View {
   @ViewBuilder private var history: some View {
     // Read once: each read groups and sorts every session.
     let sections = workspace.sections
+    scheduled
     Section {
       conversationsHeader
       if let error = workspace.historyError {
@@ -164,6 +182,14 @@ struct SidebarView: View {
               guard highlighted == session.sessionId else { return }
               highlighted = nil
               Task { await workspace.open(session.sessionId) }
+            },
+            hovering: hoveredRow == session.sessionId,
+            hover: { inside in
+              if inside {
+                hoveredRow = session.sessionId
+              } else if hoveredRow == session.sessionId {
+                hoveredRow = nil
+              }
             }
           ) {
             Task { await workspace.togglePin(session.sessionId) }
@@ -189,6 +215,39 @@ struct SidebarView: View {
           Text(workspace.showArchived ? "No archived conversations" : "No conversations yet").font(.headline)
           Text(workspace.showArchived ? "Archived conversations appear here." : "Start a conversation in this project.")
             .foregroundStyle(.themeSecondary)
+        }
+      }
+    }
+  }
+
+  /// The active scheduled tasks, each with its next run. A click opens the latest run that started
+  /// a conversation. Rows have no tag, so the list never selects them.
+  @ViewBuilder private var scheduled: some View {
+    let active = workspace.schedules.filter(\.schedule.enabled)
+    if !active.isEmpty {
+      Section("Scheduled") {
+        ForEach(active) { entry in
+          let sessionId = entry.history.first(where: { $0.sessionId != nil })?.sessionId
+          Button {
+            if let sessionId { Task { await workspace.open(sessionId) } }
+          } label: {
+            VStack(alignment: .leading, spacing: 2) {
+              Text(entry.schedule.name).lineLimit(1).truncationMode(.tail)
+              Text(ScheduleRules.nextRun(entry, now: .now))
+                .font(.caption)
+                .foregroundStyle(.themeSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+          }
+          .buttonStyle(.plain)
+          .disabled(sessionId == nil)
+          .help(entry.schedule.name)
+          .accessibilityElement(children: .combine)
+          .accessibilityHint(sessionId == nil ? "No run yet" : "Opens the latest run")
+          .accessibilityIdentifier("scheduled-row-\(entry.schedule.id)")
         }
       }
     }
@@ -245,6 +304,7 @@ struct SidebarView: View {
   private var connectionFooter: some View {
     VStack(spacing: 0) {
       Divider()
+      if let limits = workspace.limits { UsageFooter(limits: limits) }
       MuseCodeSettingsButton {
         HStack(spacing: 6) {
           Circle().fill(dotColor).frame(width: 7, height: 7)
@@ -288,10 +348,12 @@ struct SessionRow: View {
   var pinned = false
   /// A click on the row outside the pin button.
   var open: () -> Void = {}
+  /// While the pointer is over the row, the pin button replaces the time, as in Electron.
+  var hovering = false
+  /// Reports the pointer entering (true) and leaving (false) the row.
+  var hover: @MainActor (Bool) -> Void = { _ in }
   /// The hover button's action.
   var togglePin: () -> Void = {}
-  /// While the pointer is over the row, the pin button replaces the time, as in Electron.
-  @State private var hovering = false
 
   var body: some View {
     HStack(spacing: 8) {
@@ -309,7 +371,9 @@ struct SessionRow: View {
         .accessibilityIdentifier("pin-button")
       }
     }
-    .onHover { hovering = $0 }
+    // Not `onHover`: in the live run it never fired on these sidebar rows, though the row's
+    // tooltip showed. `HoverTracker`'s tracking area works whether or not mMac is the active app.
+    .background(HoverTracker(onChange: hover))
     .help(SessionTitle.of(session))
     // VoiceOver reaches the pin without hovering.
     .accessibilityAction(named: pinned ? "Unpin conversation" : "Pin conversation", togglePin)
@@ -352,6 +416,78 @@ struct SessionRow: View {
           .foregroundStyle(.themeSecondary)
           .monospacedDigit()
       }
+    }
+  }
+}
+
+/// Reports the pointer entering and leaving its frame. An `NSTrackingArea` that is active always,
+/// so it reports while mMac is in the background too, as a tooltip shows then. It takes no clicks.
+struct HoverTracker: NSViewRepresentable {
+  let onChange: @MainActor (Bool) -> Void
+
+  func makeNSView(context: Context) -> TrackingView {
+    let view = TrackingView()
+    view.onChange = onChange
+    return view
+  }
+
+  func updateNSView(_ view: TrackingView, context: Context) {
+    view.onChange = onChange
+  }
+
+  final class TrackingView: NSView {
+    var onChange: (@MainActor (Bool) -> Void)?
+    private var area: NSTrackingArea?
+    private var inside = false
+
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      if let area { removeTrackingArea(area) }
+      // A new area takes the pointer to be outside, so it would never report the exit of a pointer
+      // that is inside now: the hover's own layout change (the pin button replaces the time)
+      // rebuilds the area under the pointer, and the button stayed on a row the pointer had left
+      // (end run, 2026-10-25). `.assumeInside` keeps a hovered row's exit, and the check after
+      // adding the area matches the state to where the pointer is.
+      var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+      if inside { options.insert(.assumeInside) }
+      let area = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
+      addTrackingArea(area)
+      self.area = area
+      // On the next turn of the run loop: this can run inside a layout pass, which must not change
+      // SwiftUI state.
+      DispatchQueue.main.async { [weak self] in self?.matchPointer() }
+    }
+
+    /// Reports whether the pointer is over the view now, as read outside the event stream.
+    private func matchPointer() {
+      guard let window else { return }
+      let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+      report(visibleRect.contains(point))
+    }
+
+    // Every real enter and exit goes through: the sidebar holds the one hovered row, and a row
+    // that missed an exit must still report its next enter.
+    override func mouseEntered(with event: NSEvent) { report(true, always: true) }
+    override func mouseExited(with event: NSEvent) { report(false, always: true) }
+
+    /// A row that leaves the window, as the list reuses it, is no longer hovered. On the next turn
+    /// of the run loop: this can run inside a SwiftUI update, which must not change state.
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      guard window == nil else { return }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.window == nil else { return }
+        self.report(false)
+      }
+    }
+
+    /// Clicks go to the row's views above it.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private func report(_ hovering: Bool, always: Bool = false) {
+      guard always || hovering != inside else { return }
+      inside = hovering
+      onChange?(hovering)
     }
   }
 }

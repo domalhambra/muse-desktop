@@ -19,6 +19,7 @@ import type {
   ConnectionStatus,
   MuseSession,
   SessionView,
+  SubscriptionLimits,
 } from '../../src/shared/protocol'
 import type { AgentApi, AgentPolicy } from '../../src/main/agent-api'
 import { splitHunks } from '../../src/main/git'
@@ -27,6 +28,7 @@ import { encodeVoiceWav, MAX_VOICE_BYTES } from '../../src/shared/voice'
 import { createBackend, type BackendDeps, type Muse } from '../../src/headless/backend'
 import type { BridgeFactories } from '../../src/headless/bridges'
 import { HEADLESS_PROTOCOL, type Ask } from '../../src/headless/wire'
+import { calls, fakeGh, raw, removeFakeGh } from './fake-gh'
 
 let dir = ''
 beforeEach(async () => {
@@ -93,6 +95,7 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     ),
     runShell: vi.fn(async () => {}),
     configDir: () => join(dir, 'muse-config'),
+    limits: null as SubscriptionLimits | null,
     ...overrides,
   } satisfies Muse
 }
@@ -113,6 +116,9 @@ function harness(
     askStartsQuit?: boolean
     dataFolder?: string
     voice?: NonNullable<BackendDeps['voice']>
+    scheduler?: BackendDeps['scheduler']
+    /** A fake gh's environment (tests/unit/fake-gh.ts). Without it, gh is never found. */
+    ghEnv?: NodeJS.ProcessEnv
   } = {},
 ) {
   const asks: Ask[] = []
@@ -150,6 +156,10 @@ function harness(
     },
     bridgeFactories,
     voice,
+    scheduler: options.scheduler ?? { timer: false, tz: 'UTC' },
+    // No test may reach the real gh: PATH holds only a fake gh, and no Homebrew folders are added.
+    ghEnv: options.ghEnv ?? { PATH: '/nonexistent' },
+    ghFolders: [],
     ask: async (value) => {
       asks.push(value)
       // A quit that starts while the Ask shows: the answer still comes back.
@@ -402,6 +412,21 @@ describe('headless backend, M1 methods', () => {
     await expect(call('shell', 's1', 'x'.repeat(10001))).rejects.toThrow()
   })
 
+  it('returns the latest limits, or null', async () => {
+    const limits = {
+      observedAt: 1,
+      tier: 'pro',
+      window: { usedPercent: 42, resetsAt: 2, minutes: 300 },
+      weekly: { usedPercent: 18, resetsAt: 3 },
+    }
+    const { call, start } = harness(fakeMuse({ limits }))
+    await start()
+    await expect(call('usage')).resolves.toEqual(limits)
+    const empty = harness(fakeMuse())
+    await empty.start()
+    await expect(empty.call('usage')).resolves.toBeNull()
+  })
+
   it('passes an approval choice through after the trust check', async () => {
     const { call, muse } = await trustedSession()
     await call('approve', 's1', 'a1', 'c1')
@@ -504,6 +529,80 @@ describe('headless backend, M1 methods', () => {
       reasoningEffort: 'low',
       cliPath: '/opt/muse',
     })
+  })
+
+  it('keeps a trust save that is still in flight when a second project is trusted', async () => {
+    const { call, start, preferencesFile, lastPreferences } = harness(fakeMuse(), [0, 0])
+    await start()
+    const a = await folder('a')
+    const b = await folder('b')
+    await call('add-project', a)
+    await call('add-project', b)
+    await Promise.all([call('create', a), call('create', b)])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.trustedProjects].sort()).toEqual([a, b].sort())
+    expect([...(lastPreferences()?.preferences.trustedProjects ?? [])].sort()).toEqual(
+      [a, b].sort(),
+    )
+  })
+
+  it('keeps a recent-project save that is still in flight when a second session opens', async () => {
+    const a = await folder('a')
+    const b = await folder('b')
+    const roots: Record<string, string> = { s1: a, s2: b }
+    const muse = fakeMuse({
+      open: vi.fn(async (sessionId: string) =>
+        view(session({ sessionId, workspaceRoot: roots[sessionId] })),
+      ),
+    })
+    const { call, start, preferencesFile, events } = harness(muse)
+    await start()
+    await Promise.all([call('open', 's1'), call('open', 's2')])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.recentProjects].sort()).toEqual([a, b].sort())
+    // Opening a session whose project is already recent writes nothing and emits nothing.
+    const emitted = events.length
+    await call('open', 's1')
+    expect(events).toHaveLength(emitted)
+    expect(JSON.parse(await readFile(preferencesFile, 'utf8')).recentProjects).toEqual(
+      saved.recentProjects,
+    )
+  })
+
+  it('keeps an add-project save that is still in flight when a second project is added', async () => {
+    const { call, start, preferencesFile, events } = harness()
+    await start()
+    const a = await folder('a')
+    const b = await folder('b')
+    await Promise.all([call('add-project', a), call('add-project', b)])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.recentProjects].sort()).toEqual([a, b].sort())
+    // Adding the project that is already first writes nothing and emits nothing.
+    const emitted = events.length
+    await call('add-project', saved.recentProjects[0])
+    expect(events).toHaveLength(emitted)
+  })
+
+  it('keeps a discovered-projects save that is still in flight when sessions is read again', async () => {
+    const a = await folder('a')
+    const b = await folder('b')
+    const lists = [[a], [b]]
+    const muse = fakeMuse({
+      list: vi.fn(async () => ({
+        sessions: (lists.shift() ?? []).map((root) => session({ workspaceRoot: root })),
+        nextCursor: null,
+      })),
+    })
+    const { call, start, preferencesFile, events } = harness(muse)
+    await start()
+    await Promise.all([call('sessions'), call('sessions')])
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'))
+    expect([...saved.recentProjects].sort()).toEqual([a, b].sort())
+    // A list that finds no new project writes nothing and emits nothing.
+    const emitted = events.length
+    lists.push([a, b])
+    await call('sessions')
+    expect(events).toHaveLength(emitted)
   })
 })
 
@@ -1459,5 +1558,588 @@ describe('headless backend, M3 bridges', () => {
     const worktree = join(project, '.muse', 'worktrees', 'w1')
     await mkdir(worktree, { recursive: true })
     expect(await h.agentPolicy().resolveProject(worktree)).toBe(worktree)
+  })
+})
+
+describe('headless backend, scheduled tasks', () => {
+  const task = (folder: string) => ({
+    name: 'Morning review',
+    prompt: 'Review yesterday’s commits.',
+    folder,
+    preset: 'manual',
+    minute: 0,
+    hour: 9,
+    weekday: 1,
+    approvalMode: 'onRequest',
+    modelId: 'm1',
+    worktree: false,
+    enabled: true,
+  })
+
+  /** A known project, trusted through the create path's Ask, with one saved task. */
+  async function trustedTask(muse = fakeMuse()) {
+    const project = await folder('project')
+    const h = harness(muse, [0])
+    await h.start()
+    await h.call('add-project', project)
+    await h.call('create', project)
+    vi.mocked(muse.create).mockClear()
+    const saved = (await h.call('schedule-save', task(project))) as { schedule: { id: string } }
+    return { ...h, muse, project, id: saved.schedule.id }
+  }
+
+  it('saves a task for a known folder and lists it', async () => {
+    const project = await folder('project')
+    const { call, start, events } = harness()
+    await start()
+    await call('add-project', project)
+    const saved = (await call('schedule-save', task(project))) as { schedule: { id: string } }
+    const list = (await call('schedule-list')) as { schedule: { id: string } }[]
+    expect(list.map((entry) => entry.schedule.id)).toEqual([saved.schedule.id])
+    expect(events.some((event) => event.type === 'schedules-changed')).toBe(true)
+    await expect(call('schedule-save', task(join(dir, 'unknown')))).rejects.toThrow()
+    await mkdir(join(dir, 'other'))
+    await expect(call('schedule-save', task(join(dir, 'other')))).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+  })
+
+  it('runs a task in a trusted folder: create, mode, send', async () => {
+    const { call, muse, id, project, events } = await trustedTask()
+    await call('schedule-run', id)
+    expect(muse.create).toHaveBeenCalledWith(project, 'm1', { worktree: false })
+    expect(muse.setApprovalMode).toHaveBeenCalledWith('s1', 'onRequest')
+    expect(muse.send).toHaveBeenCalledWith(
+      's1',
+      [{ type: 'text', text: 'Review yesterday’s commits.' }],
+      'high',
+      'queue',
+      'Review yesterday’s commits.',
+    )
+    expect(events).toContainEqual({
+      type: 'schedule-run-started',
+      scheduleId: id,
+      name: 'Morning review',
+      sessionId: 's1',
+    })
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; sessionId?: string }[]
+    }[]
+    expect(entry.history[0]).toMatchObject({ outcome: 'started', sessionId: 's1' })
+  })
+
+  it('counts a started run as running until its turn ends', async () => {
+    let current = session()
+    const muse = fakeMuse({ getSession: vi.fn(() => current) })
+    const { call, id } = await trustedTask(muse)
+    await call('schedule-run', id)
+    // send has returned but turn/started has not arrived yet: still busy.
+    await expect(call('schedule-run', id)).rejects.toThrow(
+      'Another scheduled task is running. Try again when it finishes.',
+    )
+    current = session({ activeTurnId: 't1', status: 'running' })
+    await expect(call('schedule-run', id)).rejects.toThrow('Another scheduled task is running.')
+    current = session({ updatedAt: '2026-10-21T00:05:00Z' })
+    await call('schedule-run', id)
+    expect(muse.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('counts a turn that ended before it was seen as finished, and a gone session as idle', async () => {
+    let gone = false
+    let current = session()
+    const muse = fakeMuse({
+      getSession: vi.fn(() => {
+        if (gone) throw new Error('Open this conversation before performing an action.')
+        return current
+      }),
+    })
+    const { call, id } = await trustedTask(muse)
+    await call('schedule-run', id)
+    // turn/completed moved updatedAt, though no check saw activeTurnId set.
+    current = session({ updatedAt: '2026-10-21T00:10:00Z' })
+    await call('schedule-run', id)
+    gone = true
+    await call('schedule-run', id)
+    expect(muse.send).toHaveBeenCalledTimes(3)
+  })
+
+  it('stops counting a run whose turn never starts after ten minutes', async () => {
+    let now = Date.parse('2026-10-21T08:00:00Z')
+    const muse = fakeMuse()
+    const project = await folder('project')
+    const h = harness(muse, [0], { scheduler: { timer: false, tz: 'UTC', now: () => now } })
+    await h.start()
+    await h.call('add-project', project)
+    await h.call('create', project)
+    const saved = (await h.call('schedule-save', task(project))) as { schedule: { id: string } }
+    await h.call('schedule-run', saved.schedule.id)
+    now += 9 * 60_000
+    await expect(h.call('schedule-run', saved.schedule.id)).rejects.toThrow('Another scheduled')
+    now += 2 * 60_000
+    await h.call('schedule-run', saved.schedule.id)
+    expect(muse.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('records a plain failure for a folder that is not trusted', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse()
+    const { call, start } = harness(muse)
+    await start()
+    await call('add-project', project)
+    const saved = (await call('schedule-save', task(project))) as { schedule: { id: string } }
+    await call('schedule-run', saved.schedule.id)
+    expect(muse.create).not.toHaveBeenCalled()
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason: string }[]
+    }[]
+    expect(entry.history[0]).toMatchObject({
+      outcome: 'failed',
+      reason:
+        'mMac could not start this scheduled task. The folder is not trusted in mMac. Open it and send a message there first.',
+    })
+  })
+
+  it('records a plain failure, not a Node error, for a folder that is gone', async () => {
+    const { call, muse, id, project } = await trustedTask()
+    await rm(project, { recursive: true })
+    await call('schedule-run', id)
+    expect(muse.create).not.toHaveBeenCalled()
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason: string }[]
+    }[]
+    expect(entry.history[0].outcome).toBe('failed')
+    expect(entry.history[0].reason).toBe(
+      'mMac could not start this scheduled task. The folder for this task no longer exists, or mMac cannot open it.',
+    )
+  })
+
+  it('records a plain failure, not Muse’s own text, when create or send fails', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { call, id, muse } = await trustedTask()
+    vi.mocked(muse.create).mockRejectedValueOnce(
+      new Error('MSP -32603: internal error at SessionManager.create'),
+    )
+    await call('schedule-run', id)
+    vi.mocked(muse.send).mockRejectedValueOnce(new Error('MSP -32000: queue closed'))
+    await call('schedule-run', id)
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason: string }[]
+    }[]
+    expect(entry.history.map((run) => [run.outcome, run.reason])).toEqual([
+      ['failed', 'mMac could not start this scheduled task.'],
+      ['failed', 'mMac could not start this scheduled task.'],
+    ])
+    const logged = errors.mock.calls.map((args) => String(args[0])).join('\n')
+    expect(logged).toContain('internal error at SessionManager.create')
+    expect(logged).toContain('queue closed')
+    errors.mockRestore()
+  })
+
+  it('archives the new conversation when its mode or prompt fails, and the history keeps its id', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let next = 0
+    const muse = fakeMuse({
+      create: vi.fn(async (root: string) =>
+        view(session({ sessionId: `run-${++next}`, workspaceRoot: root })),
+      ),
+    })
+    const { call, id, events } = await trustedTask(muse)
+    vi.mocked(muse.send).mockRejectedValueOnce(new Error('MSP -32000: queue closed'))
+    await call('schedule-run', id)
+    vi.mocked(muse.setApprovalMode).mockRejectedValueOnce(new Error('MSP -32602: bad mode'))
+    await call('schedule-run', id)
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason: string; sessionId?: string }[]
+    }[]
+    expect(entry.history.map((run) => [run.outcome, run.reason, run.sessionId])).toEqual([
+      ['failed', 'mMac could not start this scheduled task.', 'run-3'],
+      ['failed', 'mMac could not start this scheduled task.', 'run-2'],
+    ])
+    const saved = events.filter((event) => event.type === 'preferences').at(-1)
+    expect(saved?.type === 'preferences' && saved.preferences.archivedSessionIds).toEqual([
+      'run-2',
+      'run-3',
+    ])
+    errors.mockRestore()
+  })
+
+  it('a failed start’s archive keeps an app Archive that was queued but not yet written', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let next = 0
+    const muse = fakeMuse({
+      create: vi.fn(async (root: string) =>
+        view(session({ sessionId: `run-${++next}`, workspaceRoot: root })),
+      ),
+    })
+    const { call, id, events } = await trustedTask(muse)
+    let appArchive: Promise<unknown> = Promise.resolve()
+    vi.mocked(muse.send).mockImplementationOnce(async () => {
+      // The person archives another conversation while the send fails: its write is queued.
+      appArchive = Promise.resolve(call('preferences', { archivedSessionIds: ['app-1'] }))
+      throw new Error('MSP -32000: queue closed')
+    })
+    await call('schedule-run', id)
+    await appArchive
+    const saved = events.filter((event) => event.type === 'preferences').at(-1)
+    expect(saved?.type === 'preferences' && saved.preferences.archivedSessionIds).toEqual([
+      'app-1',
+      'run-2',
+    ])
+    errors.mockRestore()
+  })
+
+  it('a run waiting for a tool approval lets another task run, and says so once', async () => {
+    let waiting = true
+    const running = session({ activeTurnId: 't1', status: 'running' })
+    const muse = fakeMuse({
+      getSession: vi.fn(() => running),
+      getView: vi.fn((sessionId: string) => ({
+        ...view(session({ sessionId })),
+        approvals: waiting ? [{ approvalId: 'a1' } as SessionView['approvals'][number]] : [],
+      })),
+    })
+    const { call, id } = await trustedTask(muse)
+    await call('schedule-run', id)
+    await call('schedule-run', id)
+    expect(muse.send).toHaveBeenCalledTimes(2)
+    // Not waiting any more, and its turn runs: the second run holds the next one back.
+    waiting = false
+    await expect(call('schedule-run', id)).rejects.toThrow('Another scheduled task is running.')
+    const [entry] = (await call('schedule-list')) as {
+      history: { outcome: string; reason?: string }[]
+    }[]
+    expect(entry.history.filter((run) => run.reason === 'Waiting for your approval.')).toHaveLength(
+      1,
+    )
+  })
+
+  it('turns a failed store write into a plain sentence', async () => {
+    const project = await folder('project')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', project)
+    const saved = (await call('schedule-save', task(project))) as { schedule: { id: string } }
+    await rm(join(dir, 'data'), { recursive: true })
+    const plain = 'mMac could not save scheduled tasks.'
+    await expect(call('schedule-save', task(project))).rejects.toThrow(plain)
+    await expect(call('schedule-enabled', saved.schedule.id, false)).rejects.toThrow(plain)
+    await expect(call('schedule-remove', saved.schedule.id)).rejects.toThrow(plain)
+    await expect(call('schedule-save', task(project))).rejects.not.toThrow(/ENOENT|\.tmp/)
+  })
+
+  it('pauses and removes a task', async () => {
+    const project = await folder('project')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', project)
+    const saved = (await call('schedule-save', task(project))) as { schedule: { id: string } }
+    await call('schedule-enabled', saved.schedule.id, false)
+    const [paused] = (await call('schedule-list')) as { schedule: { enabled: boolean } }[]
+    expect(paused.schedule.enabled).toBe(false)
+    await expect(call('schedule-enabled', saved.schedule.id, 'no')).rejects.toThrow()
+    await call('schedule-remove', saved.schedule.id)
+    expect(await call('schedule-list')).toEqual([])
+    await expect(call('schedule-run', saved.schedule.id)).rejects.toThrow(
+      'This scheduled task no longer exists.',
+    )
+  })
+
+  it('keeps tasks in the data folder across a restart', async () => {
+    const project = await folder('project')
+    const first = harness()
+    await first.start()
+    await first.call('add-project', project)
+    await first.call('schedule-save', task(project))
+    await first.backend.stopScheduler()
+    const second = harness()
+    await second.start()
+    expect((await second.call('schedule-list')) as unknown[]).toHaveLength(1)
+  })
+
+  it('stops counting a run when the clock steps back', async () => {
+    let now = Date.parse('2026-10-21T08:00:00Z')
+    const muse = fakeMuse()
+    const project = await folder('project')
+    const h = harness(muse, [0], { scheduler: { timer: false, tz: 'UTC', now: () => now } })
+    await h.start()
+    await h.call('add-project', project)
+    await h.call('create', project)
+    const saved = (await h.call('schedule-save', task(project))) as { schedule: { id: string } }
+    await h.call('schedule-run', saved.schedule.id)
+    now -= 60_000
+    await h.call('schedule-run', saved.schedule.id)
+    expect(muse.send).toHaveBeenCalledTimes(2)
+  })
+
+  describe('with the minute timer', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('starts the timer after connect, and the quit path clears it', async () => {
+      const h = harness(fakeMuse(), [], { scheduler: { tz: 'UTC' } })
+      expect(vi.getTimerCount()).toBe(0)
+      await h.start()
+      expect(vi.getTimerCount()).toBe(1)
+      await h.backend.stopScheduler()
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('starts nothing after quit during a slow check, and still saves the check', async () => {
+      let now = Date.parse('2026-10-21T08:00:30Z')
+      let failCreate: (error: Error) => void = () => {}
+      const muse = fakeMuse()
+      const project = await folder('project')
+      const h = harness(muse, [0], { scheduler: { tz: 'UTC', now: () => now } })
+      await h.start()
+      await h.call('add-project', project)
+      await h.call('create', project)
+      await h.call('schedule-save', { ...task(project), name: 'First', preset: 'hourly' })
+      await h.call('schedule-save', { ...task(project), name: 'Second', preset: 'hourly' })
+      await h.backend.stopScheduler() // Let the start-up check and the saves finish.
+      vi.mocked(muse.create).mockClear()
+      vi.mocked(muse.create).mockImplementationOnce(
+        () => new Promise((_resolve, reject) => (failCreate = reject)),
+      )
+      // A second backend on the same data folder: its first check finds both tasks due.
+      const second = harness(muse, [], { scheduler: { tz: 'UTC', now: () => now } })
+      now = Date.parse('2026-10-21T09:00:30Z')
+      await second.start()
+      await vi.waitFor(() => expect(muse.create).toHaveBeenCalledTimes(1))
+      second.setQuitting()
+      const stopped = second.backend.stopScheduler()
+      failCreate(new Error('Muse closed.'))
+      await stopped
+      expect(muse.create).toHaveBeenCalledTimes(1)
+      const store = JSON.parse(await readFile(join(dir, 'data', 'schedules.json'), 'utf8')) as {
+        lastCheckedAt: number
+        schedules: { id: string; name: string }[]
+        history: Record<string, { reason?: string }[]>
+      }
+      expect(store.lastCheckedAt).toBe(now)
+      const later = store.schedules.find((schedule) => schedule.name === 'Second')!
+      expect(store.history[later.id].at(-1)?.reason).toBe(
+        'mMac could not start this scheduled task. mMac is quitting.',
+      )
+    })
+  })
+})
+
+describe('headless backend, M5b pull requests', () => {
+  afterEach(removeFakeGh)
+
+  it('asks before it merges, and merges only on Accept', async () => {
+    const project = await folder('project')
+    const env = await fakeGh({ 'pr merge': '' })
+    const accept = harness(fakeMuse(), [0], { ghEnv: env })
+    await accept.start()
+    await accept.call('add-project', project)
+    await expect(accept.call('pr-merge', project, 9)).resolves.toBe(true)
+    expect(accept.asks.at(-1)).toMatchObject({
+      title: 'Accept pull request 9?',
+      message:
+        'mMac merges it into its base branch with gh, as one squashed commit. GitHub keeps the branch.',
+      buttons: ['Accept', 'Cancel'],
+    })
+    const cancel = harness(fakeMuse(), [1], { ghEnv: env, dataFolder: 'data-cancel' })
+    await cancel.start()
+    await cancel.call('add-project', project)
+    await expect(cancel.call('pr-merge', project, 9)).resolves.toBe(false)
+    expect((await calls()).filter((args) => args[1] === 'merge')).toEqual([
+      ['pr', 'merge', '9', '--squash'],
+    ])
+  })
+
+  it('asks before it merges when ready, in the conversation’s folder', async () => {
+    const project = await folder('project')
+    const env = await fakeGh({ 'pr merge': '' })
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const { call, start, asks } = harness(muse, [0, 1], { ghEnv: env })
+    await start()
+    await call('add-project', project)
+    await expect(call('pr-merge-when-ready', 's1', 9)).resolves.toBe(true)
+    expect(asks.at(-1)).toMatchObject({
+      title: 'Merge pull request 9 when its checks pass?',
+      buttons: ['Merge when ready', 'Cancel'],
+    })
+    await expect(call('pr-merge-when-ready', 's1', 9)).resolves.toBe(false)
+    expect(await calls()).toEqual([['pr', 'merge', '9', '--auto', '--squash']])
+  })
+
+  it('reads a conversation’s PR in its own folder without a trust Ask', async () => {
+    const project = await folder('project')
+    const env = await fakeGh({ 'pr view': raw })
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const { call, start, asks } = harness(muse, [], { ghEnv: env })
+    await start()
+    await call('add-project', project)
+    const pr = (await call('pr-status', 's1')) as { number: number }
+    expect(pr.number).toBe(9)
+    expect(asks).toHaveLength(0)
+  })
+
+  it('lists a known project’s PRs, and refuses an unknown one before gh runs', async () => {
+    const project = await folder('project')
+    const env = await fakeGh({
+      'pr list': [raw],
+      'repo view': { nameWithOwner: 'o/r', defaultBranchRef: { name: 'main' } },
+    })
+    const { call, start } = harness(fakeMuse(), [], { ghEnv: env })
+    await start()
+    await expect(call('pr-list', project)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    await expect(call('pr-merge', project, 9)).rejects.toThrow(
+      'Choose this project using Open project first.',
+    )
+    await call('add-project', project)
+    const list = (await call('pr-list', project)) as { number: number }[]
+    expect(list.map((pr) => pr.number)).toEqual([9])
+    expect((await calls()).map((args) => args.slice(0, 2))).toEqual([
+      ['pr', 'list'],
+      ['repo', 'view'],
+    ])
+  })
+
+  it('refuses a PR number that is not a positive whole number', async () => {
+    const project = await folder('project')
+    const { call, start, asks } = harness(fakeMuse(), [0])
+    await start()
+    await call('add-project', project)
+    await expect(call('pr-merge', project, -1)).rejects.toThrow()
+    await expect(call('pr-merge', project, 1.5)).rejects.toThrow()
+    await expect(call('pr-merge', project, 2 ** 53)).rejects.toThrow()
+    await expect(call('pr-merge-when-ready', 's1', 2 ** 53)).rejects.toThrow()
+    expect(asks).toHaveLength(0)
+  })
+})
+
+// The M4b live run showed raw text: "ENOENT: … realpath '…/.muse/worktrees/…'" and
+// "session/compact command … rejected: compaction_unavailable". Each becomes a plain sentence.
+describe('headless backend, M4b plain errors', () => {
+  const GONE = 'This conversation’s worktree folder no longer exists.'
+  const message = { sessionId: 's1', text: 'hi', attachments: [], effort: 'high', mode: 'steer' }
+
+  it('refuses a send in a removed worktree with a plain sentence and sends nothing', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', '20261023-a695')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: worktree })) })
+    const { call, start } = harness(muse, [0])
+    await start()
+    const failure = call('send', message)
+    await expect(failure).rejects.toThrow(GONE)
+    await expect(failure).rejects.not.toThrow(/ENOENT|realpath|worktrees/)
+    expect(muse.send).not.toHaveBeenCalled()
+  })
+
+  it('shows the same sentence when the inspector reads a removed worktree', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    const { call, start } = harness()
+    await start()
+    await call('add-project', project)
+    await expect(call('git-status', worktree)).rejects.toThrow(GONE)
+    await expect(call('files', worktree, '')).rejects.toThrow(GONE)
+  })
+
+  it('says a missing file inside a live worktree is a missing file, not a removed worktree', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    await mkdir(worktree, { recursive: true })
+    const { call, start } = harness()
+    await start()
+    await call('add-project', project)
+    const failure = call('read-file', worktree, 'gone.txt')
+    await expect(failure).rejects.toThrow(/^This file no longer exists\.$/)
+  })
+
+  it('says a removed worktree root is gone when the conversation reads it', async () => {
+    const project = await folder('project')
+    const worktree = join(project, '.muse', 'worktrees', 'w1')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: worktree })) })
+    const { call, start } = harness(muse, [0])
+    await start()
+    await expect(call('compact', 's1')).rejects.toThrow(
+      /^This conversation’s worktree folder no longer exists\.$/,
+    )
+  })
+
+  it('logs the raw ENOENT text and the rejection reason, never showing them', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const project = await folder('project')
+      const worktree = join(project, '.muse', 'worktrees', 'w1')
+      const muse = fakeMuse({
+        getSession: vi.fn(() => session({ workspaceRoot: worktree })),
+        rename: vi.fn(async () => {
+          throw new Error('session/rename command abc rejected: some_new_reason')
+        }),
+      })
+      const { call, start } = harness(muse, [0])
+      await start()
+      await expect(call('compact', 's1')).rejects.toThrow('worktree folder no longer exists')
+      const lines = () => log.mock.calls.map((args) => args.join(' '))
+      expect(lines().some((line) => line.includes('ENOENT') && line.includes(worktree))).toBe(true)
+      muse.getSession = vi.fn(() => session({ workspaceRoot: project }))
+      await expect(call('rename', 's1', 'New name')).rejects.toThrow('Muse Code refused')
+      expect(lines().some((line) => line.includes('some_new_reason'))).toBe(true)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('says a missing project folder is gone, without its path', async () => {
+    const { call, start } = harness()
+    await start()
+    const failure = call('add-project', join(dir, 'missing'))
+    await expect(failure).rejects.toThrow('This folder no longer exists.')
+    await expect(failure).rejects.not.toThrow(/ENOENT|missing/)
+  })
+
+  it('turns a compaction refusal into a plain sentence', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse({
+      getSession: vi.fn(() => session({ workspaceRoot: project })),
+      compact: vi.fn(async () => {
+        throw new Error(
+          'session/compact command 0193a1b2-0000-7000-8000-000000000000 rejected: compaction_unavailable',
+        )
+      }),
+    })
+    const { call, start } = harness(muse, [0])
+    await start()
+    await expect(call('compact', 's1')).rejects.toThrow(
+      /^This model cannot compact the conversation\.$/,
+    )
+  })
+
+  it('turns any other command refusal into a plain sentence, without the code', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse({
+      getSession: vi.fn(() => session({ workspaceRoot: project })),
+      rename: vi.fn(async () => {
+        throw new Error('session/rename command abc rejected: some_new_reason')
+      }),
+    })
+    const { call, start } = harness(muse, [0])
+    await start()
+    const failure = call('rename', 's1', 'New name')
+    await expect(failure).rejects.toThrow(/^Muse Code refused this request\.$/)
+  })
+
+  it('keeps every other error as it was', async () => {
+    const project = await folder('project')
+    const muse = fakeMuse({
+      getSession: vi.fn(() => session({ workspaceRoot: project })),
+      send: vi.fn(async () => {
+        throw new Error('Muse rejected the message.')
+      }),
+    })
+    const { call, start } = harness(muse, [0])
+    await start()
+    await expect(call('send', message)).rejects.toThrow(/^Muse rejected the message\.$/)
   })
 })

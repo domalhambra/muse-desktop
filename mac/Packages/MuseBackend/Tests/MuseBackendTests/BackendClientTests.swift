@@ -9,14 +9,14 @@ private let viewJSON = #"""
 
 @Test func helloSendsTheProtocolNumber() async throws {
   let backend = ScriptedBackend { message in
-    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#] : []
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":3,"version":"0.2.0"}}"#] : []
   }
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
   let hello = try await client.hello()
-  #expect(hello.protocolVersion == 2)
+  #expect(hello.protocolVersion == 3)
   #expect(hello.version == "0.2.0")
-  #expect(backend.messages == [["id": 1, "method": "hello", "args": [2]]])
+  #expect(backend.messages == [["id": 1, "method": "hello", "args": [3]]])
 }
 
 @Test func aFailedReplyThrowsTheBackendMessage() async throws {
@@ -342,7 +342,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
     guard case .number(let number)? = message["id"] else { return [] }
     let id = Int(number)
     switch message["method"] {
-    case "hello": return [#"{"id":\#(id),"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#]
+    case "hello": return [#"{"id":\#(id),"ok":true,"value":{"protocol":3,"version":"0.2.0"}}"#]
     case "start": return [#"{"id":\#(id),"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#]
     default: return []
     }
@@ -354,7 +354,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
     startTimeout: .seconds(10))
   #expect(started.status.state == "ready")
   let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
-  #expect(sent == [["hello", [2]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
+  #expect(sent == [["hello", [3]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
 }
 
 @Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersHelloFailsTheHandshake() async throws {
@@ -372,7 +372,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
 
 @Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersStartFailsTheHandshake() async throws {
   let backend = ScriptedBackend { message in
-    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#] : []
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":3,"version":"0.2.0"}}"#] : []
   }
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
@@ -395,7 +395,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
 @Test(.timeLimit(.minutes(1))) func startHasItsOwnLimitAfterHello() async throws {
   // hello answers at once; start answers after hello's limit has passed but within its own.
   let backend = ScriptedBackend { message in
-    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":2,"version":"0.2.0"}}"#] : []
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":3,"version":"0.2.0"}}"#] : []
   }
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
@@ -440,4 +440,66 @@ private func waitFor(_ condition: () -> Bool) async throws {
   #expect(view.todos == [TodoItem(text: "Run the tests", status: "pending")])
   let old = try JSONDecoder().decode(SessionView.self, from: Data(viewJSON.utf8))
   #expect(old.context == nil && old.todos == nil && old.session.approvalMode == nil)
+}
+
+@Test func usageChangedDecodesLimitsAndNull() throws {
+  let limits = #"{"type":"usage-changed","limits":{"observedAt":1800000000000,"tier":"pro","window":{"usedPercent":112,"resetsAt":1800000600000,"minutes":300},"weekly":{"usedPercent":18,"resetsAt":1800400000000}}}"#
+  let event = try JSONDecoder().decode(AppEvent.self, from: Data(limits.utf8))
+  guard case .usageChanged(let value?) = event else { Issue.record("not usageChanged"); return }
+  #expect(value.window.usedPercent == 112 && value.window.minutes == 300 && value.weekly.usedPercent == 18)
+  let none = try JSONDecoder().decode(AppEvent.self, from: Data(#"{"type":"usage-changed","limits":null}"#.utf8))
+  #expect(none == .usageChanged(nil))
+}
+
+@Test(.timeLimit(.minutes(1))) func usageSendsTheMethodAndReadsLimitsAndNull() async throws {
+  // The first usage call is id 1 and gets limits; the second is id 2 and gets null.
+  let backend = ScriptedBackend { message in
+    guard message["method"] == "usage" else { return [] }
+    if message["id"] == 1 {
+      return [#"{"id":1,"ok":true,"value":{"observedAt":1800000000000,"tier":"pro","window":{"usedPercent":42,"resetsAt":1800000600000,"minutes":300},"weekly":{"usedPercent":18,"resetsAt":1800400000000}}}"#]
+    }
+    return [#"{"id":2,"ok":true,"value":null}"#]
+  }
+  let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
+  await client.run()
+  let limits = try await client.usage()
+  #expect(limits?.observedAt == 1_800_000_000_000)
+  #expect(limits?.tier == "pro")
+  #expect(limits?.window.usedPercent == 42 && limits?.window.minutes == 300)
+  #expect(limits?.weekly.usedPercent == 18)
+  let none = try await client.usage()
+  #expect(none == nil)
+  #expect(backend.messages.first == ["id": 1, "method": "usage", "args": []])
+}
+
+@Test func quotaStopAndCostDecodeOnASessionView() throws {
+  let json = #"{"session":{"sessionId":"s","updatedAt":"x","status":"idle","activeTurnId":null},"items":[],"approvals":[],"questions":[],"cost":{"usd":0.84,"partial":true},"quota":{"kind":"tierLimit","resetsAt":1800000600000}}"#
+  let view = try JSONDecoder().decode(SessionView.self, from: Data(json.utf8))
+  #expect(view.cost == SessionCost(usd: 0.84, partial: true))
+  #expect(view.quota == QuotaStop(kind: "tierLimit", resetsAt: 1_800_000_600_000))
+  let old = try JSONDecoder().decode(SessionView.self, from: Data(viewJSON.utf8))
+  #expect(old.cost == nil && old.quota == nil)
+}
+
+@Test func aScheduleEntryAndItsEventsDecode() throws {
+  let json = #"{"schedule":{"id":"a","name":"Morning review","prompt":"Review.","folder":"/p","preset":"daily","minute":0,"hour":9,"weekday":1,"approvalMode":"onRequest","modelId":null,"worktree":false,"enabled":true,"createdAt":1},"nextRunAt":1800000000000,"history":[{"at":2,"scheduledFor":null,"outcome":"skipped","reason":"Another scheduled task was running."}]}"#
+  let entry = try JSONDecoder().decode(ScheduleEntry.self, from: Data(json.utf8))
+  #expect(entry.schedule.preset == "daily" && entry.nextRunAt == 1_800_000_000_000)
+  #expect(entry.history.first?.reason == "Another scheduled task was running.")
+  let started = try JSONDecoder().decode(AppEvent.self, from: Data(#"{"type":"schedule-run-started","scheduleId":"a","name":"Morning review","sessionId":"s"}"#.utf8))
+  #expect(started == .scheduleRunStarted(scheduleId: "a", name: "Morning review", sessionId: "s"))
+  let changed = try JSONDecoder().decode(AppEvent.self, from: Data(#"{"type":"schedules-changed"}"#.utf8))
+  #expect(changed == .schedulesChanged)
+}
+
+@Test func aNewScheduleInputLeavesOutItsId() throws {
+  let input = ScheduleInput(name: "N", prompt: "P", folder: "/p", preset: "manual", minute: 0, hour: 9, weekday: 1, approvalMode: "onRequest")
+  guard case .object(let object) = try JSONValue(encoding: input) else { Issue.record("not an object"); return }
+  #expect(object["id"] == nil && object["name"] == .string("N") && object["worktree"] == .bool(false))
+}
+
+@Test func aPullRequestDecodesWithItsChecks() throws {
+  let json = #"{"number":9,"title":"Usage","url":"https://github.com/o/r/pull/9","state":"OPEN","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"main","headRefName":"usage","mergedAt":null,"checks":[{"name":"check","state":"failing"}],"body":"","files":["docs/a.md"],"live":false}"#
+  let pr = try JSONDecoder().decode(PullRequest.self, from: Data(json.utf8))
+  #expect(pr.number == 9 && pr.checks == [PullRequestCheck(name: "check", state: "failing")] && pr.files == ["docs/a.md"])
 }

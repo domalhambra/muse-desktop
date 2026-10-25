@@ -42,7 +42,11 @@ import { projectRoot, worktreeParent } from '../shared/worktree'
 import { Attachments } from './attachments'
 import { Bridges, type BridgeFactories } from './bridges'
 import { exportMarkdown, exportTitle } from './export'
+import { MissingFolder, plainError, realFolder } from './plain-errors'
+import { prList, prMerge, prMergeWhenReady, prStatus } from './pull-request'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
+import { Scheduler, StartFailed } from './schedule'
+import type { Schedule } from './schedule-rules'
 import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
@@ -78,6 +82,7 @@ export type Muse = Pick<
   | 'readOutput'
   | 'listWorktrees'
   | 'configDir'
+  | 'limits'
 >
 
 export type BackendDeps = {
@@ -98,6 +103,12 @@ export type BackendDeps = {
   bridgeFactories?: BridgeFactories
   /** Runs `muse voice transcribe`. Tests pass a fake; the default is src/main/voice.ts's. */
   voice?: { transcribe(data: Buffer, cliPath: string): Promise<string>; cancel(): Promise<void> }
+  /** Scheduled tasks. Tests pass `{ timer: false }` and call the methods; the default ticks every minute. */
+  scheduler?: { timer?: boolean; now?: () => number; tz?: string }
+  /** The environment gh runs in. Tests point PATH at a fake gh; the default is the backend's. */
+  ghEnv?: NodeJS.ProcessEnv
+  /** Folders added to gh's PATH. Tests pass [] so the real gh is never found; the default is Homebrew's. */
+  ghFolders?: string[]
 }
 
 export function createBackend({
@@ -111,6 +122,9 @@ export function createBackend({
   agent,
   bridgeFactories,
   voice = new VoiceTranscriber(),
+  scheduler: schedulerOptions = {},
+  ghEnv,
+  ghFolders,
 }: BackendDeps) {
   const id = z.string().min(1).max(200)
   const pathSchema = z.string().min(1).max(4096)
@@ -121,6 +135,7 @@ export function createBackend({
   let preferencePath = ''
   let preferenceWrites: Promise<void> = Promise.resolve()
   let bridges: Bridges | undefined
+  let scheduler: Scheduler | undefined
   // Files chosen for the next message. Memory only, as in Electron.
   const attachments = new Attachments()
 
@@ -131,7 +146,12 @@ export function createBackend({
       if (name !== 'hello' && !greeted) throw new Error('Send hello first.')
       if (!['hello', 'start', 'shutdown'].includes(name) && !preferences)
         throw new Error('Send start first.')
-      return action(...args)
+      try {
+        return await action(...args)
+      } catch (error) {
+        // Raw fs text and Muse's rejection codes become plain sentences: ./plain-errors.ts.
+        throw plainError(error)
+      }
     })
   }
 
@@ -140,8 +160,17 @@ export function createBackend({
     return preferences
   }
 
-  async function savePreferences(patch: Partial<Preferences>) {
+  /**
+   * Queues one write. A function patch is built from the preferences when the write runs, after
+   * every earlier queued write, so a read-modify-write cannot erase one of them.
+   */
+  async function savePreferences(
+    change: Partial<Preferences> | ((preferences: Preferences) => Partial<Preferences>),
+  ) {
     const write = preferenceWrites.then(async () => {
+      const patch = typeof change === 'function' ? change(current()) : change
+      // An empty patch changes nothing: no write, no event.
+      if (Object.keys(patch).length === 0) return current()
       const snapshot = preferencesSchema.parse({ ...current(), ...patch })
       await writePreferences(preferencePath, snapshot)
       preferences = snapshot
@@ -157,7 +186,7 @@ export function createBackend({
   }
 
   async function knownProject(value: unknown) {
-    const project = await realpath(pathSchema.parse(value))
+    const project = await realFolder(pathSchema.parse(value))
     const resolvedRecent = await Promise.all(
       current().recentProjects.map(async (entry) => {
         try {
@@ -187,15 +216,153 @@ export function createBackend({
       buttons: ['Trust project', 'Cancel'],
     })
     if (choice !== 0) throw new Error('Project trust was cancelled. No session was started.')
-    await savePreferences({ trustedProjects: [...current().trustedProjects, project] })
+    await savePreferences(({ trustedProjects }) =>
+      trustedProjects.includes(project) ? {} : { trustedProjects: [...trustedProjects, project] },
+    )
   }
 
   async function sessionProject(sessionId: string) {
     const session = muse.getSession(sessionId)
     if (!session.workspaceRoot) throw new Error('This conversation has no project folder.')
-    const project = await realpath(session.workspaceRoot)
+    const project = await realFolder(session.workspaceRoot)
     await trustProject(project)
     return project
+  }
+
+  // Scheduled runs whose turn mMac has not yet seen start: send returns before turn/started
+  // arrives, and the Scheduler asks isRunning right after start returns. Each entry keeps the
+  // session's updatedAt from before the send (turn/completed moves it) and when it started.
+  const scheduledTurns = new Map<string, { updatedAt: string; since: number }>()
+  const TURN_START_LIMIT = 10 * 60_000
+  const schedulerNow = () => (schedulerOptions.now ?? Date.now)()
+  /** A Node file error (it would name a path) rather than a sentence for the person. */
+  const systemError = (error: unknown) =>
+    typeof (error as { code?: unknown } | null)?.code === 'string' &&
+    /^E[A-Z]+$/.test((error as { code: string }).code)
+
+  const START_FAILED = 'mMac could not start this scheduled task.'
+  /** A reason the person can act on, shown after START_FAILED. */
+  class StartProblem extends Error {}
+
+  /** The mode or the prompt failed after create: the conversation exists but holds no prompt. */
+  class CreatedThenFailed extends Error {
+    constructor(
+      readonly sessionId: string,
+      override readonly cause: unknown,
+    ) {
+      super('created then failed')
+    }
+  }
+
+  /**
+   * A scheduled run: no Ask, so the folder must already be trusted. History shows START_FAILED,
+   * with a plain reason where one is known; Muse's own text goes to stderr only.
+   */
+  async function startScheduled(schedule: Schedule) {
+    try {
+      return await startScheduledRun(schedule)
+    } catch (error) {
+      if (error instanceof StartProblem) throw new Error(`${START_FAILED} ${error.message}`)
+      const cause = error instanceof CreatedThenFailed ? error.cause : error
+      console.error(
+        `mMac could not start scheduled task ${schedule.id}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      )
+      if (error instanceof CreatedThenFailed) {
+        await archiveFailedRun(error.sessionId)
+        throw new StartFailed(START_FAILED, error.sessionId)
+      }
+      throw new Error(START_FAILED)
+    }
+  }
+
+  /**
+   * Archives a scheduled run's empty conversation as the app's Archive does, through the
+   * preferences, so it leaves the sidebar but the history can still open it.
+   */
+  async function archiveFailedRun(sessionId: string) {
+    await savePreferences(({ archivedSessionIds: archived }) => ({
+      archivedSessionIds: archived.includes(sessionId) ? archived : [...archived, sessionId],
+    })).catch((error: unknown) =>
+      console.error(
+        `mMac could not archive scheduled conversation ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    )
+  }
+
+  async function startScheduledRun(schedule: Schedule) {
+    if (quitting()) throw new StartProblem('mMac is quitting.')
+    const folder = await knownProject(schedule.folder).catch((error: unknown) => {
+      // knownProject's own refusal is already a sentence; a Node error would name a path. A
+      // missing folder keeps this task's own sentence, not realFolder's general one.
+      throw new StartProblem(
+        systemError(error) || error instanceof MissingFolder
+          ? 'The folder for this task no longer exists, or mMac cannot open it.'
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      )
+    })
+    const trusted = current().trustedProjects
+    if (!trusted.includes(folder) && !trusted.includes(projectRoot(folder)))
+      throw new StartProblem(
+        'The folder is not trusted in mMac. Open it and send a message there first.',
+      )
+    const view = await muse.create(folder, schedule.modelId ?? undefined, {
+      worktree: schedule.worktree,
+    })
+    const sessionId = view.session.sessionId
+    try {
+      await muse.setApprovalMode(sessionId, schedule.approvalMode)
+      scheduledTurns.set(sessionId, { updatedAt: view.session.updatedAt, since: schedulerNow() })
+      await muse.send(
+        sessionId,
+        [{ type: 'text', text: schedule.prompt }],
+        current().reasoningEffort,
+        'queue',
+        schedule.prompt,
+      )
+    } catch (error) {
+      scheduledTurns.delete(sessionId)
+      throw new CreatedThenFailed(sessionId, error)
+    }
+    return sessionId
+  }
+
+  /** True while the session waits for the person: a tool approval or a question. */
+  function scheduledWaiting(sessionId: string) {
+    try {
+      const view = muse.getView(sessionId)
+      return view.approvals.length > 0 || view.questions.length > 0
+    } catch {
+      return false
+    }
+  }
+
+  /** True while the turn runs, or was sent and has not yet started. A gone session is not. */
+  function scheduledRunning(sessionId: string) {
+    let session
+    try {
+      session = muse.getSession(sessionId)
+    } catch {
+      scheduledTurns.delete(sessionId)
+      return false
+    }
+    if (session.activeTurnId != null || session.status === 'running') {
+      scheduledTurns.delete(sessionId)
+      return true
+    }
+    const waiting = scheduledTurns.get(sessionId)
+    // A clock that stepped back makes the wait negative: count that as expired too.
+    const waited = waiting ? schedulerNow() - waiting.since : -1
+    if (
+      waiting &&
+      session.updatedAt === waiting.updatedAt &&
+      waited >= 0 &&
+      waited < TURN_START_LIMIT
+    )
+      return true
+    scheduledTurns.delete(sessionId)
+    return false
   }
 
   method('hello', (value) => {
@@ -222,6 +389,16 @@ export function createBackend({
       await mkdir(dataFolder, { recursive: true, mode: 0o700 })
       preferencePath = join(dataFolder, 'preferences.json')
       preferences = await readPreferences(preferencePath)
+      scheduler = new Scheduler({
+        file: join(dataFolder, 'schedules.json'),
+        now: schedulerOptions.now,
+        tz: schedulerOptions.tz,
+        start: startScheduled,
+        isRunning: scheduledRunning,
+        isWaiting: scheduledWaiting,
+        emit,
+      })
+      await scheduler.load()
       if (agent) {
         // Bridges: other agents drive Muse Code through mMac, limited to projects mMac
         // already knows and trusts, as in src/main/index.ts.
@@ -249,6 +426,7 @@ export function createBackend({
     if (quitting()) throw new Error('The backend is quitting.')
     const status = await muse.connect(preferences.cliPath)
     await bridges?.sync() // As Electron does, after the first connect.
+    if (schedulerOptions.timer !== false && !quitting()) scheduler?.start()
     return { preferences, status }
   })
 
@@ -269,14 +447,18 @@ export function createBackend({
   })
 
   method('add-project', async (value) => {
-    const project = await realpath(pathSchema.parse(value))
+    const project = await realFolder(pathSchema.parse(value))
     if (!(await stat(project)).isDirectory()) throw new Error('Choose a folder, not a file.')
-    await savePreferences({
-      recentProjects: [
-        project,
-        ...current().recentProjects.filter((entry) => entry !== project),
-      ].slice(0, 30),
-    })
+    await savePreferences(({ recentProjects }) =>
+      recentProjects[0] === project
+        ? {}
+        : {
+            recentProjects: [project, ...recentProjects.filter((entry) => entry !== project)].slice(
+              0,
+              30,
+            ),
+          },
+    )
     return project
   })
 
@@ -300,14 +482,12 @@ export function createBackend({
         }
       }),
     )
-    const recentProjects = [
-      ...new Set([
-        ...current().recentProjects,
-        ...discovered.filter((root): root is string => root !== null),
-      ]),
-    ].slice(0, 30)
-    if (recentProjects.length !== current().recentProjects.length)
-      await savePreferences({ recentProjects })
+    const found = discovered.filter((root): root is string => root !== null)
+    if (found.length > 0)
+      await savePreferences(({ recentProjects }) => {
+        const next = [...new Set([...recentProjects, ...found])].slice(0, 30)
+        return next.length === recentProjects.length ? {} : { recentProjects: next }
+      })
     return result
   })
 
@@ -323,8 +503,12 @@ export function createBackend({
     const view = await muse.open(id.parse(value))
     // Record a worktree session's parent project, not each worktree folder.
     const root = view.session.workspaceRoot && projectRoot(view.session.workspaceRoot)
-    if (root && !current().recentProjects.includes(root))
-      await savePreferences({ recentProjects: [root, ...current().recentProjects].slice(0, 30) })
+    if (root)
+      await savePreferences(({ recentProjects }) =>
+        recentProjects.includes(root)
+          ? {}
+          : { recentProjects: [root, ...recentProjects].slice(0, 30) },
+      )
     return view
   })
 
@@ -405,6 +589,40 @@ export function createBackend({
     await sessionProject(sessionId)
     return muse.runShell(sessionId, z.string().min(1).max(10000).parse(command))
   })
+
+  // The subscription's limits as Muse last observed them; `usage-changed` carries each new value.
+  method('usage', () => muse.limits)
+
+  // Scheduled tasks, as Desktop's Scheduled page. src/headless/schedule.ts keeps them.
+  function schedules() {
+    if (!scheduler) throw new Error('Send start first.')
+    return scheduler
+  }
+  /** A failed store write names a temporary file; the person sees a sentence instead. */
+  async function plainly<T>(action: () => Promise<T>) {
+    try {
+      return await action()
+    } catch (error) {
+      if (systemError(error)) throw new Error('mMac could not save scheduled tasks.')
+      throw error
+    }
+  }
+
+  method('schedule-list', () => schedules().list())
+
+  method('schedule-save', async (value) => {
+    const input = z.object({ folder: pathSchema }).passthrough().parse(value)
+    await knownProject(input.folder)
+    return plainly(() => schedules().save(value))
+  })
+
+  method('schedule-remove', (value) => plainly(() => schedules().remove(id.parse(value))))
+
+  method('schedule-run', (value) => plainly(() => schedules().runNow(id.parse(value))))
+
+  method('schedule-enabled', (value, enabled) =>
+    plainly(() => schedules().setEnabled(id.parse(value), z.boolean().parse(enabled))),
+  )
 
   method('approve', async (session, approval, choice) => {
     const sessionId = id.parse(session)
@@ -500,7 +718,7 @@ export function createBackend({
 
   method('worktree-remove', async (project, path) => {
     const root = projectRoot(await knownProject(project))
-    const target = await realpath(pathSchema.parse(path))
+    const target = await realFolder(pathSchema.parse(path))
     const entry = (await muse.listWorktrees(root)).find((worktree) => worktree.path === target)
     const busy = entry?.sessionIds.some((sessionId) => {
       try {
@@ -522,6 +740,49 @@ export function createBackend({
   method('cli-terminal', async (project) =>
     openTerminal(terminalCommand(await knownProject(project), muse.status.path || 'muse', [])),
   )
+
+  // The PR monitor and the change cards, through gh. Reads need no trust Ask; merges ask first.
+  const gh = { env: ghEnv, folders: ghFolders }
+  const prNumber = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
+
+  async function conversationFolder(sessionId: string) {
+    const root = muse.getSession(sessionId).workspaceRoot
+    if (!root) throw new Error('This conversation has no project folder.')
+    return knownProject(root)
+  }
+
+  method('pr-status', async (session) => prStatus(await conversationFolder(id.parse(session)), gh))
+
+  method('pr-list', async (project) => prList(await knownProject(project), gh))
+
+  method('pr-merge', async (project, value) => {
+    const folder = await knownProject(project)
+    const number = prNumber.parse(value)
+    const choice = await ask({
+      kind: 'confirm',
+      title: `Accept pull request ${number}?`,
+      message:
+        'mMac merges it into its base branch with gh, as one squashed commit. GitHub keeps the branch.',
+      buttons: ['Accept', 'Cancel'],
+    })
+    if (choice !== 0) return false
+    await prMerge(folder, number, gh)
+    return true
+  })
+
+  method('pr-merge-when-ready', async (session, value) => {
+    const folder = await conversationFolder(id.parse(session))
+    const number = prNumber.parse(value)
+    const choice = await ask({
+      kind: 'confirm',
+      title: `Merge pull request ${number} when its checks pass?`,
+      message: 'GitHub merges it as one squashed commit once every required check passes.',
+      buttons: ['Merge when ready', 'Cancel'],
+    })
+    if (choice !== 0) return false
+    await prMergeWhenReady(folder, number, gh)
+    return true
+  })
 
   // MCP servers, as src/main/index.ts registers them: direct edits of Muse's settings.json.
   const mcpFile = () => settingsFile(muse.configDir())
@@ -685,5 +946,10 @@ export function createBackend({
     stopBridges: () => bridges?.stop() ?? Promise.resolve(),
     /** Cancels a transcription in progress: the quit path. */
     stopVoice: () => cancelVoice(),
+    /** Stops the scheduled tasks' timer and settles after the check and write in progress: the quit path. */
+    stopScheduler: () => {
+      scheduler?.stop()
+      return scheduler?.idle() ?? Promise.resolve()
+    },
   }
 }

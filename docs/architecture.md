@@ -12,6 +12,8 @@ flowchart LR
     Backend --> Files[Selected project files and Git]
     Backend --> Preferences[mMac preferences]
     Backend --> MuseConfig[Muse settings.json and trust.json]
+    Backend --> Schedules[schedules.json in the data folder]
+    Backend -->|gh, with its own sign-in| GitHub[GitHub CLI]
     App --> Keychain[Bridge token in the login Keychain]
     Agent[Other agent] -->|Markdown files| FileBridge[Folder bridge]
     Agent -->|MCP over localhost HTTP| McpBridge[MCP bridge]
@@ -42,6 +44,15 @@ mMac exposes Muse Code features instead of building its own where the CLI has on
 - Worktrees: `'session/start'` with `worktree: { mode: 'create' }` makes Muse create `<project>/.muse/worktrees/<name>` on a `muse/session-<id>` branch and exclude the folder in `.git/info/exclude`. `'worktree/list'` feeds the inspector. `worktrees.ts` adds only merge and remove, limited to paths under `<project>/.muse/worktrees/`. Muse requires the repository in its `~/.config/muse/trust.json`, so `MuseHost.create` records it there through `muse-config.ts` before every worktree session, from the window or a bridge. `src/shared/worktree.ts` maps a worktree path to its project, so trust, recent projects and sidebar grouping treat a worktree as part of its project.
 - MCP servers: Muse 1.4.11 has no MSP method that writes MCP entries, and `'mcpServer/list'` returns no rows from `muse serve`. `mcp-config.ts` edits the `mcpServers` entries in Muse's `~/.config/muse/settings.json` one at a time and keeps every other key. OAuth sign-in runs `muse mcp login <name>` in Terminal. Changes apply when mMac reconnects to Muse.
 - Diff review: Muse has no revert method, so `git.ts` reverts hunks and files with Git.
+- Usage and limits: `muse-host.ts` reads `'usage/read'` at connect and folds `'usage/changed'` into one connection-wide `limits` value. It also keeps `cumulative.cost` from `'session/tokenUsage'` and `error.quota` from `'turn/completed'`. A CLI without `'usage/read'` keeps `limits` null, and the sidebar footer stays hidden.
+
+## Scheduled tasks and the PR monitor
+
+M5b added two backend modules. Neither touches `src/main/`.
+
+`src/headless/schedule.ts` holds the `Scheduler`. It keeps the tasks and their history in `<data folder>/schedules.json`, written to a temporary file with mode 600 and renamed over the store. A timer checks every minute while mMac runs. A due task creates a conversation with its model and worktree flag, sets its permission mode and sends its prompt. One scheduled run goes at a time; a task due during a run records a skip. The history keeps 50 runs per task. A scheduled run needs a folder that mMac already trusts, because nobody is there to answer a trust Ask; an untrusted folder records a failed run. The quit path stops the timer and waits for the check in progress (`stopScheduler` in `src/headless/backend.ts`). `src/headless/schedule-rules.ts` holds the pure timing: preset to cron, the cron check, `dueTime` and `nextRun`. They compute on the Mac's wall clock, with `cron-parser` for the cron fields, so a daylight-saving change neither skips nor doubles a run. Catch-up after a sleep or a restart is the same rule as a normal tick: the latest due time after the last check, no older than seven days.
+
+`src/headless/pull-request.ts` reads and merges pull requests through the GitHub CLI, `gh`. mMac never calls GitHub itself: `gh` holds the person's sign-in. `gh` runs with the backend's `PATH` plus `/opt/homebrew/bin` and `/usr/local/bin`. A merged PR is Live when its base is the repository's default branch, or when GitHub has a successful deployment of its merge commit; only the five newest merged PRs get the deployment lookup. Accept (`pr-merge`) and Merge when ready (`pr-merge-when-ready`) ask in the backend before they merge.
 
 ## Bridges
 
@@ -52,7 +63,8 @@ mMac exposes Muse Code features instead of building its own where the CLI has on
 ## State ownership
 
 - CLI: authentication, tools, approval policies, model configuration, MCP server entries, workspace trust for worktrees, worktrees, durable conversations, and output blobs.
-- The backend (`src/headless/` over the core): trusted projects, recent projects, appearance, pins, archives, bridge switches and port, bridge jobs in memory, the bridge token in memory, temporary attachment handles, session views, and file and Git previews and edits.
+- The backend (`src/headless/` over the core): trusted projects, recent projects, appearance, pins, archives, bridge switches and port, bridge jobs in memory, the bridge token in memory, temporary attachment handles, session views, file and Git previews and edits, and the scheduled tasks with their history.
+- GitHub CLI: the GitHub sign-in, and every pull request read and merge.
 - mMac: windows, menus, native panels, alerts and notifications, the Settings window, the bridge token in the login Keychain, the microphone, and unsent drafts and attachment chips in memory.
 
 No transcript mirror, credential database, or telemetry service is introduced. Pending approval cards carry the current requirement token, including staged requirements. Server labels and choices remain authoritative.
@@ -64,6 +76,8 @@ Unit coverage checks file containment, symlink rejection, binary and size limits
 These checks do not replace testing authenticated model tool execution.
 
 M5a (2026-10-23): the backend speaks protocol 2 and has 47 methods (`set-approval-mode`, `side-chat` and `shell` joined in M5a); each has a Swift call. The unit tests pin them. M5a's UI test drives `!echo hi` through the composer's `!` escape, a real file:// preview, a pasteboard round trip, and a subagent session opened in a sheet, then restores the pasteboard. The inspector is six tabs: Changes, Files, Activity, Tasks, Agents and Preview. The Preview tab holds scripts and bot checks, local pages, and input forms in its `WKWebView`; the side chat and child sheets are read-only.
+
+M5b (2026-10-24): the backend speaks protocol 3 and has 57 methods. `usage`, the five `schedule-*` methods and the four `pr-*` methods joined in M5b; each has a Swift call. Three events joined: `usage-changed`, `schedule-run-started` and `schedules-changed`. `tests/unit/headless-schedule-rules.test.ts` and `tests/unit/headless-schedule.test.ts` cover the scheduled tasks with a fake clock, daylight-saving changes in several zones included. `tests/unit/headless-pull-request.test.ts` covers the PR monitor with a fake `gh` (`tests/unit/fake-gh.ts`): no test runs the real `gh` or reaches GitHub. M5b's UI test, `testM5bAgainstTheFakeBackend`, builds; its runs wait for the end of the build.
 
 ## Size
 
@@ -123,6 +137,28 @@ M5a added these files. The Test column names the unit test, or says that M4b add
 | `src/shared/voice.ts`          | WAV encoding limits and the encoder                                                                     | `tests/unit/voice.test.ts`          |
 | `src/shared/worktree.ts`       | Mapping a worktree path to its project                                                                  | `tests/unit/worktrees.test.ts`      |
 
+### M5b's files
+
+M5b added these files. The UI test for the views is `testM5bAgainstTheFakeBackend`, which builds but has not run yet.
+
+| File                                                               | Owns                                                                                                                                                                                               | Test                                                                              |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `src/headless/schedule.ts`                                         | The `Scheduler`: `<data folder>/schedules.json`, the minute timer, one run at a time, skips, failures, the history and the quit path                                                               | `tests/unit/headless-schedule.test.ts`, `tests/unit/headless-backend.test.ts`     |
+| `src/headless/schedule-rules.ts`                                   | The schedule's shape, preset to cron, the cron check (the minute is one number), `dueTime` and `nextRun` on the wall clock                                                                         | `tests/unit/headless-schedule-rules.test.ts`                                      |
+| `src/headless/pull-request.ts`                                     | `gh` calls: the conversation's PR, the project's PRs, Live, merge and merge when ready. The `gh` error messages                                                                                    | `tests/unit/headless-pull-request.test.ts`, `tests/unit/headless-backend.test.ts` |
+| `tests/unit/fake-gh.ts`                                            | The fake `gh` the tests put alone on `PATH`                                                                                                                                                        | —                                                                                 |
+| `mac/Packages/MuseKit/Sources/MuseKit/UsageRules.swift`            | The usage footer's text and levels, its popover, the reset text, the context card's tokens and cost line, and the stop banner                                                                      | `mac/Packages/MuseKit/Tests/MuseKitTests/UsageRulesTests.swift`                   |
+| `mac/Packages/MuseKit/Sources/MuseKit/ScheduleRules.swift`         | The Scheduled pane's words and checks, the next-run text and the finished notice. It formats `nextRunAt` and never computes a run time                                                             | `mac/Packages/MuseKit/Tests/MuseKitTests/ScheduleRulesTests.swift`                |
+| `mac/Packages/MuseKit/Sources/MuseKit/ChangeCardRules.swift`       | `PullRequestRules` (the checks summary, the poll pace, the Auto-fix prompt) and `ChangeCardRules` (the headline, the track, the risk light, dependencies, pictures, the owner, the Ask why prompt) | `mac/Packages/MuseKit/Tests/MuseKitTests/ChangeCardRulesTests.swift`              |
+| `mac/Packages/MuseKit/Sources/MuseKit/Workspace+Usage.swift`       | Reading the limits, without letting a late reply replace newer ones                                                                                                                                | `mac/Packages/MuseKit/Tests/MuseKitTests/WorkspaceUsageTests.swift`               |
+| `mac/Packages/MuseKit/Sources/MuseKit/Workspace+Schedules.swift`   | The task list and its reload guard, save, remove, Run now, the Active switch, and the scheduled run's finished notice                                                                              | `mac/Packages/MuseKit/Tests/MuseKitTests/WorkspaceSchedulesTests.swift`           |
+| `mac/Packages/MuseKit/Sources/MuseKit/Workspace+PullRequest.swift` | The open conversation's PR and its poll, the project's change cards, Accept, Merge when ready, Auto-fix and Ask why                                                                                | `mac/Packages/MuseKit/Tests/MuseKitTests/WorkspacePullRequestTests.swift`         |
+| `mac/mMac/UsageViews.swift`                                        | The sidebar's limits line and its popover                                                                                                                                                          | `testM5bAgainstTheFakeBackend`                                                    |
+| `mac/mMac/SchedulesPane.swift`                                     | Settings → Scheduled: the list, the form, Run now, the Active switch, the history and Delete                                                                                                       | `testM5bAgainstTheFakeBackend`                                                    |
+| `mac/mMac/ChangeCardViews.swift`                                   | The change card, its delivery track, and the Proposed changes sheet                                                                                                                                | `testM5bAgainstTheFakeBackend`                                                    |
+
+M5b also changed these app files: `mac/mMac/SidebarView.swift` (the Scheduled group, Proposed changes and the usage footer), `mac/mMac/ChangesView.swift` (the conversation's change card), `mac/mMac/SettingsView.swift` (the fifth pane), `mac/mMac/TranscriptViews.swift` (the stop banner), `mac/mMac/Notifications.swift` (the scheduled-task notice) and `mac/mMac/HelpSheet.swift` (the master-copy text).
+
 ### mMac's Settings files
 
 M3 added these Swift files. The rest of `mac/` is in the spec's units.
@@ -132,7 +168,7 @@ M3 added these Swift files. The rest of `mac/` is in the spec's units.
 | `mac/Packages/MuseKit/Sources/MuseKit/SettingsRules.swift`    | The Add server form, env and header pairs, the bridge port, the two themes and their palettes, text sizes, and the completion notice | `mac/Packages/MuseKit/Tests/MuseKitTests/SettingsRulesTests.swift`    |
 | `mac/Packages/MuseKit/Sources/MuseKit/SettingsModel.swift`    | The Settings store: MCP servers, bridge status, the token, and the errors Settings shows                                             | `mac/Packages/MuseKit/Tests/MuseKitTests/SettingsModelTests.swift`    |
 | `mac/Packages/MuseKit/Sources/MuseKit/BridgeTokenStore.swift` | The bridge token in the login Keychain, or in memory in Debug test runs                                                              | `mac/Packages/MuseKit/Tests/MuseKitTests/BridgeTokenStoreTests.swift` |
-| `mac/mMac/SettingsView.swift`                                 | The Settings window and its four panes                                                                                               | `testSettingsAgainstTheFakeBackend`                                   |
+| `mac/mMac/SettingsView.swift`                                 | The Settings window and its five panes                                                                                               | `testSettingsAgainstTheFakeBackend`                                   |
 | `mac/mMac/AppearancePane.swift`                               | Settings → Appearance: theme, text size, Reduce motion, completion notifications                                                     | `testSettingsAgainstTheFakeBackend`                                   |
 | `mac/mMac/MuseCodePane.swift`                                 | Settings → Muse Code: the connection, a custom path, Reconnect                                                                       | `testSettingsAgainstTheFakeBackend`                                   |
 | `mac/mMac/McpPane.swift`                                      | Settings → MCP servers and the Add server form                                                                                       | `testSettingsAgainstTheFakeBackend`                                   |

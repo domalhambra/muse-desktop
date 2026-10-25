@@ -189,6 +189,17 @@ export type Theme = Exclude<Preferences['theme'], 'system'>
 
 /** `session/contextUsage`: counted-once occupancy and the host's pressure level. `window` is absent when the model has no limit. */
 export type ContextUsage = { used: number; window?: number; pressure: string }
+/** `usage/read` and `usage/changed`: the subscription's rolling window and weekly block, as of `observedAt` (epoch ms). Percentages may exceed 100. */
+export type SubscriptionLimits = {
+  observedAt: number
+  tier: string
+  window: { usedPercent: number; resetsAt: number; minutes: number }
+  weekly: { usedPercent: number; resetsAt: number }
+}
+/** `cumulative.cost` of `session/tokenUsage`: an estimate. `partial` when a reply had no price. */
+export type SessionCost = { usd: number; partial: boolean }
+/** `TurnError.quota`: which limit stopped the turn, and when it resets (epoch ms). */
+export type QuotaStop = { kind: string; resetsAt: number }
 /** One todo of the agent's list, as `session/todoListChanged` carries it. */
 export const todoItemSchema = z.object({
   text: z.string(),
@@ -205,6 +216,8 @@ export type SessionView = {
   usage?: { input: number; output: number; total: number }
   context?: ContextUsage
   todos?: TodoItem[]
+  cost?: SessionCost
+  quota?: QuotaStop
   error?: string
   historyNotice?: string
 }
@@ -260,13 +273,39 @@ export type GitChange = { path: string; status: string; staged: boolean }
 export type GitStatus = { branch: string; changes: GitChange[]; isRepository: boolean }
 export type Attachment = { id: string; name: string; kind: 'image' | 'text'; size: number }
 export type ProjectFile = { name: string; path: string; directory: boolean }
+/** One CI check of a pull request, normalized from gh's statusCheckRollup. */
+export type PullRequestCheck = {
+  name: string
+  state: 'passing' | 'failing' | 'pending' | 'skipped'
+}
+/** A pull request as the PR monitor and the change cards use it. */
+export type PullRequest = {
+  number: number
+  title: string
+  url: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  isDraft: boolean
+  reviewDecision: string | null
+  /** gh's mergeStateStatus: CLEAN, HAS_HOOKS, UNSTABLE, BLOCKED, BEHIND, DIRTY, DRAFT or UNKNOWN. */
+  mergeState: string
+  baseRefName: string
+  headRefName: string
+  mergedAt: string | null
+  checks: PullRequestCheck[]
+  body: string
+  files: string[]
+  live: boolean
+}
 export type AppEvent =
   | { type: 'connection'; status: ConnectionStatus }
   | { type: 'session'; view: SessionView }
   | { type: 'sessions-changed' }
+  | { type: 'usage-changed'; limits: SubscriptionLimits | null }
   | { type: 'preferences'; preferences: Preferences }
   | { type: 'menu'; action: 'new' | 'open' | 'search' | 'settings' | 'sidebar' }
   | { type: 'error'; message: string }
+  | { type: 'schedule-run-started'; scheduleId: string; name: string; sessionId: string }
+  | { type: 'schedules-changed' }
 
 export const answerSchema = z.object({
   questionId: z.string(),

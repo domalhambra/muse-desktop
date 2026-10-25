@@ -14,6 +14,7 @@ import {
   type MuseSession,
   type QuestionAnswer,
   type SessionView,
+  type SubscriptionLimits,
   type TranscriptItem,
 } from '../shared/protocol'
 import { discoverCli } from './cli'
@@ -36,6 +37,31 @@ const pendingSchema = z.object({
   approvals: z.array(approvalSchema),
   userInputs: z.array(questionSchema),
 })
+/** `SubscriptionUsage` (msp.d.ts:2543), the payload of `usage/read` and `usage/changed`. */
+const subscriptionUsageSchema = z.object({
+  observedAtMs: z.number(),
+  tier: z.string(),
+  window: z.object({
+    usedPercent: z.number(),
+    resetsAtMs: z.number(),
+    windowDurationMins: z.number(),
+  }),
+  weekly: z.object({ usedPercent: z.number(), resetsAtMs: z.number() }),
+})
+
+function toLimits(value: unknown): SubscriptionLimits {
+  const usage = subscriptionUsageSchema.parse(value)
+  return {
+    observedAt: usage.observedAtMs,
+    tier: usage.tier,
+    window: {
+      usedPercent: usage.window.usedPercent,
+      resetsAt: usage.window.resetsAtMs,
+      minutes: usage.window.windowDurationMins,
+    },
+    weekly: { usedPercent: usage.weekly.usedPercent, resetsAt: usage.weekly.resetsAtMs },
+  }
+}
 
 type LiveSession = { view: SessionView; store: ItemStore<TranscriptItem>; loaded: boolean }
 
@@ -49,6 +75,8 @@ export class MuseHost {
   private closing = false
   private environment: NodeJS.ProcessEnv = process.env
   private experimental = false
+  /** The subscription's limits as Muse last observed them, or null before any observation. */
+  limits: SubscriptionLimits | null = null
 
   constructor(private emit: (event: AppEvent) => void) {}
 
@@ -63,6 +91,7 @@ export class MuseHost {
   private async start(cliPath: string): Promise<ConnectionStatus> {
     await this.close()
     this.closing = false
+    this.limits = null
     this.setStatus({ state: 'connecting' })
     let handshake: ReturnType<typeof spawnMspConnection> | undefined
     try {
@@ -137,6 +166,7 @@ export class MuseHost {
           ? 'This CLI has a different protocol revision. If a feature fails, check the compatibility guide.'
           : undefined,
       })
+      void this.readLimits()
     } catch (error) {
       if (handshake) await handshake.close()
       this.host = undefined
@@ -151,6 +181,23 @@ export class MuseHost {
   private setStatus(status: ConnectionStatus) {
     this.status = status
     this.emit({ type: 'connection', status })
+  }
+
+  /** `usage/read` (msp.d.ts:3030): omitted when Muse has observed nothing. A CLI without the method keeps null. */
+  private async readLimits() {
+    try {
+      const result = z
+        .object({ usage: z.unknown().optional() })
+        .parse(await this.connection.request('usage/read', {}))
+      if (result.usage === undefined) return
+      const next = toLimits(result.usage)
+      // A usage/changed that arrived while the read was in flight is newer: keep it.
+      if (this.limits && next.observedAt < this.limits.observedAt) return
+      this.limits = next
+      this.emit({ type: 'usage-changed', limits: this.limits })
+    } catch {
+      // An older CLI, or a read that failed: the footer stays hidden.
+    }
   }
 
   private get connection() {
@@ -565,6 +612,11 @@ export class MuseHost {
       this.emit({ type: 'sessions-changed' })
       return
     }
+    if (method === 'usage/changed') {
+      this.limits = toLimits(params)
+      this.emit({ type: 'usage-changed', limits: this.limits })
+      return
+    }
     const sessionId = typeof params.sessionId === 'string' ? params.sessionId : undefined
     if (!sessionId) return
     const live = this.sessions.get(sessionId)
@@ -586,8 +638,17 @@ export class MuseHost {
       live.view.session.activeTurnId = null
       live.view.session.status = 'idle'
       live.view.session.updatedAt = new Date().toISOString()
-      const error = z.object({ message: z.string() }).optional().parse(params.error)
+      const error = z
+        .object({
+          message: z.string(),
+          quota: z.object({ limitKind: z.string(), resetsAtMs: z.number() }).optional(),
+        })
+        .optional()
+        .parse(params.error)
       live.view.error = error?.message
+      live.view.quota = error?.quota
+        ? { kind: error.quota.limitKind, resetsAt: error.quota.resetsAtMs }
+        : undefined
       this.emit({ type: 'sessions-changed' })
     } else if (method === 'session/statusChanged') {
       live.view.session.status = z.string().parse(params.status)
@@ -622,13 +683,19 @@ export class MuseHost {
       )
     } else if (method === 'session/tokenUsage') {
       const usage = z
-        .object({ promptTokens: z.number(), outputTokens: z.number(), totalTokens: z.number() })
+        .object({
+          promptTokens: z.number(),
+          outputTokens: z.number(),
+          totalTokens: z.number(),
+          cost: z.object({ usd: z.number(), partial: z.boolean() }).optional(),
+        })
         .parse(params.cumulative)
       live.view.usage = {
         input: usage.promptTokens,
         output: usage.outputTokens,
         total: usage.totalTokens,
       }
+      live.view.cost = usage.cost
     } else if (method === 'session/contextUsage') {
       const usage = z
         .object({

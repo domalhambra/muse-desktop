@@ -25,6 +25,8 @@ struct FilesView: View {
         browser.frame(minHeight: 160)
         preview.frame(minHeight: 120)
       }
+      // The split view takes the inspector's width and never asks for more.
+      .frame(minWidth: 0, maxWidth: .infinity)
       // A returning tab lists its folder again, so a read cut short when it went away runs again.
       .task(id: workspace.project) { await inspector.open(directory: inspector.directory) }
     }

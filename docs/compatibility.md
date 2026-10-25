@@ -6,7 +6,7 @@ mMac needs macOS 15 or newer, Node.js 22.12 or newer on the login shell's PATH, 
 
 ## Supported workflows
 
-Automatic CLI discovery with the login-shell environment; a custom CLI path; session listing, reading, resuming, renaming and Markdown export; ⌘K search; local pins and archives; streamed messages and tool items; reasoning summaries; server-provided approval choices; agent questions; stop, queue and steer; model selection and reasoning effort; text and image attachments by the paperclip, a drop or a paste; `@` mentions of project files; composer commands; project file previews; Git status and diffs; diff review; worktree conversations; Finder, Terminal and full CLI handoff from the inspector; permission modes (Allow all, Prompt unmatched, On request, Deny unmatched); the `!` shell escape in the composer; side chat; the context gauge; the Tasks, Agents and Preview inspector tabs; the file context menu; Desktop's session shortcuts (⌘⇧] and ⌘⇧[, Esc to stop, ⌘;, ⌘/); the Muse and Moonlight themes, text size, Reduce motion and completion notifications; microphone recording and CLI voice transcription; MCP servers; both bridges.
+Automatic CLI discovery with the login-shell environment; a custom CLI path; session listing, reading, resuming, renaming and Markdown export; ⌘K search; local pins and archives; streamed messages and tool items; reasoning summaries; server-provided approval choices; agent questions; stop, queue and steer; model selection and reasoning effort; text and image attachments by the paperclip, a drop or a paste; `@` mentions of project files; composer commands; project file previews; Git status and diffs; diff review; worktree conversations; Finder, Terminal and full CLI handoff from the inspector; permission modes (Allow all, Prompt unmatched, On request, Deny unmatched); the `!` shell escape in the composer; side chat; the context gauge; the Tasks, Agents and Preview inspector tabs; the file context menu; Desktop's session shortcuts (⌘⇧] and ⌘⇧[, Esc to stop, ⌘;, ⌘/); the Muse and Moonlight themes, text size, Reduce motion and completion notifications; microphone recording and CLI voice transcription; MCP servers; both bridges; the conversation's tokens and estimated cost, and the 5-hour and weekly limits; local scheduled tasks; the PR monitor and change cards, with `gh`.
 
 ## Practical limits
 
@@ -35,6 +35,14 @@ Automatic CLI discovery with the login-shell environment; a custom CLI path; ses
 - The host folds `'session/approvalModeChanged'`, `'session/contextUsage'` (`usedTokens`, `windowTokens`, `pressure`) and `'session/todoListChanged'` (the whole list, replaced each time). A reopened conversation shows context and todos after the next event.
 - Subagent items carry `childSessionId`, `controlStatus` and `usage`; shell items carry `exitCode`; side chat items carry `sideSessionId`. All are optional: an older CLI's items still decode.
 
+## Usage, scheduled tasks and pull requests (M5b)
+
+- The host calls `'usage/read'` after the handshake and folds `'usage/changed'` (`SubscriptionUsage`: `observedAtMs`, `tier`, `window.usedPercent`, `window.resetsAtMs`, `window.windowDurationMins`, `weekly.usedPercent`, `weekly.resetsAtMs`). A CLI without the method, or a login that reports no usage, keeps the sidebar footer hidden. Whether Muse 1.4.12 reports usage for Dom's provider waits for the live run.
+- The `'session/tokenUsage'` fold keeps `cumulative.cost` (`usd`, `partial`). The `'turn/completed'` fold keeps `error.quota` (`limitKind`, `resetsAtMs`). `limitKind` has one value, `tierLimit`, so the stop banner tells the two limits apart by their reset times.
+- Scheduled tasks run only while mMac runs. They use cron-parser 5.10.2 for the cron fields, and compute run times on the Mac's wall clock. Lord Howe Island's 30-minute daylight-saving change is not tested.
+- The PR monitor needs the GitHub CLI, `gh`, installed and signed in (`gh auth login`). mMac looks for it on the backend's `PATH`, then in `/opt/homebrew/bin` and `/usr/local/bin`. It reads these fields with `gh pr view --json` and `gh pr list --json`: `number`, `title`, `url`, `state`, `isDraft`, `reviewDecision`, `mergeStateStatus`, `baseRefName`, `headRefName`, `mergedAt`, `mergeCommit`, `body`, `files` and `statusCheckRollup`. From `gh repo view --json` it reads `nameWithOwner` and `defaultBranchRef`. For Live it reads `gh api repos/<owner>/<repo>/deployments?sha=<merge commit>` and that deployment's `statuses`. Accept runs `gh pr merge --squash`; Merge when ready runs `gh pr merge --auto --squash`.
+- No test runs the real `gh`. A `gh` version that renames one of those fields shows "gh returned data mMac could not read."
+
 ## Voice
 
 The installed CLI must provide `muse voice transcribe <FILE>`. Option–V or the microphone button starts and stops recording, and Escape cancels. mMac records with AVAudioEngine and writes mono 16 kHz 16-bit PCM WAV to a private temporary file. The backend checks the file, passes the audio to that command with the discovered CLI environment, and deletes the file. A two-minute limit (the recorder stops at 119 seconds) and a ninety-second transcription timeout keep requests bounded. Audio may be sent to the service configured by Muse Code; this is not offline transcription.
@@ -42,6 +50,11 @@ The installed CLI must provide `muse voice transcribe <FILE>`. Option–V or the
 macOS asks for microphone access on first use. `mac/project.yml` sets `NSMicrophoneUsageDescription`. mMac is not sandboxed and has no hardened runtime, so it needs no audio-input entitlement. mMac is signed ad hoc, so macOS can ask again after a rebuild. Transcription appends to the draft without sending it.
 
 The WAV encoding, the voice states and the backend's calls have unit tests. The real microphone, the permission prompt and a real transcription wait for M4b's live run.
+
+## Runtime dependencies
+
+- cron-parser 5.10.2. Scheduled tasks' custom trigger and next run. A cron parser with tests is more code than the rest of scheduled tasks (parity spec).
+- The GitHub CLI, `gh`, for the PR monitor only. mMac does not install it. Without it, the Changes card shows how to install it.
 
 ## Diagnose a connection
 

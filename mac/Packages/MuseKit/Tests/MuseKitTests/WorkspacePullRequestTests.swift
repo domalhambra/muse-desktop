@@ -1,0 +1,263 @@
+import Foundation
+import MuseBackend
+import MuseBackendTesting
+import Testing
+@testable import MuseKit
+
+private let pr = #"{"number":9,"title":"Usage","url":"u","state":"OPEN","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"main","headRefName":"usage","mergedAt":null,"checks":[{"name":"e2e","state":"failing"}],"body":"","files":[],"live":false}"#
+
+@MainActor @Test func acceptMergesAfterTheAskAndReloads() async throws {
+  let lists = Counter()
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "pr-list": lists.next(); return [reply(id, "[\(pr)]")]
+    case "pr-merge": return [reply(id, "true")]
+    default: return [reply(id, "null")]
+    }
+  }
+  workspace.project = "/p"
+  await workspace.loadChangeCards()
+  #expect(workspace.changeCards.map(\.number) == [9])
+  await workspace.accept(workspace.changeCards[0])
+  #expect(requests(backend).contains([.string("pr-merge"), .array([.string("/p"), .number(9)])]))
+  #expect(lists.value == 2)
+  #expect(workspace.notice == "PR merged")
+}
+
+@MainActor @Test func aGhFailureStopsThePoll() async throws {
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    method == "pr-status"
+      ? [failure(id, "GitHub CLI is not signed in. Run gh auth login in Terminal.")] : [reply(id, "null")]
+  }
+  workspace.view = try decodeView(viewJSON(sessionJSON("s1")))
+  await workspace.refreshPullRequest()
+  #expect(workspace.pullRequestError == "GitHub CLI is not signed in. Run gh auth login in Terminal.")
+  #expect(!workspace.shouldPollPullRequest(showingChanges: true, now: .now))
+}
+
+/// The id of the last request for `method`.
+private func lastId(_ backend: ScriptedBackend, _ method: String) -> Int? {
+  backend.messages.compactMap { message -> Int? in
+    guard message["method"] == .string(method), case .number(let id)? = message["id"] else { return nil }
+    return Int(id)
+  }.last
+}
+
+private func count(_ backend: ScriptedBackend, _ method: String) -> Int {
+  backend.messages.filter { $0["method"] == .string(method) }.count
+}
+
+@MainActor @Test func aPullRequestReadForAConversationLeftMidReadIsDropped() async throws {
+  let (workspace, backend) = await makeWorkspace { method, args, id in
+    switch method {
+    case "pr-status": return []  // held: the test answers
+    case "open":
+      guard case .string(let sessionId)? = args.first else { return [] }
+      return [reply(id, viewJSON(sessionJSON(sessionId)))]
+    default: return [reply(id, "null")]
+    }
+  }
+  workspace.view = try decodeView(viewJSON(sessionJSON("A")))
+  let read = Task { await workspace.refreshPullRequest() }
+  try await eventually { lastId(backend, "pr-status") != nil }
+  await workspace.open("B")
+  // The old read still runs, so B's first look waits for it.
+  await workspace.refreshPullRequest()
+  #expect(count(backend, "pr-status") == 1)
+  backend.push(reply(lastId(backend, "pr-status")!, pr))
+  await read.value
+  #expect(workspace.pullRequest == nil && workspace.pullRequestError == nil)
+
+  let failing = Task { await workspace.refreshPullRequest() }
+  try await eventually { count(backend, "pr-status") == 2 }
+  await workspace.open("C")
+  backend.push(failure(lastId(backend, "pr-status")!, "gh failed"))
+  await failing.value
+  #expect(workspace.view?.session.sessionId == "C")
+  #expect(workspace.pullRequest == nil && workspace.pullRequestError == nil)
+}
+
+@MainActor @Test func aGoodReadClearsTheErrorSoThePollStartsAgain() async throws {
+  let calls = Counter()
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    guard method == "pr-status" else { return [reply(id, "null")] }
+    return calls.next() == 1 ? [failure(id, "gh failed")] : [reply(id, pr)]
+  }
+  workspace.view = try decodeView(viewJSON(sessionJSON("s1")))
+  await workspace.refreshPullRequest()
+  #expect(workspace.pullRequestError == "gh failed")
+  await workspace.refreshPullRequest()
+  #expect(workspace.pullRequestError == nil && workspace.pullRequest?.number == 9)
+  #expect(
+    workspace.shouldPollPullRequest(showingChanges: true, now: Date.now.addingTimeInterval(60)))
+}
+
+@MainActor @Test func aTurnThatEndsAllowsAFreshReadAfterAFirstLookFoundNoPullRequest() async throws {
+  let (workspace, _) = await makeWorkspace { _, _, id in [reply(id, "null")] }
+  workspace.view = try decodeView(viewJSON(sessionJSON("s1", status: "running")))
+  await workspace.refreshPullRequest()
+  #expect(workspace.pullRequest == nil)
+  #expect(!workspace.shouldPollPullRequest(showingChanges: true, now: Date.now.addingTimeInterval(600)))
+  // The turn ends: it may have made a PR, so the next look reads once more.
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s1", status: "idle")))))
+  #expect(workspace.shouldPollPullRequest(showingChanges: true, now: .now))
+  await workspace.refreshPullRequest()
+  #expect(!workspace.shouldPollPullRequest(showingChanges: true, now: Date.now.addingTimeInterval(600)))
+  // Another conversation's turn ending does not.
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s2", status: "running")))))
+  workspace.apply(.session(try decodeView(viewJSON(sessionJSON("s2", status: "idle")))))
+  #expect(!workspace.shouldPollPullRequest(showingChanges: true, now: .now))
+}
+
+@MainActor @Test func theConversationCardUsesOnlyTheCurrentProjectsCards() async throws {
+  let merged = #"{"number":7,"title":"Base","url":"u","state":"MERGED","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"extensions","headRefName":"main","mergedAt":null,"checks":[],"body":"","files":[],"live":false}"#
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    switch method {
+    case "pr-list": [reply(id, "[\(merged)]")]
+    case "pr-status": [reply(id, pr)]
+    default: [reply(id, "null")]
+    }
+  }
+  workspace.project = "/p"
+  workspace.view = try decodeView(viewJSON(sessionJSON("s1")))
+  await workspace.refreshPullRequest()
+  let own = try #require(workspace.pullRequest)
+  #expect(workspace.conversationCardSiblings(own).map(\.number) == [9])
+  #expect(workspace.needsChangeCardsForConversation)
+  await workspace.loadChangeCards()
+  #expect(!workspace.needsChangeCardsForConversation)
+  #expect(workspace.conversationCardSiblings(own).map(\.number).sorted() == [7, 9])
+  #expect(ChangeCardRules.blocker(of: own, in: workspace.conversationCardSiblings(own))
+    == "Its draft copy was accepted; move it onto extensions first")
+  // Cards read for another project are never used.
+  workspace.project = "/q"
+  #expect(workspace.conversationCardSiblings(own).map(\.number) == [9])
+}
+
+@MainActor @Test func askWhyOpensNoSideChatWhenTheOwnerDoesNotOpen() async throws {
+  let worktrees =
+    #"[{"path":"/p","branch":"refs/heads/main","isMain":true,"sessionIds":[]},{"path":"/p/.muse/worktrees/a","branch":"refs/heads/usage","isMain":false,"sessionIds":["s1"]}]"#
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "worktrees": [reply(id, worktrees)]
+    case "git-status": [failure(id, "not read")]
+    case "open": [failure(id, "That conversation is gone.")]
+    default: [reply(id, "null")]
+    }
+  }
+  workspace.view = try decodeView(viewJSON(sessionJSON("C")))
+  await workspace.inspector.refresh()
+  #expect(workspace.inspector.worktrees.count == 2)
+  await workspace.askWhy(PullRequest(number: 9, title: "Usage", headRefName: "usage"))
+  #expect(count(backend, "open") == 1)
+  #expect(count(backend, "side-chat") == 0 && count(backend, "send") == 0)
+  #expect(workspace.view?.session.sessionId == "C")
+}
+
+@MainActor @Test func changeCardsForAProjectLeftMidReadAreDropped() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    method == "pr-list" ? [] : [reply(id, "null")]
+  }
+  workspace.project = "/p"
+  let load = Task { await workspace.loadChangeCards() }
+  try await eventually { lastId(backend, "pr-list") != nil }
+  workspace.project = "/q"
+  backend.push(reply(lastId(backend, "pr-list")!, "[\(pr)]"))
+  await load.value
+  #expect(workspace.changeCards.isEmpty)
+}
+
+@MainActor @Test func aProjectSwitchClearsTheCardsUntilTheNewLoadLands() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "pr-list": return [reply(id, "[\(pr)]")]
+    case "pr-merge": return [reply(id, "true")]
+    default: return [reply(id, "null")]
+    }
+  }
+  workspace.project = "/p"
+  await workspace.loadChangeCards()
+  let stale = try #require(workspace.changeCards.first)
+  #expect(workspace.changeCardsProject == "/p")
+  workspace.project = "/q"
+  #expect(workspace.changeCards.isEmpty)
+  #expect(workspace.changeCardsProject == nil)
+  // A card left from /p merges nothing in /q.
+  await workspace.accept(stale)
+  #expect(count(backend, "pr-merge") == 0)
+  await workspace.loadChangeCards()
+  #expect(workspace.changeCardsProject == "/q")
+  #expect(workspace.changeCards.map(\.number) == [9])
+}
+
+@MainActor @Test func aDoubleAcceptSendsOneMerge() async throws {
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "pr-list": return [reply(id, "[\(pr)]")]
+    case "pr-merge": return []  // held: the second click arrives while the first runs
+    default: return [reply(id, "null")]
+    }
+  }
+  workspace.project = "/p"
+  await workspace.loadChangeCards()
+  let card = workspace.changeCards[0]
+  let first = Task { await workspace.accept(card) }
+  try await eventually { lastId(backend, "pr-merge") != nil }
+  #expect(workspace.merging.contains(9))
+  await workspace.accept(card)
+  #expect(count(backend, "pr-merge") == 1)
+  backend.push(reply(lastId(backend, "pr-merge")!, "false"))
+  await first.value
+  #expect(workspace.merging.isEmpty)
+}
+
+@MainActor @Test func aFailedCardsReadShowsItsErrorUntilAGoodReadOrASwitch() async throws {
+  let calls = Counter()
+  let (workspace, _) = await makeWorkspace { method, _, id in
+    guard method == "pr-list" else { return [reply(id, "null")] }
+    return calls.next() == 2 ? [reply(id, "[\(pr)]")] : [failure(id, "gh failed")]
+  }
+  workspace.project = "/p"
+  await workspace.loadChangeCards()
+  #expect(workspace.changeCardsError == "gh failed")
+  #expect(workspace.changeCardsProject == nil)
+  #expect(workspace.errorMessage == nil)
+  await workspace.loadChangeCards()
+  #expect(workspace.changeCardsError == nil && workspace.changeCardsProject == "/p")
+  await workspace.loadChangeCards()
+  #expect(workspace.changeCardsError == "gh failed")
+  workspace.project = "/q"
+  #expect(workspace.changeCardsError == nil)
+}
+
+@MainActor @Test func aParentThatMergesLaterUpdatesTheChildsBlockerOnTheNextPoll() async throws {
+  let parentOpen = #"{"number":9,"title":"Usage","url":"u","state":"OPEN","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"main","headRefName":"usage","mergedAt":null,"checks":[],"body":"","files":[],"live":false}"#
+  let parentMerged = parentOpen.replacingOccurrences(of: #""state":"OPEN""#, with: #""state":"MERGED""#)
+    .replacingOccurrences(of: #""mergedAt":null"#, with: #""mergedAt":"2026-10-24T00:00:00Z""#)
+  let child = #"{"number":10,"title":"Usage chart","url":"u","state":"OPEN","isDraft":false,"reviewDecision":null,"mergeState":"CLEAN","baseRefName":"usage","headRefName":"usage-chart","mergedAt":null,"checks":[],"body":"","files":[],"live":false}"#
+  let lists = Counter()
+  let (workspace, backend) = await makeWorkspace { method, _, id in
+    switch method {
+    case "pr-list": return [reply(id, lists.next() == 1 ? "[\(parentOpen)]" : "[\(parentMerged)]")]
+    case "pr-status": return [reply(id, child)]
+    default: return [reply(id, "null")]
+    }
+  }
+  workspace.project = "/p"
+  workspace.view = try decodeView(viewJSON(sessionJSON("s1")))
+  let start = Date.now
+  await workspace.loadChangeCards()
+  func blocker() -> String? {
+    workspace.pullRequest.flatMap { ChangeCardRules.blocker(of: $0, in: workspace.conversationCardSiblings($0)) }
+  }
+  await workspace.refreshPullRequest(now: start.addingTimeInterval(30))
+  #expect(blocker() == "Accept PR 9 first")
+  // Within the 60 seconds of the last card read: the cards are not read again.
+  #expect(count(backend, "pr-list") == 1)
+  await workspace.refreshPullRequest(now: start.addingTimeInterval(61))
+  #expect(count(backend, "pr-list") == 2)
+  #expect(blocker() == "Its draft copy was accepted; move it onto main first")
+  // The move-it note names no PR that could still change: no further card read.
+  await workspace.refreshPullRequest(now: start.addingTimeInterval(200))
+  #expect(count(backend, "pr-list") == 2)
+}

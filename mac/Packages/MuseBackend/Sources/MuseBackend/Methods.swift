@@ -122,6 +122,11 @@ extension BackendClient {
     _ = try await request("shell", [.string(sessionId), .string(command)])
   }
 
+  /// The subscription's limits as Muse last observed them, or nil before any observation.
+  public func usage() async throws -> SubscriptionLimits? {
+    try await call("usage", [])
+  }
+
   public func approve(sessionId: String, approvalId: String, choiceId: String) async throws {
     _ = try await request("approve", [.string(sessionId), .string(approvalId), .string(choiceId)])
   }
@@ -250,6 +255,46 @@ extension BackendClient {
   /// Stops a transcription in progress.
   public func cancelVoice() async throws {
     _ = try await request("cancel-voice")
+  }
+
+  // Scheduled tasks.
+
+  public func schedules() async throws -> [ScheduleEntry] { try await call("schedule-list") }
+
+  /// Saves a new task (nil `id`) or replaces one.
+  public func saveSchedule(_ input: ScheduleInput) async throws -> ScheduleEntry {
+    try await call("schedule-save", [JSONValue(encoding: input)])
+  }
+
+  public func removeSchedule(id: String) async throws { _ = try await request("schedule-remove", [.string(id)]) }
+
+  /// Runs the task now. A failed start lands in its history, not here.
+  public func runSchedule(id: String) async throws { _ = try await request("schedule-run", [.string(id)]) }
+
+  public func setScheduleEnabled(id: String, enabled: Bool) async throws {
+    _ = try await request("schedule-enabled", [.string(id), .bool(enabled)])
+  }
+
+  // The PR monitor and the change cards.
+
+  /// The conversation folder's PR, or nil when its branch has none.
+  public func pullRequest(sessionId: String) async throws -> PullRequest? {
+    try await call("pr-status", [.string(sessionId)])
+  }
+
+  /// The project's open and recently merged PRs.
+  public func pullRequests(project: String) async throws -> [PullRequest] {
+    try await call("pr-list", [.string(project)])
+  }
+
+  /// True when Dom accepted the backend's Ask and gh merged it.
+  public func mergePullRequest(project: String, number: Int) async throws -> Bool {
+    try await call("pr-merge", [.string(project), .number(Double(number))])
+  }
+
+  /// True when Dom accepted the backend's Ask and gh set the PR to merge once its checks pass.
+  public func mergeWhenReady(sessionId: String, number: Int) async throws -> Bool {
+    try await call("pr-merge-when-ready", [.string(sessionId), .number(Double(number))])
   }
 
   /// Asks the backend to quit, then waits for it to exit.

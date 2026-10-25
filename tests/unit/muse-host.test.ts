@@ -285,6 +285,125 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  const usage = {
+    observedAtMs: 1_800_000_000_000,
+    tier: 'pro',
+    window: { usedPercent: 42, resetsAtMs: 1_800_000_600_000, windowDurationMins: 300 },
+    weekly: { usedPercent: 112, resetsAtMs: 1_800_400_000_000 },
+  }
+  const limits = {
+    observedAt: 1_800_000_000_000,
+    tier: 'pro',
+    window: { usedPercent: 42, resetsAt: 1_800_000_600_000, minutes: 300 },
+    weekly: { usedPercent: 112, resetsAt: 1_800_400_000_000 },
+  }
+
+  it('reads the limits once at connect and emits them', async () => {
+    const events: AppEvent[] = []
+    wire.request.mockImplementation(async (method: string) =>
+      method === 'usage/read' ? { usage } : {},
+    )
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    await vi.waitFor(() => expect(host.limits).toEqual(limits))
+    expect(wire.request.mock.calls.filter(([method]) => method === 'usage/read')).toHaveLength(1)
+    expect(events).toContainEqual({ type: 'usage-changed', limits })
+    await host.close()
+  })
+
+  it('keeps the limits null when Muse has observed nothing or the read fails', async () => {
+    const events: AppEvent[] = []
+    wire.request.mockImplementation(async (method: string) => {
+      if (method === 'usage/read') throw new Error('Method not found')
+      return {}
+    })
+    const host = new MuseHost((event) => events.push(event))
+    expect((await host.connect('')).state).toBe('ready')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(host.limits).toBeNull()
+    expect(events.some((event) => event.type === 'usage-changed')).toBe(false)
+    await host.close()
+  })
+
+  it('keeps the limits null and emits nothing when usage/read returns no usage', async () => {
+    const events: AppEvent[] = []
+    wire.request.mockImplementation(async () => ({}))
+    const host = new MuseHost((event) => events.push(event))
+    expect((await host.connect('')).state).toBe('ready')
+    await vi.waitFor(() =>
+      expect(wire.request.mock.calls.some(([method]) => method === 'usage/read')).toBe(true),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(host.limits).toBeNull()
+    expect(events.some((event) => event.type === 'usage-changed')).toBe(false)
+    await host.close()
+  })
+
+  it('keeps a newer usage/changed when a late usage/read reply arrives', async () => {
+    const events: AppEvent[] = []
+    let reply: (value: unknown) => void = () => {}
+    wire.request.mockImplementation((method: string) =>
+      method === 'usage/read'
+        ? new Promise((resolve) => {
+            reply = resolve
+          })
+        : Promise.resolve({}),
+    )
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    const newer = { ...usage, observedAtMs: usage.observedAtMs + 60_000 }
+    notify('usage/changed', { ...newer, window: { ...newer.window, usedPercent: 85 } })
+    reply({ usage })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(host.limits?.observedAt).toBe(newer.observedAtMs)
+    expect(host.limits?.window.usedPercent).toBe(85)
+    expect(events.filter((event) => event.type === 'usage-changed')).toHaveLength(1)
+    await host.close()
+  })
+
+  it('folds usage/changed into the limits without a session id', async () => {
+    const events: AppEvent[] = []
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    notify('usage/changed', { ...usage, window: { ...usage.window, usedPercent: 85 } })
+    expect(host.limits?.window.usedPercent).toBe(85)
+    expect(events.at(-1)).toEqual({
+      type: 'usage-changed',
+      limits: { ...limits, window: { ...limits.window, usedPercent: 85 } },
+    })
+    await host.close()
+  })
+
+  it('keeps the session cost and the quota stop, and clears the stop on a clean turn', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/tokenUsage', {
+      sessionId: 's1',
+      cumulative: {
+        promptTokens: 100,
+        outputTokens: 28,
+        totalTokens: 128,
+        cost: { usd: 0.84, partial: true },
+      },
+    })
+    expect(host.getView('s1').cost).toEqual({ usd: 0.84, partial: true })
+    notify('turn/completed', {
+      sessionId: 's1',
+      turnId: 't1',
+      error: {
+        kind: 'modelError',
+        message: 'quota',
+        retryable: false,
+        quota: { limitKind: 'tierLimit', resetsAtMs: 1_800_000_600_000 },
+      },
+    })
+    expect(host.getView('s1').quota).toEqual({ kind: 'tierLimit', resetsAt: 1_800_000_600_000 })
+    notify('turn/completed', { sessionId: 's1', turnId: 't2' })
+    expect(host.getView('s1').quota).toBeUndefined()
+    await host.close()
+  })
+
   it('replaces the todo list wholesale and clears it on an empty list', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')

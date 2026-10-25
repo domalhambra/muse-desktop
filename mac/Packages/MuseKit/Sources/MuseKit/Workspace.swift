@@ -36,6 +36,11 @@ public final class Workspace {
       // The inspector's read for the old project is dropped now, so read the badge it was to write.
       if pendingTurnEndRead == oldValue { makeUpTurnEndRead() }
       inspector.show(project: project)
+      // Change cards belong to one project: another one's must never show or merge here.
+      changeCards = []
+      changeCardsProject = nil
+      changeCardsError = nil
+      lastChangeCardsLoad = nil
       if !project.isEmpty, beginsRunning == 0 { startBadgeRead([project]) }
     }
   }
@@ -78,6 +83,16 @@ public final class Workspace {
   public internal(set) var sideOpening = false
   /// A subagent's session, shown read-only in a sheet from the Agents tab, or nil.
   public internal(set) var childView: SessionView?
+  /// The subscription's limits as Muse last observed them, or nil. The sidebar footer hides without
+  /// them. A connection that stops being ready clears them, so the footer never shows a number from a
+  /// backend that is gone.
+  public internal(set) var limits: SubscriptionLimits?
+  /// Scheduled tasks with their next run and history, for the Scheduled pane and the sidebar group.
+  public internal(set) var schedules: [ScheduleEntry] = []
+  /// The sessions scheduled runs started, by session id, with the task's name: the finished notice names it.
+  public internal(set) var scheduledRuns: [String: String] = [:]
+  /// Counts task-list reads. An older read that finishes later is dropped.
+  @ObservationIgnored var schedulesSequence = 0
   /// The conversation being opened, for a spinner.
   public private(set) var openingSessionId: String?
   public internal(set) var models: [MuseModel] = []
@@ -91,6 +106,24 @@ public final class Workspace {
   public var notice: String?
   /// Bumped by every `showNotice(_:)`, so the same text twice restarts the app's timer.
   public private(set) var noticeCount = 0
+  /// The open conversation's PR, or nil. A gh failure sets `pullRequestError` and stops the poll.
+  public internal(set) var pullRequest: PullRequest?
+  public internal(set) var pullRequestError: String?
+  @ObservationIgnored var lastPullRequestPoll: Date?
+  /// True while a `pr-status` read runs. `clearPullRequest()` leaves it, so a read for the old
+  /// conversation still blocks a second one until it ends; its reply is then dropped.
+  @ObservationIgnored var pullRequestInFlight = false
+  /// The project's PRs, as change cards.
+  public internal(set) var changeCards: [PullRequest] = []
+  /// The project `changeCards` were read for, or nil until a read lands. A project switch clears both.
+  public internal(set) var changeCardsProject: String?
+  /// Why the last read of the current project's cards failed, or nil. A good read or a project
+  /// switch clears it.
+  public internal(set) var changeCardsError: String?
+  /// When the project's cards were last read, so the poll reads them again at most once a minute.
+  @ObservationIgnored var lastChangeCardsLoad: Date?
+  /// The PR numbers an Accept or a Merge when ready is sending, so a double click sends one.
+  public internal(set) var merging: Set<Int> = []
   public internal(set) var decidingApprovals: Set<String> = []
   public internal(set) var answeringQuestions: Set<String> = []
   public internal(set) var storedOutput: [String: String] = [:]
@@ -184,6 +217,10 @@ public final class Workspace {
         // while history loaded.
         if view == nil, openingSessionId == nil, !submitting { await open(reopen) }
       }
+      // After the reopen, so the footer's read does not hold up the conversation.
+      await loadLimits()
+      // Also after the reopen: the sidebar's Scheduled group can wait for the conversation.
+      await loadSchedules()
     }
     await refreshProjectGit()
   }
@@ -257,6 +294,7 @@ public final class Workspace {
     case .connection(let next):
       let becameReady = !status.isReady && next.isReady
       status = next
+      if !next.isReady { limits = nil }
       // `begin()` holds the Workspace while it runs; a backend stop fails its requests.
       if becameReady { Task { [weak self] in await self?.begin() } }
     case .preferences(let next):
@@ -283,6 +321,11 @@ public final class Workspace {
             startBadgeRead([root])
           }
         }
+        // The turn may have made a PR: let the next look read once more, even after a first look
+        // found none.
+        if view?.session.status == "running", next.session.status != "running", pullRequestError == nil {
+          lastPullRequestPoll = nil
+        }
         view = next
       }
       if next.session.sessionId == sideView?.session.sessionId { sideView = next }
@@ -303,8 +346,17 @@ public final class Workspace {
         self.refreshDelay = nil
         await self.refreshSessions()
       }
+    case .usageChanged(let next):
+      limits = next
     case .error(let message):
       errorMessage = message
+    case .scheduleRunStarted(_, let name, let sessionId):
+      // Only while its turn has not ended: a turn that finished before this event has already
+      // passed `turnFinished`, so a name kept now would label a later turn instead.
+      if lastStatus[sessionId] == nil || lastStatus[sessionId] == "running" { scheduledRuns[sessionId] = name }
+      Task { [weak self] in await self?.loadSchedules() }
+    case .schedulesChanged:
+      Task { [weak self] in await self?.loadSchedules() }
     case .other:
       break
     }
@@ -379,10 +431,18 @@ public final class Workspace {
     view = nil
     sideView = nil
     childView = nil
+    clearPullRequest()
     mode = .queue
     // As Electron's startNew: back to the normal list.
     showArchived = false
     clearStoredOutput()
+  }
+
+  /// The PR monitor belongs to one conversation: another one starts with a first look of its own.
+  func clearPullRequest() {
+    pullRequest = nil
+    pullRequestError = nil
+    lastPullRequestPoll = nil
   }
 
   /// Stored output belongs to one conversation's items.
@@ -423,7 +483,7 @@ public final class Workspace {
       let opened = try await client.open(sessionId)
       guard sequence == openSequence else { return }
       if opened.session.sessionId != view?.session.sessionId { clearStoredOutput() }
-      if opened.session.sessionId != view?.session.sessionId { sideView = nil; childView = nil }
+      if opened.session.sessionId != view?.session.sessionId { sideView = nil; childView = nil; clearPullRequest() }
       view = opened
       // As Electron: a conversation without a folder shows all projects, so it stays visible.
       project = opened.session.workspaceRoot ?? ""

@@ -509,13 +509,16 @@ public struct SessionView: Codable, Equatable, Sendable {
   public var usage: Usage?
   public var context: ContextUsage?
   public var todos: [TodoItem]?
+  public var cost: SessionCost?
+  public var quota: QuotaStop?
   public let error: String?
   public let historyNotice: String?
 
   public init(
     session: Session, items: [TranscriptItem] = [], approvals: [Approval] = [],
     questions: [UserQuestion] = [], usage: Usage? = nil, error: String? = nil,
-    historyNotice: String? = nil, context: ContextUsage? = nil, todos: [TodoItem]? = nil
+    historyNotice: String? = nil, context: ContextUsage? = nil, todos: [TodoItem]? = nil,
+    cost: SessionCost? = nil, quota: QuotaStop? = nil
   ) {
     self.session = session
     self.items = items
@@ -526,6 +529,8 @@ public struct SessionView: Codable, Equatable, Sendable {
     self.historyNotice = historyNotice
     self.context = context
     self.todos = todos
+    self.cost = cost
+    self.quota = quota
   }
 }
 
@@ -539,6 +544,164 @@ public struct ContextUsage: Codable, Equatable, Sendable {
     self.used = used
     self.window = window
     self.pressure = pressure
+  }
+}
+
+/// The subscription's rolling window and weekly block, as Muse last observed them. Times are epoch
+/// milliseconds; percentages may exceed 100.
+public struct SubscriptionLimits: Codable, Equatable, Sendable {
+  public struct Window: Codable, Equatable, Sendable {
+    public let usedPercent: Int
+    public let resetsAt: Double
+    public let minutes: Int
+    public init(usedPercent: Int, resetsAt: Double, minutes: Int) {
+      self.usedPercent = usedPercent
+      self.resetsAt = resetsAt
+      self.minutes = minutes
+    }
+  }
+  public struct Weekly: Codable, Equatable, Sendable {
+    public let usedPercent: Int
+    public let resetsAt: Double
+    public init(usedPercent: Int, resetsAt: Double) {
+      self.usedPercent = usedPercent
+      self.resetsAt = resetsAt
+    }
+  }
+  public let observedAt: Double
+  public let tier: String
+  public let window: Window
+  public let weekly: Weekly
+  public init(observedAt: Double, tier: String, window: Window, weekly: Weekly) {
+    self.observedAt = observedAt
+    self.tier = tier
+    self.window = window
+    self.weekly = weekly
+  }
+}
+
+/// The conversation's estimated cost. `partial` when a reply had no price.
+public struct SessionCost: Codable, Equatable, Sendable {
+  public let usd: Double
+  public let partial: Bool
+  public init(usd: Double, partial: Bool) {
+    self.usd = usd
+    self.partial = partial
+  }
+}
+
+/// Which limit stopped the turn, and when it resets (epoch milliseconds).
+public struct QuotaStop: Codable, Equatable, Sendable {
+  public let kind: String
+  public let resetsAt: Double
+  public init(kind: String, resetsAt: Double) {
+    self.kind = kind
+    self.resetsAt = resetsAt
+  }
+}
+
+/// A scheduled task, as src/headless/schedule-rules.ts defines it. Times are epoch milliseconds.
+public struct Schedule: Codable, Equatable, Sendable, Identifiable {
+  public var id: String
+  public var name: String
+  public var prompt: String
+  public var folder: String
+  /// `hourly`, `daily`, `weekdays`, `weekly`, `manual` or `custom`.
+  public var preset: String
+  public var minute: Int
+  public var hour: Int
+  /// 0 is Sunday.
+  public var weekday: Int
+  public var cron: String?
+  public var approvalMode: String
+  public var modelId: String?
+  public var worktree: Bool
+  public var enabled: Bool
+  public var createdAt: Double
+  public init(
+    id: String, name: String, prompt: String, folder: String, preset: String, minute: Int, hour: Int,
+    weekday: Int, cron: String? = nil, approvalMode: String, modelId: String? = nil, worktree: Bool = false,
+    enabled: Bool = true, createdAt: Double
+  ) {
+    self.id = id
+    self.name = name
+    self.prompt = prompt
+    self.folder = folder
+    self.preset = preset
+    self.minute = minute
+    self.hour = hour
+    self.weekday = weekday
+    self.cron = cron
+    self.approvalMode = approvalMode
+    self.modelId = modelId
+    self.worktree = worktree
+    self.enabled = enabled
+    self.createdAt = createdAt
+  }
+}
+
+public struct ScheduleRun: Codable, Equatable, Sendable {
+  public let at: Double
+  public let scheduledFor: Double?
+  /// `started`, `skipped` or `failed`.
+  public let outcome: String
+  public let reason: String?
+  public let sessionId: String?
+  public init(at: Double, scheduledFor: Double? = nil, outcome: String, reason: String? = nil, sessionId: String? = nil) {
+    self.at = at
+    self.scheduledFor = scheduledFor
+    self.outcome = outcome
+    self.reason = reason
+    self.sessionId = sessionId
+  }
+}
+
+public struct ScheduleEntry: Codable, Equatable, Sendable, Identifiable {
+  public let schedule: Schedule
+  public let nextRunAt: Double?
+  /// Newest first.
+  public let history: [ScheduleRun]
+  public var id: String { schedule.id }
+  public init(schedule: Schedule, nextRunAt: Double?, history: [ScheduleRun]) {
+    self.schedule = schedule
+    self.nextRunAt = nextRunAt
+    self.history = history
+  }
+}
+
+/// What the Scheduled pane's form sends. A nil `id` makes a new task.
+public struct ScheduleInput: Codable, Equatable, Sendable {
+  public var id: String?
+  public var name: String
+  public var prompt: String
+  public var folder: String
+  public var preset: String
+  public var minute: Int
+  public var hour: Int
+  public var weekday: Int
+  public var cron: String?
+  public var approvalMode: String
+  public var modelId: String?
+  public var worktree: Bool
+  public var enabled: Bool
+  public init(
+    id: String? = nil, name: String, prompt: String, folder: String, preset: String, minute: Int, hour: Int,
+    weekday: Int, cron: String? = nil, approvalMode: String, modelId: String? = nil, worktree: Bool = false,
+    enabled: Bool = true
+  ) {
+    self.id = id
+    self.name = name
+    self.prompt = prompt
+    self.folder = folder
+    self.preset = preset
+    self.minute = minute
+    self.hour = hour
+    self.weekday = weekday
+    self.cron = cron
+    self.approvalMode = approvalMode
+    self.modelId = modelId
+    self.worktree = worktree
+    self.enabled = enabled
   }
 }
 
@@ -579,12 +742,19 @@ public enum AppEvent: Decodable, Equatable, Sendable {
   case connection(ConnectionStatus)
   case session(SessionView)
   case sessionsChanged
+  case usageChanged(SubscriptionLimits?)
   case preferences(Preferences)
   case error(String)
+  /// A scheduled task started a conversation.
+  case scheduleRunStarted(scheduleId: String, name: String, sessionId: String)
+  /// The scheduled tasks or their history changed: fetch `schedules()` again.
+  case schedulesChanged
   /// An event mMac does not use, such as `menu`.
   case other(String)
 
-  private enum Keys: String, CodingKey { case type, status, view, message, preferences }
+  private enum Keys: String, CodingKey {
+    case type, status, view, message, preferences, limits, scheduleId, name, sessionId
+  }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: Keys.self)
@@ -593,8 +763,15 @@ public enum AppEvent: Decodable, Equatable, Sendable {
     case "connection": self = .connection(try container.decode(ConnectionStatus.self, forKey: .status))
     case "session": self = .session(try container.decode(SessionView.self, forKey: .view))
     case "sessions-changed": self = .sessionsChanged
+    case "usage-changed": self = .usageChanged(try container.decodeIfPresent(SubscriptionLimits.self, forKey: .limits))
     case "preferences": self = .preferences(try container.decode(Preferences.self, forKey: .preferences))
     case "error": self = .error(try container.decode(String.self, forKey: .message))
+    case "schedule-run-started":
+      self = .scheduleRunStarted(
+        scheduleId: try container.decode(String.self, forKey: .scheduleId),
+        name: try container.decode(String.self, forKey: .name),
+        sessionId: try container.decode(String.self, forKey: .sessionId))
+    case "schedules-changed": self = .schedulesChanged
     default: self = .other(type)
     }
   }
@@ -821,5 +998,60 @@ public struct BridgeStatus: Codable, Equatable, Sendable {
     self.files = files
     self.mcp = mcp
     self.activeJobs = activeJobs
+  }
+}
+
+// MARK: Pull requests
+
+/// One check on a pull request, normalized by the backend.
+public struct PullRequestCheck: Codable, Equatable, Sendable {
+  public let name: String
+  /// `passing`, `failing`, `pending` or `skipped`.
+  public let state: String
+  public init(name: String, state: String) {
+    self.name = name
+    self.state = state
+  }
+}
+
+/// A pull request as the PR monitor and the change cards use it (src/shared/protocol.ts).
+public struct PullRequest: Codable, Equatable, Sendable, Identifiable {
+  public let number: Int
+  public let title: String
+  public let url: String
+  /// `OPEN`, `CLOSED` or `MERGED`.
+  public let state: String
+  public let isDraft: Bool
+  public let reviewDecision: String?
+  public let mergeState: String
+  public let baseRefName: String
+  public let headRefName: String
+  public let mergedAt: String?
+  public let checks: [PullRequestCheck]
+  public let body: String
+  public let files: [String]
+  public let live: Bool
+  public var id: Int { number }
+
+  public init(
+    number: Int, title: String, url: String = "", state: String = "OPEN", isDraft: Bool = false,
+    reviewDecision: String? = nil, mergeState: String = "CLEAN", baseRefName: String = "main",
+    headRefName: String = "feature", mergedAt: String? = nil, checks: [PullRequestCheck] = [], body: String = "",
+    files: [String] = [], live: Bool = false
+  ) {
+    self.number = number
+    self.title = title
+    self.url = url
+    self.state = state
+    self.isDraft = isDraft
+    self.reviewDecision = reviewDecision
+    self.mergeState = mergeState
+    self.baseRefName = baseRefName
+    self.headRefName = headRefName
+    self.mergedAt = mergedAt
+    self.checks = checks
+    self.body = body
+    self.files = files
+    self.live = live
   }
 }

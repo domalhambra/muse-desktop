@@ -76,6 +76,7 @@ async function quit(code: number) {
   // Closing Muse makes waiting requests fail, and cancelling ends a voice request, so drain()
   // cannot wait forever, or 90 seconds for a transcription.
   const results = await Promise.allSettled([
+    backend.stopScheduler(), // No new run starts; a check in progress saves lastCheckedAt.
     backend.stopBridges(),
     backend.stopVoice(),
     muse.close(),

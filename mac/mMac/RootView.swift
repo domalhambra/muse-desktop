@@ -30,6 +30,8 @@ struct RootView: View {
     }
     .background(ThemeBackground(palette: appearance.palette))
     .background { if !MMacApp.keepsWindowState { WindowStateGuard() } }
+    // The inspector opens at its ideal width, and the split view runs past a narrow window's edges.
+    .background { SplitFitGuard() }
     // The controller reopens this window for an Ask or a Dock click after it was closed.
     .onAppear { controller.showWindow = { [openWindow] in openWindow(id: MMacApp.mainWindow) } }
   }
@@ -48,12 +50,16 @@ struct MainView: View {
     @Bindable var sheets = controller.sheets
     NavigationSplitView {
       SidebarView(controller: controller, workspace: workspace)
-        .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 420)
+        .navigationSplitViewColumnWidth(
+          min: WindowMetrics.sidebarMin, ideal: WindowMetrics.sidebarIdeal, max: WindowMetrics.sidebarMax)
     } detail: {
       ConversationView(controller: controller, workspace: workspace)
+        // Before the inspector, so the floor is the conversation's own and not the inspector's too.
+        .frame(minWidth: WindowMetrics.contentMin)
         .inspector(isPresented: $inspectorShown) {
           InspectorView(controller: controller, workspace: workspace, inspector: workspace.inspector)
-            .inspectorColumnWidth(min: 280, ideal: 340, max: 400)
+            .inspectorColumnWidth(
+              min: WindowMetrics.inspectorMin, ideal: WindowMetrics.inspectorIdeal, max: WindowMetrics.inspectorMax)
         }
         .toolbar {
           ToolbarItem(placement: .primaryAction) {
@@ -70,6 +76,8 @@ struct MainView: View {
     .themedToolbar()
     // The split views exist only from here on.
     .background { if !MMacApp.keepsWindowState { WindowStateGuard() } }
+    // The inspector opens at its ideal width, and the split view runs past a narrow window's edges.
+    .background { SplitFitGuard() }
     // Success notices, at the top of the window. Errors keep the alert below.
     .overlay(alignment: .top) {
       ToastView(workspace: workspace).padding(.top, 10)
@@ -80,6 +88,9 @@ struct MainView: View {
     // Here rather than on the composer, so a composer that goes away cannot leave `help` set.
     .sheet(isPresented: $sheets.help) {
       HelpSheet { controller.sheets.help = false }
+    }
+    .sheet(isPresented: $sheets.proposedChanges) {
+      ProposedChangesSheet(workspace: workspace) { controller.sheets.proposedChanges = false }
     }
     .modifier(VoiceCancellation(voice: controller.voice))
     .alert(

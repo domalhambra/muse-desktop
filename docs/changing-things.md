@@ -142,7 +142,9 @@ The echo test pastes its first message through the general pasteboard, then rest
 
 Debug builds keep the window's user defaults, such as `inspectorShown`, in the suite that `MMAC_DEFAULTS_SUITE` names. The UI tests set it to `com.domalhambra.mmac.uitests`, and mMac empties it at launch. With the variable set, mMac also turns off window restoration and AppKit's frame autosave for both windows and the sidebar split (`mac/mMac/WindowStateGuard.swift`). Your own mMac defaults stay unchanged. AppKit's open panel still writes a few keys of its own (see `docs/decisions.md`, 2026-10-22). Every UI-test launch also sets `MMAC_TOKEN_STORE=memory`, `-ApplePersistenceIgnoreState YES` and `-NSQuitAlwaysKeepsWindows NO`.
 
-The M5a UI test is `testM5aAgainstTheFakeBackend`: permission modes, the `!` shell, the changes badge, the context gauge, the Tasks, Agents and Preview tabs, the file context menu (it saves and restores the pasteboard), side chat and ⌘⇧] / ⌘⇧[. To run the UI tests several times and check the real defaults, run `mac/scripts/ui-tests.sh` with the number of runs, such as `mac/scripts/ui-tests.sh 3`. The default is 3. The script runs each pass under `caffeinate` with a 15-minute limit, stops at the first failed run, and compares the `com.domalhambra.mmac` defaults before and after. It only reads that domain. Its logs go to the `ui-tests` folder in `.cache/`. Warning: on a timeout or Ctrl-C, it stops every mMac built in the `mmac` folder in `.cache/`, a test's or not, and the test runner and the fake backend. Quit your own build from that folder before you run the script.
+The M5b UI test is `testM5bAgainstTheFakeBackend`: the usage footer, its popover and the stop banner, the Scheduled pane (pause one task, run the other), and the Proposed changes sheet with Accept and its Ask. It is written and builds; its runs wait for the end of the M5b build. The M5a UI test is `testM5aAgainstTheFakeBackend`: permission modes, the `!` shell, the changes badge, the context gauge, the Tasks, Agents and Preview tabs, the file context menu (it saves and restores the pasteboard), side chat and ⌘⇧] / ⌘⇧[. To run the UI tests several times and check the real defaults, run `mac/scripts/ui-tests.sh` with the number of runs, such as `mac/scripts/ui-tests.sh 3`. The default is 3. The script runs each pass under `caffeinate` with a 15-minute limit, stops at the first failed run, and compares the `com.domalhambra.mmac` defaults before and after. It only reads that domain. Its logs go to the `ui-tests` folder in `.cache/`. Warning: on a timeout or Ctrl-C, it stops every mMac built in the `mmac` folder in `.cache/`, a test's or not, and the test runner and the fake backend. Quit your own build from that folder before you run the script.
+
+Each run leaves four logs. `run-N.log` in the `ui-tests` folder is xcodebuild's output. The `run-N` folder beside it holds the rest: `<testName>-requests.jsonl`, every request a test sent the fake backend, kept whether the test passed or failed; `app.log`, mMac's own log lines at debug level, recorded with `log stream`; and `result.xcresult`, the result bundle, which opens in Xcode.
 
 The scheme keeps screen capture off (`captureScreenshotsAutomatically: false` in `mac/project.yml`). Keep it off: a recording captures whatever else is on the screen.
 
@@ -165,6 +167,33 @@ Every launch the UI tests make points `HOME`, `MUSE_HOME` and `XDG_*` at a tempo
 - Edit: `Inspector.Tab` in `mac/Packages/MuseKit/Sources/MuseKit/Inspector.swift`, the segment and the case in `mac/mMac/InspectorView.swift`, and the rule in `mac/Packages/MuseKit/Sources/MuseKit/InspectorRules.swift`. Keep the segments' total inside the column: the picker shares the column's width (`.frame(maxWidth: .infinity)`), and the column caps at 400 in `mac/mMac/RootView.swift`.
 - Test: the rule's test in `mac/Packages/MuseKit/Tests/MuseKitTests/InspectorRulesTests.swift`.
 - Prove: the fake-backend UI test that opens the tab.
+
+## Change usage and limits
+
+- Edit: `src/main/muse-host.ts` (the `'usage/read'` call and the `'usage/changed'`, cost and quota folds), `src/shared/protocol.ts` (`SubscriptionLimits`, `SessionCost`, `QuotaStop`), the `usage` method in `src/headless/backend.ts`, `mac/Packages/MuseKit/Sources/MuseKit/UsageRules.swift` (every word and level), `mac/Packages/MuseKit/Sources/MuseKit/Workspace+Usage.swift` and `mac/mMac/UsageViews.swift`.
+- Test: `tests/unit/muse-host.test.ts`, `tests/unit/headless-backend.test.ts`, `mac/Packages/MuseKit/Tests/MuseKitTests/UsageRulesTests.swift` and `mac/Packages/MuseKit/Tests/MuseKitTests/WorkspaceUsageTests.swift`.
+- Prove: the gate in "Prove a change", and `testM5bAgainstTheFakeBackend`.
+- Read first: "Usage and limits" in `docs/superpowers/specs/2026-10-23-mmac-parity-design.md`.
+
+Keep the newest limits. A reply with an older `observedAt` than the limits mMac holds must not replace them.
+
+## Change scheduled tasks
+
+- Edit: `src/headless/schedule-rules.ts` for timing (preset to cron, the cron check, `dueTime`, `nextRun`), `src/headless/schedule.ts` for the store, the timer and the history, and `startScheduled` and the `schedule-*` methods in `src/headless/backend.ts`. On the Swift side: `mac/Packages/MuseKit/Sources/MuseKit/ScheduleRules.swift`, `mac/Packages/MuseKit/Sources/MuseKit/Workspace+Schedules.swift`, `mac/mMac/SchedulesPane.swift` and the Scheduled group in `mac/mMac/SidebarView.swift`.
+- Test: `tests/unit/headless-schedule-rules.test.ts`, `tests/unit/headless-schedule.test.ts`, `tests/unit/headless-backend.test.ts`, `mac/Packages/MuseKit/Tests/MuseKitTests/ScheduleRulesTests.swift` and `mac/Packages/MuseKit/Tests/MuseKitTests/WorkspaceSchedulesTests.swift`.
+- Prove: the gate in "Prove a change", and `testM5bAgainstTheFakeBackend`.
+- Read first: "Scheduled tasks" in the parity spec, and the M5b rows in `docs/decisions.md`.
+
+A scheduled run needs a folder that mMac already trusts. Nobody is there to answer a trust Ask, so `startScheduled` refuses an untrusted folder, and the run records a failure with its reason. Keep that rule. Swift never computes a run time: the backend gives `nextRunAt`. Test a timing change with a fake clock in more than one time zone, and across a daylight-saving change. cron-parser 5.10.2 is not consistent inside the changed hour, so `dueTime` and `nextRun` use the wall clock.
+
+## Change the PR monitor or the change cards
+
+- Edit: `src/headless/pull-request.ts` for the `gh` calls and the fields they read, and the `pr-*` methods in `src/headless/backend.ts`. On the Swift side: `mac/Packages/MuseKit/Sources/MuseKit/ChangeCardRules.swift`, `mac/Packages/MuseKit/Sources/MuseKit/Workspace+PullRequest.swift`, `mac/mMac/ChangeCardViews.swift` and the card in `mac/mMac/ChangesView.swift`.
+- Test: `tests/unit/headless-pull-request.test.ts`, `tests/unit/headless-backend.test.ts`, `mac/Packages/MuseKit/Tests/MuseKitTests/ChangeCardRulesTests.swift` and `mac/Packages/MuseKit/Tests/MuseKitTests/WorkspacePullRequestTests.swift`.
+- Prove: the gate in "Prove a change", and `testM5bAgainstTheFakeBackend`.
+- Read first: "Pull request monitor" and "Change cards" in the parity spec.
+
+The PR tests use a fake `gh` and never reach GitHub. `fakeGh` in `tests/unit/fake-gh.ts` returns an environment whose `PATH` holds only the fake's own folder. Every call must also pass `folders: []` (in the backend tests, `ghFolders: []`), so that `ghEnvironment` adds no Homebrew folder and the real `gh` is never found. Never run the real `gh` in a test. A new `gh` field goes in `FIELDS` and in the zod schema in `src/headless/pull-request.ts`, and in `docs/compatibility.md`.
 
 ## Update Muse Code or the SDK
 

@@ -73,6 +73,23 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     }
   }
 
+  /// A scheduled run's notice. The identifier is the session id, as `post(for:)` uses.
+  func postScheduled(name: String, session: Session) {
+    let content = UNMutableNotificationContent()
+    content.title = ScheduleRules.finishedNotice(name: name)
+    content.body = CompletionNotice.content(for: session).body
+    content.sound = .default
+    content.userInfo = ["sessionId": session.sessionId]
+    // Logs only the error: the title and body name the task and the conversation.
+    UNUserNotificationCenter.current().add(
+      UNNotificationRequest(identifier: session.sessionId, content: content, trigger: nil)
+    ) { error in
+      if let error {
+        Self.log.error("Could not post a scheduled-task notification: \(error.localizedDescription, privacy: .public)")
+      }
+    }
+  }
+
   /// A click on a notification. macOS calls it off the main actor.
   nonisolated func userNotificationCenter(
     _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse

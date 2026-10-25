@@ -70,7 +70,7 @@ struct PlainTextEditor: NSViewRepresentable {
     textView.string = text
     textView.delegate = context.coordinator
 
-    let scrollView = NSScrollView()
+    let scrollView = FillingScrollView()
     scrollView.drawsBackground = false
     scrollView.borderType = .noBorder
     scrollView.hasVerticalScroller = true
@@ -123,9 +123,32 @@ struct PlainTextEditor: NSViewRepresentable {
   }
 }
 
+/// A scroll view whose text view is never shorter than the visible box. An empty text view is
+/// one line tall, so a click below that line landed on the clip view and focused nothing: the
+/// M4b live run's "clicking Arguments or Environment does not move focus".
+final class FillingScrollView: NSScrollView {
+  override func tile() {
+    super.tile()
+    guard let textView = documentView as? NSTextView else { return }
+    let height = contentSize.height
+    guard textView.minSize.height != height else { return }
+    textView.minSize = NSSize(width: 0, height: height)
+    if textView.frame.height < height { textView.setFrameSize(NSSize(width: textView.frame.width, height: height)) }
+  }
+}
+
 /// An `NSTextView` that reports when it gains or loses keyboard focus.
 final class FocusReportingTextView: NSTextView {
   var onFocusChange: ((Bool) -> Void)?
+
+  /// A click in a window that is not key focuses the field it lands on, as it does in Electron,
+  /// instead of only bringing the sheet forward and leaving focus where it was.
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+  override func mouseDown(with event: NSEvent) {
+    if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+    super.mouseDown(with: event)
+  }
 
   override func becomeFirstResponder() -> Bool {
     let became = super.becomeFirstResponder()
@@ -215,6 +238,18 @@ struct PlainTextField: NSViewRepresentable {
 /// An `NSTextField` that turns off its field editor's substitutions each time it takes focus.
 /// The field editor is the window's, shared by its fields, so it is set up again every time.
 final class PlainFieldView: NSTextField {
+  /// A click in a window that is not key focuses this field, as it does in Electron. Without it
+  /// the click only brings the sheet forward, and typing goes to the field that had focus: the
+  /// M4b live run's "clicking Command does not move focus; all text goes into Name".
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+  /// The click makes this field the first responder before AppKit tracks it, so focus moves even
+  /// when another field's editor holds it.
+  override func mouseDown(with event: NSEvent) {
+    if let window, currentEditor() == nil { window.makeFirstResponder(self) }
+    super.mouseDown(with: event)
+  }
+
   override func becomeFirstResponder() -> Bool {
     let became = super.becomeFirstResponder()
     if became, let editor = currentEditor() as? NSTextView { PlainText.configure(editor) }

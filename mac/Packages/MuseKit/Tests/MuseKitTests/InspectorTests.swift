@@ -29,13 +29,24 @@ func jsonText(_ text: String) -> String {
 /// A working diff of one file with two hunks, as `git-raw-diff` returns it.
 let twoHunks = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+ONE\n@@ -9 +9 @@\n-nine\n+NINE\n"
 
-/// Answers the first `git-raw-diff` request with an empty diff.
+/// Answers the first `git-raw-diff` request with an empty diff. Waits up to five seconds for the
+/// request, which the Inspector sends after `git-diff`, so a loaded machine still finds it.
 @MainActor
-func pushRawDiff(_ backend: ScriptedBackend) throws {
-  guard case .number(let id)? = backend.messages.first(where: { $0["method"] == "git-raw-diff" })?["id"] else {
-    throw WorkspaceError("no git-raw-diff request")
+func pushRawDiff(_ backend: ScriptedBackend) async throws {
+  func requestId() -> Int? {
+    guard case .number(let id)? = backend.messages.first(where: { $0["method"] == "git-raw-diff" })?["id"] else {
+      return nil
+    }
+    return Int(id)
   }
-  backend.push(reply(Int(id), #""""#))
+  for _ in 0..<1_000 {
+    if let id = requestId() {
+      backend.push(reply(id, #""""#))
+      return
+    }
+    try await Task.sleep(for: .milliseconds(5))
+  }
+  throw WorkspaceError("no git-raw-diff request")
 }
 
 func statusJSON(_ paths: [String], branch: String = "main") -> String {
@@ -172,7 +183,7 @@ let worktreesJSON =
     return
   }
   backend.push(reply(Int(late), #""for a""#))
-  try pushRawDiff(backend)
+  try await pushRawDiff(backend)
   await first.value
   #expect(inspector.diff == .loading)
   #expect(backend.messages.filter { $0["method"] == "git-diff" }.count == 1)
@@ -357,7 +368,7 @@ let worktreesJSON =
     return
   }
   backend.push(reply(Int(late), #""for a""#))
-  try pushRawDiff(backend)
+  try await pushRawDiff(backend)
   await selecting.value
   #expect(inspector.selected == nil)
   #expect(inspector.diff == .idle)

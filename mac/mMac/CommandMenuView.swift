@@ -2,10 +2,12 @@ import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
+import os
 
 /// The ⌘K sheet, as Electron's `CommandMenu.tsx`: the three actions, recent conversations and the
 /// themes, filtered as the person types. `CommandMenu` in MuseKit builds and filters the entries.
 struct CommandMenuView: View {
+  private static let log = Logger(subsystem: "com.domalhambra.mmac", category: "command-menu")
   let controller: AppController
   let workspace: Workspace
   @Environment(\.appearance) private var appearance
@@ -31,7 +33,13 @@ struct CommandMenuView: View {
     }
     .frame(width: 580)
     .background(appearance.colors.dialog)
-    .onChange(of: query) { selected = 0 }
+    .onChange(of: query) { _, query in
+      selected = 0
+      let count = CommandMenu.entries(
+        sessions: workspace.sessions, archived: workspace.preferences.archivedSessionIds, query: query
+      ).count
+      Self.log.debug("⌘K query \"\(query, privacy: .public)\": \(count) entries")
+    }
     // A backend event can shrink the list while the sheet shows; keep the highlight on a row, so
     // Return opens the row that looks highlighted.
     .onChange(of: entries.count) { _, count in selected = min(selected, max(count - 1, 0)) }
@@ -63,7 +71,9 @@ struct CommandMenuView: View {
                   .padding(.bottom, 4)
                   .accessibilityAddTraits(.isHeader)
               }
-              row(entry, index: index, entries: entries).id(index)
+              // The row's scroll id is the entry's, as the ForEach's: an index id would let the
+              // lazy stack keep the old row at that index when the filter changes.
+              row(entry, index: index, entries: entries).id(entry.id)
             }
           }
           .padding(.vertical, 6)
@@ -71,7 +81,9 @@ struct CommandMenuView: View {
         // As tall as the rows, up to Electron's 360 points.
         .frame(maxHeight: 360)
         .fixedSize(horizontal: false, vertical: true)
-        .onChange(of: selected) { proxy.scrollTo(selected) }
+        .onChange(of: selected) {
+          if entries.indices.contains(selected) { proxy.scrollTo(entries[selected].id) }
+        }
       }
     }
   }

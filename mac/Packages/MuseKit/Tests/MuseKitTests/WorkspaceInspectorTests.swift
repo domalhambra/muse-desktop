@@ -44,6 +44,8 @@ private func firstId(_ backend: ScriptedBackend, _ method: String, _ args: JSONV
     switch method {
     case "sessions": return [reply(id, #"{"sessions":[],"nextCursor":null}"#)]
     case "models": return [reply(id, "[]")]
+    case "usage": return [reply(id, "null")]
+    case "schedule-list": return [reply(id, "[]")]
     case "git-status":
       return args.first == "/plain"
         ? [failure(id, "Choose this project using Open project first.")]

@@ -7,7 +7,7 @@ import { messageOf } from '../main/muse-host'
 // app, then answered). See docs/superpowers/specs/2026-10-21-mac-app-design.md.
 
 /** Change this, and `backendProtocol` in mMac's `Messages.swift`, when a message shape changes. */
-export const HEADLESS_PROTOCOL = 2
+export const HEADLESS_PROTOCOL = 3
 
 const requestSchema = z.object({
   id: z.number().int().nonnegative(),
