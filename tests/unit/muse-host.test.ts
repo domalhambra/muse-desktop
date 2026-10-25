@@ -5,7 +5,14 @@ const wire = vi.hoisted(() => ({
   request: vi.fn(),
   command: vi.fn(),
   close: vi.fn(),
+  initializeResult: { experimentalApi: true } as Record<string, unknown>,
+  initializeOptions: {} as Record<string, unknown>,
   receive: (_notification: { method: string; params: Record<string, unknown> }) => {},
+}))
+const trust = vi.hoisted(() => ({ record: vi.fn(async () => true) }))
+vi.mock('../../src/main/muse-config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/muse-config')>()),
+  recordMuseTrust: trust.record,
 }))
 vi.mock('../../src/main/cli', () => ({
   discoverCli: async () => ({ path: '/test/muse', version: '1.4.7', environment: {} }),
@@ -14,18 +21,22 @@ vi.mock('@muse-code/sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@muse-code/sdk')>()),
   spawnMspConnection: () => ({
     close: wire.close,
-    initialize: async () => ({
-      close: wire.close,
-      connection: {
-        request: wire.request,
-        command: wire.command,
-        closed: new Promise(() => {}),
-        onNotification: (callback: typeof wire.receive) => {
-          wire.receive = callback
+    initialize: async (options: Record<string, unknown>) => {
+      wire.initializeOptions = options
+      return {
+        close: wire.close,
+        initializeResult: wire.initializeResult,
+        connection: {
+          request: wire.request,
+          command: wire.command,
+          closed: new Promise(() => {}),
+          onNotification: (callback: typeof wire.receive) => {
+            wire.receive = callback
+          },
+          onProtocolError: () => {},
         },
-        onProtocolError: () => {},
-      },
-    }),
+      }
+    },
   }),
 }))
 import { MuseHost } from '../../src/main/muse-host'
@@ -62,6 +73,7 @@ const notify = (method: string, params: Record<string, unknown>) =>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  wire.initializeResult = { experimentalApi: true }
   wire.command.mockImplementation(async (method: string) =>
     method === 'session/start' || method === 'session/resume' ? result() : {},
   )
@@ -221,6 +233,241 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('sets the approval mode and keeps the session current from the reply and the event', async () => {
+    const events: AppEvent[] = []
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    await host.create('/project')
+    wire.command.mockImplementation(async (method: string) => {
+      if (method === 'session/setApprovalMode')
+        return {
+          applyOutcome: 'completed',
+          effectiveMode: { mode: 'onRequest', source: 'approvalReconfigure' },
+        }
+      return method === 'session/start' || method === 'session/resume' ? result() : {}
+    })
+    await expect(host.setApprovalMode('s1', 'onRequest')).resolves.toBe('onRequest')
+    expect(wire.command).toHaveBeenLastCalledWith(
+      'session/setApprovalMode',
+      { sessionId: 's1', mode: 'onRequest' },
+      { maxAttempts: 1 },
+    )
+    expect(host.getSession('s1').approvalMode?.mode).toBe('onRequest')
+    notify('session/approvalModeChanged', { mode: 'denyUnmatched', source: 'replay' })
+    expect(host.getSession('s1').approvalMode?.mode).toBe('denyUnmatched')
+    await host.close()
+  })
+
+  it('approval mode: a changed event for an unknown session is ignored', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    wire.receive({
+      method: 'session/approvalModeChanged',
+      params: { sessionId: 'other', mode: 'allowAll' },
+    })
+    expect(host.getSession('s1').approvalMode).toBeUndefined()
+    await host.close()
+  })
+
+  it('folds context usage into the view, with and without a window', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/contextUsage', { usedTokens: 4200, windowTokens: 10000, pressure: 'normal' })
+    expect(host.getView('s1').context).toEqual({ used: 4200, window: 10000, pressure: 'normal' })
+    notify('session/contextUsage', { usedTokens: 9900, pressure: 'blocked' })
+    expect(host.getView('s1').context).toEqual({
+      used: 9900,
+      window: undefined,
+      pressure: 'blocked',
+    })
+    await host.close()
+  })
+
+  const usage = {
+    observedAtMs: 1_800_000_000_000,
+    tier: 'pro',
+    window: { usedPercent: 42, resetsAtMs: 1_800_000_600_000, windowDurationMins: 300 },
+    weekly: { usedPercent: 112, resetsAtMs: 1_800_400_000_000 },
+  }
+  const limits = {
+    observedAt: 1_800_000_000_000,
+    tier: 'pro',
+    window: { usedPercent: 42, resetsAt: 1_800_000_600_000, minutes: 300 },
+    weekly: { usedPercent: 112, resetsAt: 1_800_400_000_000 },
+  }
+
+  it('reads the limits once at connect and emits them', async () => {
+    const events: AppEvent[] = []
+    wire.request.mockImplementation(async (method: string) =>
+      method === 'usage/read' ? { usage } : {},
+    )
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    await vi.waitFor(() => expect(host.limits).toEqual(limits))
+    expect(wire.request.mock.calls.filter(([method]) => method === 'usage/read')).toHaveLength(1)
+    expect(events).toContainEqual({ type: 'usage-changed', limits })
+    await host.close()
+  })
+
+  it('keeps the limits null when Muse has observed nothing or the read fails', async () => {
+    const events: AppEvent[] = []
+    wire.request.mockImplementation(async (method: string) => {
+      if (method === 'usage/read') throw new Error('Method not found')
+      return {}
+    })
+    const host = new MuseHost((event) => events.push(event))
+    expect((await host.connect('')).state).toBe('ready')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(host.limits).toBeNull()
+    expect(events.some((event) => event.type === 'usage-changed')).toBe(false)
+    await host.close()
+  })
+
+  it('keeps the limits null and emits nothing when usage/read returns no usage', async () => {
+    const events: AppEvent[] = []
+    wire.request.mockImplementation(async () => ({}))
+    const host = new MuseHost((event) => events.push(event))
+    expect((await host.connect('')).state).toBe('ready')
+    await vi.waitFor(() =>
+      expect(wire.request.mock.calls.some(([method]) => method === 'usage/read')).toBe(true),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(host.limits).toBeNull()
+    expect(events.some((event) => event.type === 'usage-changed')).toBe(false)
+    await host.close()
+  })
+
+  it('keeps a newer usage/changed when a late usage/read reply arrives', async () => {
+    const events: AppEvent[] = []
+    let reply: (value: unknown) => void = () => {}
+    wire.request.mockImplementation((method: string) =>
+      method === 'usage/read'
+        ? new Promise((resolve) => {
+            reply = resolve
+          })
+        : Promise.resolve({}),
+    )
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    const newer = { ...usage, observedAtMs: usage.observedAtMs + 60_000 }
+    notify('usage/changed', { ...newer, window: { ...newer.window, usedPercent: 85 } })
+    reply({ usage })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(host.limits?.observedAt).toBe(newer.observedAtMs)
+    expect(host.limits?.window.usedPercent).toBe(85)
+    expect(events.filter((event) => event.type === 'usage-changed')).toHaveLength(1)
+    await host.close()
+  })
+
+  it('folds usage/changed into the limits without a session id', async () => {
+    const events: AppEvent[] = []
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    notify('usage/changed', { ...usage, window: { ...usage.window, usedPercent: 85 } })
+    expect(host.limits?.window.usedPercent).toBe(85)
+    expect(events.at(-1)).toEqual({
+      type: 'usage-changed',
+      limits: { ...limits, window: { ...limits.window, usedPercent: 85 } },
+    })
+    await host.close()
+  })
+
+  it('keeps the session cost and the quota stop, and clears the stop on a clean turn', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/tokenUsage', {
+      sessionId: 's1',
+      cumulative: {
+        promptTokens: 100,
+        outputTokens: 28,
+        totalTokens: 128,
+        cost: { usd: 0.84, partial: true },
+      },
+    })
+    expect(host.getView('s1').cost).toEqual({ usd: 0.84, partial: true })
+    notify('turn/completed', {
+      sessionId: 's1',
+      turnId: 't1',
+      error: {
+        kind: 'modelError',
+        message: 'quota',
+        retryable: false,
+        quota: { limitKind: 'tierLimit', resetsAtMs: 1_800_000_600_000 },
+      },
+    })
+    expect(host.getView('s1').quota).toEqual({ kind: 'tierLimit', resetsAt: 1_800_000_600_000 })
+    notify('turn/completed', { sessionId: 's1', turnId: 't2' })
+    expect(host.getView('s1').quota).toBeUndefined()
+    await host.close()
+  })
+
+  it('replaces the todo list wholesale and clears it on an empty list', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/todoListChanged', {
+      items: [
+        {
+          text: 'Clean the build folder',
+          status: 'inProgress',
+          activeForm: 'Cleaning the build folder',
+        },
+        { text: 'Run the tests', status: 'pending' },
+      ],
+      revision: 1,
+      sourceTool: 'TodoWrite',
+    })
+    expect(host.getView('s1').todos?.map((todo) => todo.text)).toEqual([
+      'Clean the build folder',
+      'Run the tests',
+    ])
+    notify('session/todoListChanged', { items: [], revision: 2, sourceTool: 'TodoWrite' })
+    expect(host.getView('s1').todos).toEqual([])
+    await host.close()
+  })
+
+  it('opens a side chat as a loaded session of its own', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    wire.command.mockImplementation(async (method: string) => {
+      if (method === 'session/sideChat')
+        return { ...result(), session: { ...session, sessionId: 'side-1', kind: 'sideChat' } }
+      return method === 'session/start' || method === 'session/resume' ? result() : {}
+    })
+    const side = await host.sideChat('s1')
+    expect(side.session.sessionId).toBe('side-1')
+    expect(wire.command).toHaveBeenCalledWith(
+      'session/sideChat',
+      { sessionId: 's1' },
+      { maxAttempts: 1 },
+    )
+    // Loaded: a send goes straight out, with no resume first.
+    wire.command.mockClear()
+    await host.send('side-1', [{ type: 'text', text: 'hi' }], 'high', 'queue', 'hi')
+    expect(wire.command.mock.calls.map((call) => call[0])).toEqual(['turn/start'])
+    await host.close()
+  })
+
+  it('runs a shell command in the session and asks for the userShell capability', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    await host.runShell('s1', 'echo hi')
+    expect(wire.command).toHaveBeenLastCalledWith(
+      'session/userShell',
+      { sessionId: 's1', commandText: 'echo hi' },
+      { maxAttempts: 1 },
+    )
+    expect(wire.initializeOptions).toMatchObject({
+      capabilities: { requestedCapabilities: ['sessionListStream', 'userShell'] },
+    })
+    await host.close()
+  })
+
   it('dispatches compaction through the CLI without rewriting the conversation', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')
@@ -285,5 +532,51 @@ describe('Muse protocol boundary', () => {
       { maxAttempts: 1 },
     )
     await host.close()
+  })
+})
+
+describe('Muse worktrees', () => {
+  it('asks Muse to create a worktree only when requested', async () => {
+    const host = new MuseHost(() => {})
+    expect((await host.connect('/test/muse')).experimental).toBe(true)
+    await host.create('/project')
+    expect(wire.command.mock.calls.at(-1)?.[1]).toEqual({ workspaceRoot: '/project' })
+    expect(trust.record).not.toHaveBeenCalled()
+    await host.create('/project', undefined, { worktree: true })
+    expect(wire.command.mock.calls.at(-1)?.[1]).toEqual({
+      workspaceRoot: '/project',
+      worktree: { mode: 'create' },
+    })
+    expect(trust.record).toHaveBeenLastCalledWith(expect.any(String), '/project')
+  })
+  it('makes a new worktree from the parent project when started inside a worktree', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('/test/muse')
+    await host.create('/project/.muse/worktrees/20261020-ab12', undefined, { worktree: true })
+    expect(wire.command.mock.calls.at(-1)?.[1]).toMatchObject({ workspaceRoot: '/project' })
+    expect(trust.record).toHaveBeenLastCalledWith(expect.any(String), '/project')
+  })
+  it('refuses worktree sessions when the CLI withholds experimental methods', async () => {
+    wire.initializeResult = { experimentalApi: false }
+    const host = new MuseHost(() => {})
+    await host.connect('/test/muse')
+    await expect(host.create('/project', undefined, { worktree: true })).rejects.toThrow('worktree')
+    expect(await host.listWorktrees('/project')).toEqual([])
+  })
+  it('lists worktrees and treats an untrusted repository as having none', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('/test/muse')
+    const entry = { path: '/project', branch: 'main', isMain: true, sessionIds: [] }
+    wire.request.mockImplementationOnce(async () => ({ worktrees: [entry] }))
+    expect(await host.listWorktrees('/project')).toEqual([entry])
+    const { MspError } = await import('@muse-code/sdk')
+    wire.request.mockImplementationOnce(async () => {
+      throw new MspError({
+        code: -32000,
+        message: 'not trusted',
+        data: { kind: 'workspaceNotTrusted' },
+      })
+    })
+    expect(await host.listWorktrees('/project')).toEqual([])
   })
 })

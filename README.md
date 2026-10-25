@@ -1,111 +1,59 @@
-# Muse Desktop · Unofficial
+# Muse Desktop · Unofficial · Dom's fork, with mMac
 
-[![Checks](https://github.com/robzilla1738/muse-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/robzilla1738/muse-desktop/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/source-MIT-blue)](LICENSE)
-[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-blue)](docs/compatibility.md)
-[![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-blue)](docs/compatibility.md)
-[![Linux](https://img.shields.io/badge/Linux-x64%20%7C%20arm64-blue)](docs/compatibility.md)
+**Unofficial community software. Not affiliated with, endorsed by, sponsored by, or supported by Meta.** Muse Code is a separate product of Meta. This repository holds a desktop app for the Muse Code CLI, not the CLI or a Meta account.
 
-**Unofficial community software by [Robert Courson (@robzilla1738)](https://github.com/robzilla1738). Not affiliated with, endorsed by, sponsored by, or supported by Meta.** Muse Code is a separate product of Meta. This repository provides the desktop companion, not the CLI or a Meta account.
-
-A desktop home for Muse Code across macOS, Windows, and Linux. Your installed CLI, existing sign-in, project settings, and saved conversations—with a unified Mac-inspired desktop interface built around the way you work.
-
-![Muse Desktop in the default blue theme](docs/screenshots/muse.png)
-
-**[Download 0.2.0](https://github.com/robzilla1738/muse-desktop/releases/tag/v0.2.0)** — macOS builds are Developer ID signed by Robert Courson and notarized by Apple (Apple Silicon and Intel). Windows (`NSIS` / `ZIP`) and Linux (`AppImage` / `tar.gz`) builds use the same unified interface. CI artifacts are separate, unsigned development builds.
+This is Dom Alhambra's fork of Muse Desktop by [Robert Courson (@robzilla1738)](https://github.com/robzilla1738/muse-desktop). Upstream is an Electron app. This branch's app is **mMac**, a native SwiftUI app for macOS in `mac/`. mMac runs upstream's Node core unchanged, in one plain Node process. Electron's shell left this branch on 2026-10-22. Contributors start at `CLAUDE.md`, and every document is indexed in `docs/README.md`.
 
 ## What it does
 
-- Discovers your existing `muse` installation across macOS, Linux, and Windows, including your login-shell environment and standard installation paths. No separate API key or desktop account.
-- Streams real Muse conversations, reasoning summaries, grouped tool activity, and stored output through the official SDK, with language-labeled code blocks and one-click copy.
-- Opens and resumes CLI sessions, with naming, grouped `⌘ K` / `Ctrl K` search, pinning, local archiving, and Markdown export.
-- Presents the CLI's exact approval choices and agent questions. Supports cancellation, queued follow-ups, and steering.
-- Opens local projects with Git branch and working-tree status badges, previews files with breadcrumbs and file-type icons, supports inline `@file` mentions and drag-and-drop file context, and shows line-numbered Git diffs in the project inspector.
-- Includes five themes: **Muse**, **Daylight**, **Moonlight**, **Grove**, and **Plush**, plus system appearance matching, text size, reduced motion, and optional completion notifications.
-- Preserves the clean, frameless macOS traffic-light window chrome across macOS, Windows, and Linux, with native file pickers, keyboard shortcuts, project trust dialogs, and theme-matched in-app menus.
-- Records voice with the microphone button or **Option–V** / **Alt–V** with live waveform metering, transcribes through `muse voice transcribe`, and inserts text into the draft for review.
-- Imports existing CLI conversation history and discovers its project folders automatically; internal reminders and hooks stay in the Activity inspector.
-- Supports composer commands such as `/clear`, `/voice`, `/model`, `/effort`, `/compact`, and `/rename`; type `/` for commands or `@` for project files.
-- Opens your project in Finder / Explorer / Files, your system terminal, or the full Muse Code CLI directly from the project inspector.
-- Includes Sparkle 2 updates in packaged macOS builds, with signed feeds and archives. Check manually in **Settings → About**, or opt into daily checks. Installation always requires your action.
+- Finds your installed `muse`, with your login-shell environment, or uses a path you choose. No API key and no separate account.
+- Streams conversations, reasoning summaries, grouped tool activity and stored output, with language-labeled code blocks and one-click copy.
+- Opens and resumes CLI sessions, renames them, and finds them with grouped ⌘K search. Pins conversations, archives them in mMac only, and exports them to Markdown.
+- Shows the CLI's exact approval choices and agent questions. Cancels, queues follow-ups and steers. Chooses the model and the reasoning effort.
+- Opens local projects with Git branch and change badges, previews files, and shows line-numbered diffs in the inspector. Reverts a hunk or a file, or stages a file.
+- Starts a conversation in a Git worktree that Muse Code creates under `<project>/.muse/worktrees/`, and merges or removes it from the inspector.
+- Handles composer commands such as `/clear`, `/voice`, `/model`, `/effort`, `/compact` and `/rename`. Type `/` for commands or `@` for project files. Attach images and text files with the paperclip, by a drop on the composer, or by a paste.
+- Records voice with the microphone button or Option–V, transcribes it with `muse voice transcribe`, and puts the text in the draft. It never sends it on its own.
+- Opens the project in Finder, in Terminal, or in the full Muse Code CLI from the inspector.
+- Has a native Settings window: the Muse Code path, the MCP servers in Muse Code's own `~/.config/muse/settings.json` with sign-in through `muse mcp login`, the folder and MCP bridges (see [bridges](docs/bridge.md)), the Muse and Moonlight themes, text size, Reduce motion and completion notifications.
+- Shows the conversation's tokens and estimated cost in the inspector, and the 5-hour and weekly limits at the bottom of the sidebar, when Muse Code reports them.
+- Runs scheduled tasks while it is open: a prompt in a trusted project, hourly, daily, on weekdays, weekly, by hand or on a cron expression (**Settings → Scheduled**).
+- Shows a project's pull requests as change cards, with a delivery track and Accept, through the GitHub CLI (`gh`) when it is installed and signed in.
+- Imports existing CLI history and finds its project folders. Internal reminders and hooks stay in the Activity inspector.
 
-<p><img src="docs/screenshots/daylight.png" width="49%" alt="Daylight theme" /> <img src="docs/screenshots/moonlight.png" width="49%" alt="Moonlight theme" /></p>
-<p><img src="docs/screenshots/grove.png" width="49%" alt="Grove theme" /> <img src="docs/screenshots/appearance.png" width="49%" alt="Appearance settings" /></p>
-<p><img src="docs/screenshots/windows.png" width="49%" alt="Muse Desktop on Windows" /> <img src="docs/screenshots/linux.png" width="49%" alt="Muse Desktop on Linux" /></p>
+## What it needs
 
-## Install
+- macOS 15 or newer.
+- Xcode, and XcodeGen (`brew install xcodegen`).
+- Node.js 22.12 or newer on your login shell's PATH. mMac runs its backend on it.
+- Muse Code with `muse serve`, installed and signed in. See `docs/compatibility.md`.
+- For change cards only: the GitHub CLI (`brew install gh`), signed in with `gh auth login`.
 
-| Platform                    | Download                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| macOS (Apple Silicon)       | [Apple Silicon DMG](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-arm64.dmg) · [ZIP](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-arm64.zip)                                                                                                                                                                                                                                                                                      |
-| macOS (Intel)               | [Intel DMG](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-x64.dmg) · [ZIP](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-x64.zip)                                                                                                                                                                                                                                                                                                  |
-| Windows 10/11 (x64 & ARM64) | [x64 Installer (.exe)](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-win-x64.exe) · [ARM64 Installer (.exe)](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-win-arm64.exe) · [x64 ZIP](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-win-x64.zip) · [ARM64 ZIP](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-win-arm64.zip)                  |
-| Linux (x64 & ARM64)         | [x64 AppImage](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-linux-x86_64.AppImage) · [ARM64 AppImage](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-linux-arm64.AppImage) · [x64 tar.gz](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-linux-x64.tar.gz) · [ARM64 tar.gz](https://github.com/robzilla1738/muse-desktop/releases/download/v0.2.0/Muse-Desktop-0.2.0-linux-arm64.tar.gz) |
+mMac is not packaged or signed for other people. It runs from this checkout: it starts its backend with `node --import tsx src/headless/server.ts` in the checkout it was built from.
 
-Requires macOS 13+, Windows 10/11, or Linux, and a separately installed, signed-in Muse Code CLI. Desktop discovers your CLI and existing conversations automatically. Use **Settings → Muse Code** if you need to select a custom executable. The first project you work in requires your trust confirmation.
-
-Check for updates from **Muse Desktop → Check for Updates…** or **Settings → About**. Daily checks are optional. See [release verification and known limits](docs/release-readiness.md) and the [supported CLI workflows](docs/compatibility.md).
-
-## Run locally
-
-Requires macOS 13+, Windows 10/11, or Linux, Node.js 22.12 or newer, and Muse Code with `muse serve` support. Verified with Muse Code **1.4.7** and `@muse-code/sdk` **1.4.7**. The GUI does not bundle or install Muse Code. Packaging macOS builds also requires Apple's Xcode Command Line Tools (`xcode-select --install`) to compile the small Sparkle bridge.
-
-1. Install and sign in to Muse Code using the [official instructions](https://dev.meta.ai/docs/muse-code).
-2. Check that `muse --version` works in your terminal.
-3. In this repository, run:
+## Build and run
 
 ```sh
 npm ci
-npm run dev
+(cd mac && xcodegen generate)
+xcodebuild build -project mac/mMac.xcodeproj -scheme mMac -configuration Debug -derivedDataPath .cache/mmac -destination 'platform=macOS'
+open .cache/mmac/Build/Products/Debug/mMac.app
 ```
 
-Open the packaged application when testing a standalone build. Opening the development Electron binary by itself displays Electron’s launcher. Renderer changes reload during development; restart `npm run dev` after changes to the main process or preload bridge.
-
-Open a project, review its trust prompt, and send a message. Existing sessions and their project folders appear automatically. If detection fails, select the executable in **Settings → Muse Code** and reconnect.
-
-## Build for macOS, Windows, and Linux
-
-```sh
-# Unsigned macOS app bundle and DMG for your current architecture
-npm run package:unsigned
-npm run dist:unsigned
-
-# Windows unpacked directory and NSIS / ZIP installers
-npm run package:win
-npm run dist:win
-
-# Linux unpacked directory and AppImage / tar.gz archives
-npm run package:linux
-npm run dist:linux
-```
-
-Artifacts go in `release/`. Local macOS builds are unsigned and unnotarized; macOS may require an explicit first-open confirmation. See [release instructions](docs/releasing.md) for signed distribution, multi-platform builds, and checksums.
+Open a project, confirm its trust prompt, and send a message. Existing conversations and their project folders appear by themselves. If mMac cannot find `muse`, choose it in **Settings → Muse Code**.
 
 ## Develop and verify
 
-```sh
-npm run typecheck
-npm test
-npm run build
-npm run test:integration
-npm run test:e2e
-npm run format:check
-```
+The gate is "Prove a change" in `docs/changing-things.md`. The integration and headless scripts and the UI tests use the real CLI's echo provider, temporary homes and temporary projects. They need no model API key. Real model calls, your account's permissions and external tools need a signed-in CLI, and the echo tests do not exercise them.
 
-Integration and desktop tests use the real CLI's **echo provider**, isolated temporary homes, and temporary projects. They do not need a model API key. Set `MUSE_BIN=/absolute/path/to/muse` if needed. Real model inference, your account's permissions, and external tools require an authenticated installation and are not exercised by echo tests.
-
-The first-run setup test also runs without Muse Code: `npx playwright test tests/e2e/setup.spec.ts` after building. Release checks and remaining manual verification are recorded in [release readiness](docs/release-readiness.md).
-
-The app is built with **Electron, React, TypeScript, electron-vite, and the official Muse SDK**. Electron lets the official Node SDK run directly in the main process, while the renderer is sandboxed behind a narrow typed bridge. No web service is required. See [architecture](docs/architecture.md), [compatibility](docs/compatibility.md), and [contributing](CONTRIBUTING.md).
+mMac's measured size against the Electron app is in "Size" in `docs/architecture.md`. See also [architecture](docs/architecture.md), [compatibility](docs/compatibility.md) and [contributing](CONTRIBUTING.md).
 
 ## Data and permissions
 
-The CLI remains responsible for credentials, model requests, tools, sandboxing, and session storage. Desktop does not rewrite CLI settings, store an additional copy of credentials, or add analytics. Model requests still reach the provider configured in Muse Code; “Local project” describes your files, not offline inference.
+The CLI stays responsible for credentials, model requests, tools, sandboxing and session storage. mMac changes the CLI's configuration in two places only, each on your action: a worktree conversation adds its project to `~/.config/muse/trust.json`, and **Settings → MCP servers** edits the MCP entries in `~/.config/muse/settings.json`. Every other key stays as it was. mMac stores no copy of your credentials and adds no analytics. Model requests still reach the provider configured in Muse Code.
 
-Desktop stores appearance, recent projects, project trust, pins, and archives in its Electron application-support directory. Voice audio goes only through your installed CLI and its transcription service. Temporary audio is deleted after completion or cancellation; voice text is never sent as a message automatically. Draft text is kept in memory and is not restored after quitting. Archiving only hides a conversation in Desktop; it does not delete the CLI session. Removing Desktop does not remove your CLI or its conversations.
-
-Sparkle stores update preferences in macOS user defaults. Manual checks, or daily checks when enabled, connect to GitHub to retrieve the signed feed. Installing an update downloads its archive from GitHub Releases. System profiling is disabled; no conversations or project files are included in update requests.
+mMac keeps its preferences, recent projects, project trust, pins, archives and scheduled tasks in `~/Library/Application Support/mMac`, and the MCP bridge token in the login Keychain. Voice audio goes only through your installed CLI and its transcription service. The temporary recording is private and deleted after transcription or cancellation, and the text is never sent on its own. Pasted images go to private temporary files, which mMac deletes after the send or the removal. Drafts stay in memory and are not restored after quitting. Archiving only hides a conversation in mMac; it does not delete the CLI session. Pull requests go through your own `gh` and its sign-in; mMac merges one only after you confirm.
 
 ## License and artwork
 
-Source code is [MIT licensed](LICENSE). See [NOTICE](NOTICE.md) for the supplied Muse logo, mascot reference, generated artwork, and third-party licensing. Generation prompts are recorded in [docs/image-prompts.json](docs/image-prompts.json) and [docs/plush-image-prompt.json](docs/plush-image-prompt.json). Trademark and reference-image rights are separate from the source-code license.
+Source code is [MIT licensed](LICENSE). See [NOTICE](NOTICE.md) for the Muse mark and third-party licensing. Trademark rights are separate from the source-code license.
