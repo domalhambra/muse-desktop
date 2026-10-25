@@ -30,6 +30,8 @@ struct RootView: View {
     }
     .background(ThemeBackground(palette: appearance.palette))
     .background { if !MMacApp.keepsWindowState { WindowStateGuard() } }
+    // The inspector opens at its ideal width, and the split view runs past a narrow window's edges.
+    .background { SplitFitGuard() }
     // The controller reopens this window for an Ask or a Dock click after it was closed.
     .onAppear { controller.showWindow = { [openWindow] in openWindow(id: MMacApp.mainWindow) } }
   }
@@ -74,6 +76,8 @@ struct MainView: View {
     .themedToolbar()
     // The split views exist only from here on.
     .background { if !MMacApp.keepsWindowState { WindowStateGuard() } }
+    // The inspector opens at its ideal width, and the split view runs past a narrow window's edges.
+    .background { SplitFitGuard() }
     // Success notices, at the top of the window. Errors keep the alert below.
     .overlay(alignment: .top) {
       ToastView(workspace: workspace).padding(.top, 10)
