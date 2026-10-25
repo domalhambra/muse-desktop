@@ -826,11 +826,13 @@ final class MMacUITests: XCTestCase {
     // scrolls; the live run saw ten whole rows and no /btw. A scroll brings it fully in.
     let btw = element(app, "command-btw")
     XCTAssertLessThan(btw.frame.minY, popup.frame.maxY - 4, "/btw at \(btw.frame) is hidden under \(popup.frame)")
-    popup.scroll(byDeltaX: 0, deltaY: -200)
-    // The scroll can still be settling when it returns, so the check waits for it.
-    XCTAssertTrue(
-      btw.wait(for: \.isHittable, toEqual: true, timeout: 5),
-      "/btw is not hittable after a scroll: \(btw.frame) in \(popup.frame)")
+    // A synthesized scroll sometimes does not reach the list (the frame did not move), so the
+    // test scrolls again, up to three times, and waits for each to settle.
+    for _ in 0..<3 where !btw.isHittable {
+      popup.scroll(byDeltaX: 0, deltaY: -200)
+      _ = btw.wait(for: \.isHittable, toEqual: true, timeout: 2)
+    }
+    XCTAssertTrue(btw.isHittable, "/btw is not hittable after a scroll: \(btw.frame) in \(popup.frame)")
     // Typing filters the list, and Tab completes the highlighted command and a space.
     composer.typeText("he")
     XCTAssertTrue(element(app, "command-clear").waitForNonExistence(timeout: 5))
