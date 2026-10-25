@@ -46,6 +46,9 @@ struct SplitFitGuard: NSViewRepresentable {
         window: window.frame, contentWidth: content.bounds.width, splitWidth: split.frame.width,
         screen: screen.visibleFrame)
       {
+        // SwiftUI can name the split views' autosaves again after `WindowStateGuard` cleared them,
+        // and this resize would then write a test run's frames into the real defaults.
+        if !MMacApp.keepsWindowState { WindowStateGuard.stopAutosaving(in: window) }
         window.setFrame(frame, display: true)
       }
     }
