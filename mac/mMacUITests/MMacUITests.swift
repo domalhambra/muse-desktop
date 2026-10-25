@@ -1282,6 +1282,10 @@ final class MMacUITests: XCTestCase {
     XCTAssertTrue(
       card1.descendants(matching: .any)
         .matching(NSPredicate(format: "label CONTAINS %@", "Accepted")).firstMatch.waitForExistence(timeout: 10))
+    // AppKit does not quit while a window has a sheet attached, so the sheet closes first.
+    let sheet = element(app, "proposed-changes-sheet")
+    app.windows["main"].sheets.buttons["Done"].click()
+    XCTAssertTrue(sheet.waitForNonExistence(timeout: 5))
     quit(app)
 
     let entries = try Self.logged(log)

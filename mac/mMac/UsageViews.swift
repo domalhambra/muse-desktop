@@ -1,3 +1,4 @@
+import AppKit
 import MuseBackend
 import MuseKit
 import SwiftUI
@@ -6,6 +7,7 @@ import SwiftUI
 struct UsageFooter: View {
   let limits: SubscriptionLimits
   @State private var showing = false
+  @State private var escapeMonitor: Any?
   @Environment(\.appearance) private var appearance
 
   var body: some View {
@@ -33,6 +35,22 @@ struct UsageFooter: View {
       .popover(isPresented: $showing, arrowEdge: .trailing) {
         UsagePopover(limits: limits, now: context.date)
       }
+    }
+    // The popover holds no control, so it never becomes the key window, and Escape went to the
+    // main window and left it open (end run, 2026-10-25). While it shows, Escape closes it.
+    .onChange(of: showing) { _, shown in
+      if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+      escapeMonitor = nil
+      guard shown else { return }
+      escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        guard event.keyCode == 53 else { return event }
+        showing = false
+        return nil
+      }
+    }
+    .onDisappear {
+      if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+      escapeMonitor = nil
     }
   }
 
