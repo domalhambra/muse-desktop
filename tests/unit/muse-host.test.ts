@@ -546,40 +546,95 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
-  it('keeps a goal that changed while the history was being read', async () => {
+  it('pages backward by the cursor and finds a goal on the second page', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')
+    const pages: Record<string, unknown>[] = []
+    wire.request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'session/read') return result()
+      if (method !== 'view/page') return {}
+      pages.push(params)
+      return params.cursor
+        ? {
+            events: [
+              {
+                method: 'session/goalChanged',
+                params: {
+                  sessionId: 's1',
+                  viewCursor: 'c1',
+                  goal: { objective: 'Deep', status: 'active', percentComplete: 3 },
+                },
+              },
+            ],
+            nextCursor: null,
+          }
+        : { events: [], nextCursor: 'c5' }
+    })
+    expect((await host.open('s1')).goal?.objective).toBe('Deep')
+    expect(pages).toEqual([
+      { sessionId: 's1', direction: 'backward', limit: 500 },
+      { sessionId: 's1', direction: 'backward', limit: 500, cursor: 'c5' },
+    ])
+    await host.close()
+  })
+
+  const held = { objective: 'Held', status: 'active', percentComplete: 20 }
+  const goalPage = (goal: object | null) => ({
+    events: [
+      { method: 'session/goalChanged', params: { sessionId: 's1', viewCursor: 'c1', goal } },
+    ],
+    nextCursor: null,
+  })
+
+  it('keeps the held goal through a resume, and a live clear beats a stale read', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    wire.request.mockImplementation(async (method: string) => {
+      if (method === 'session/read') return result()
+      if (method === 'view/page') return goalPage(held)
+      return {}
+    })
+    await host.open('s1')
+    expect(host.getView('s1').goal?.objective).toBe('Held')
     let release = () => {}
     const gate = new Promise<void>((resolve) => (release = resolve))
     wire.request.mockImplementation(async (method: string) => {
+      if (method === 'approval/listPending') return { approvals: [], userInputs: [] }
+      if (method !== 'view/page') return {}
+      await gate
+      return goalPage({ ...held, objective: 'Stale' })
+    })
+    const resuming = host.resume('s1')
+    await vi.waitFor(() =>
+      expect(wire.request.mock.calls.filter(([method]) => method === 'view/page')).toHaveLength(2),
+    )
+    // The reseeded view still has the goal, so a live event now does not emit a view without it.
+    expect(host.getView('s1').goal?.objective).toBe('Held')
+    notify('session/goalChanged', { goal: null })
+    expect(host.getView('s1').goal).toBeUndefined()
+    release()
+    await resuming
+    expect(host.getView('s1').goal).toBeUndefined()
+    await host.close()
+  })
+
+  it('keeps the held goal when a resume cannot read the goal', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    wire.request.mockImplementation(async (method: string) => {
       if (method === 'session/read') return result()
-      if (method === 'view/page') {
-        await gate
-        return {
-          events: [
-            {
-              method: 'session/goalChanged',
-              params: {
-                sessionId: 's1',
-                viewCursor: 'c1',
-                goal: { objective: 'Stale', status: 'active', percentComplete: 0 },
-              },
-            },
-          ],
-          nextCursor: null,
-        }
-      }
+      if (method === 'view/page') return goalPage(held)
       return {}
     })
-    const opening = host.open('s1')
-    await vi.waitFor(() =>
-      expect(wire.request.mock.calls.some(([method]) => method === 'view/page')).toBe(true),
-    )
-    notify('session/goalChanged', {
-      goal: { objective: 'Live', status: 'active', percentComplete: 5 },
+    await host.open('s1')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    wire.request.mockImplementation(async (method: string) => {
+      if (method === 'approval/listPending') return { approvals: [], userInputs: [] }
+      if (method === 'view/page') throw new Error('offline')
+      return {}
     })
-    release()
-    expect((await opening).goal?.objective).toBe('Live')
+    await host.resume('s1')
+    expect(host.getView('s1').goal?.objective).toBe('Held')
     await host.close()
   })
 

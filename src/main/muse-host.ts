@@ -15,7 +15,6 @@ import {
   type GoalVerb,
   type MuseSession,
   type QuestionAnswer,
-  type SessionGoal,
   type SessionView,
   type SubscriptionLimits,
   type TranscriptItem,
@@ -300,8 +299,7 @@ export class MuseHost {
         { maxAttempts: 1 },
       ),
     )
-    const before = this.sessions.get(sessionId)?.view.goal
-    await this.restoreGoal(await this.hydrate(result, true), before)
+    await this.restoreGoal(await this.hydrate(result, true))
     await this.refreshPending(sessionId)
     this.schedule(sessionId)
   }
@@ -319,6 +317,8 @@ export class MuseHost {
         items,
         approvals: [],
         questions: [],
+        // `session/read` carries no goal: keep the one held until the log is read.
+        goal: this.sessions.get(result.session.sessionId)?.view.goal,
         error: result.lastTurn?.error?.message,
         historyNotice:
           result.history?.mode === 'none'
@@ -511,11 +511,10 @@ export class MuseHost {
    * `session/read` carries no goal, so read the view backward to the latest goal event. A page is
    * ascending, so its last goal event is the latest; a `null` goal is a clear and ends the search.
    * When the goal cannot be settled (a failed read, or no goal event in four pages), the strip is a
-   * convenience: keep `fallback`, the goal the host held before it re-read the conversation. A goal
-   * event that arrives live while this reads is newer than anything read, and wins; any live event
-   * beats the fallback.
+   * convenience: the goal `seed` carried over stays. A goal event that arrives live while this
+   * reads is newer than anything read, and wins.
    */
-  private async restoreGoal(live: LiveSession, fallback?: SessionGoal) {
+  private async restoreGoal(live: LiveSession) {
     const sessionId = live.view.session.sessionId
     const seen = live.goalEvents
     const schema = z.object({
@@ -545,7 +544,6 @@ export class MuseHost {
     } catch (error) {
       console.error(`Could not read the goal: ${messageOf(error)}`)
     }
-    if (live.goalEvents === 0) live.view.goal = fallback
   }
 
   async approve(sessionId: string, approvalId: string, choiceId: string) {
@@ -802,9 +800,8 @@ export class MuseHost {
       const result = sessionResultSchema.parse(
         await this.connection.request('session/read', { sessionId, excludeItems: false }),
       )
-      const before = this.requireSession(sessionId)
-      const loaded = before.loaded
-      await this.restoreGoal(await this.hydrate(result, loaded), before.view.goal)
+      const loaded = this.requireSession(sessionId).loaded
+      await this.restoreGoal(await this.hydrate(result, loaded))
       if (loaded) await this.refreshPending(sessionId)
       await this.connection.request('view/subscribe', { sessionId, after: result.viewCursor })
       this.schedule(sessionId)

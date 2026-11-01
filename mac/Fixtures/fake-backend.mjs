@@ -433,7 +433,7 @@ const reportLimits = () =>
 const methods = {
   // As backend.ts does: a client that speaks another protocol gets an error reply.
   hello: (theirs) => {
-    if (theirs !== 3)
+    if (theirs !== 4)
       throw new Error(`mMac speaks backend protocol ${theirs}, but the fake speaks 4.`)
     return { protocol: 4, version: 'fake' }
   },
