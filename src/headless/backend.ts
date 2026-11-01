@@ -215,11 +215,16 @@ export function createBackend({
     return project
   }
 
-  async function trustProject(project: string) {
+  /** True when the project, or the project a Muse worktree belongs to, is already trusted. */
+  function isTrusted(project: string) {
     const { trustedProjects } = current()
-    if (trustedProjects.includes(project)) return
+    if (trustedProjects.includes(project)) return true
     const parent = worktreeParent(project)
-    if (parent && trustedProjects.includes(parent)) return
+    return parent !== null && trustedProjects.includes(parent)
+  }
+
+  async function trustProject(project: string) {
+    if (isTrusted(project)) return
     const choice = await ask({
       kind: 'confirm',
       title: 'Trust this project?',
@@ -612,11 +617,29 @@ export function createBackend({
     return muse.controlTask(sessionId, parsed, parsed === 'stop-all' ? undefined : id.parse(target))
   })
 
+  // An id or scope that starts with `-` would reach the CLI as an option: `--help` exits 0.
+  const NOT_AN_OPTION = /^[^-]/
+  const NOT_AN_OPTION_MESSAGE = 'That skill name is not valid.'
+
+  /** What a `skill` input part accepts. A plugin skill's name carries a `plugin:` prefix the host drops. */
+  const skillSelector = ({ name, scope }: { name: string; scope: string }) =>
+    scope === 'plugin' ? name.replace(/^plugin:/, '') : name
+  /** A skill that shadows another by selector wins by scope: project, user, plugin, then the rest. */
+  const scopeRank = (scope: string) => {
+    const rank = ['project', 'user', 'plugin'].indexOf(scope)
+    return rank === -1 ? 3 : rank
+  }
+
   // Skills. The catalog never raises a trust Ask: a project joins only if it is already trusted.
   const trustedOrNone = async (value: unknown) => {
     if (value === undefined || value === null) return undefined
-    const project = await realFolder(pathSchema.parse(value))
-    return current().trustedProjects.includes(project) ? project : undefined
+    const path = pathSchema.parse(value)
+    // A deleted project must not fail the catalog: the global list still reads.
+    const project = await realFolder(path).catch((error) => {
+      if (error instanceof MissingFolder) return undefined
+      throw error
+    })
+    return project && isTrusted(project) ? project : undefined
   }
 
   method('skill-catalog', async (project) =>
@@ -626,8 +649,8 @@ export function createBackend({
   method('skill-set', async (value) => {
     const input = z
       .object({
-        id: z.string().min(1),
-        scope: z.string().min(1),
+        id: z.string().min(1).max(500).regex(NOT_AN_OPTION, NOT_AN_OPTION_MESSAGE),
+        scope: z.string().min(1).max(100).regex(NOT_AN_OPTION, NOT_AN_OPTION_MESSAGE),
         activation: skillActivationSchema,
         project: z.string().optional(),
       })
@@ -647,12 +670,22 @@ export function createBackend({
     const rows = await muse.listSkills(sessionId)
     if (rows) return rows
     const catalog = await skills.readCatalog(current().cliPath)
-    return catalog
+    const listed = catalog
       .filter((skill) => skill.activation !== 'off')
-      .map(({ name, displayName, description }) => ({
-        selector: name,
-        displayName,
-        description,
+      .map((skill) => ({ skill, selector: skillSelector(skill) }))
+    // One row per selector, the higher-precedence scope's, in the catalog's order.
+    const winner = new Map<string, (typeof listed)[number]>()
+    for (const row of listed) {
+      const held = winner.get(row.selector)
+      if (!held || scopeRank(row.skill.scope) < scopeRank(held.skill.scope))
+        winner.set(row.selector, row)
+    }
+    return listed
+      .filter((row) => winner.get(row.selector) === row)
+      .map(({ skill, selector }) => ({
+        selector,
+        displayName: skill.displayName,
+        description: skill.description,
       }))
   })
 
@@ -660,9 +693,9 @@ export function createBackend({
     const input = z
       .object({
         sessionId: id,
-        selector: z.string().min(1),
+        selector: z.string().min(1).max(200),
         arguments: z.string().max(100000).optional(),
-        effort: z.string(),
+        effort: effortSchema,
         mode: z.enum(['queue', 'steer']),
       })
       .parse(value)

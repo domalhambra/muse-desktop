@@ -1230,6 +1230,97 @@ describe('skills', () => {
     )
   })
 
+  it('builds the selector the host accepts for a plugin skill', async () => {
+    const skills = fakeSkills()
+    skills.readCatalog.mockResolvedValue([
+      {
+        id: 'plugin:threejs:threejs',
+        name: 'plugin:threejs:threejs',
+        displayName: 'threejs',
+        description: 'd',
+        scope: 'plugin',
+        activation: 'on',
+      },
+    ])
+    const h = harness(fakeMuse(), [], { skills })
+    await h.start()
+    await expect(h.call('skill-rows', 's1')).resolves.toEqual([
+      { selector: 'threejs:threejs', displayName: 'threejs', description: 'd' },
+    ])
+  })
+
+  it('keeps one row per selector, the higher-precedence scope’s, in catalog order', async () => {
+    const skills = fakeSkills()
+    const entry = (id: string, name: string, scope: string, description: string) => ({
+      id,
+      name,
+      displayName: name,
+      description,
+      scope,
+      activation: 'on',
+    })
+    skills.readCatalog.mockResolvedValue([
+      entry('bundled:plan', 'plan', 'bundled', 'bundled plan'),
+      entry('bundled:git', 'git', 'bundled', 'git'),
+      entry('user:plan', 'plan', 'user', 'my plan'),
+    ])
+    const h = harness(fakeMuse(), [], { skills })
+    await h.start()
+    await expect(h.call('skill-rows', 's1')).resolves.toEqual([
+      { selector: 'git', displayName: 'git', description: 'git' },
+      { selector: 'plan', displayName: 'plan', description: 'my plan' },
+    ])
+  })
+
+  it('keeps a trusted project’s worktree, and the global list for a deleted folder', async () => {
+    const { call, project, skills, asks } = await trustedSession()
+    await call('send-skill', { sessionId: 's1', selector: 'a', effort: 'high', mode: 'queue' })
+    asks.length = 0
+    const worktree = join(project, '.muse', 'worktrees', 'feature')
+    await mkdir(worktree, { recursive: true })
+    await call('skill-catalog', worktree)
+    expect(skills.readCatalog).toHaveBeenLastCalledWith(expect.anything(), worktree)
+    await rm(project, { recursive: true, force: true })
+    await expect(call('skill-catalog', worktree)).resolves.toEqual(catalog)
+    expect(skills.readCatalog).toHaveBeenLastCalledWith(expect.anything(), undefined)
+    await call('skill-set', {
+      id: 'bundled:a',
+      scope: 'project',
+      activation: 'on',
+      project: join(project, 'gone'),
+    })
+    expect(skills.setActivation).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'bundled:a',
+      'project',
+      'on',
+      undefined,
+    )
+    expect(asks).toHaveLength(0)
+  })
+
+  it('refuses an id that would read as an option, a long selector and a bad effort', async () => {
+    const { call, skills, muse } = await trustedSession()
+    for (const id of ['--help', '-h'])
+      await expect(call('skill-set', { id, scope: 'bundled', activation: 'on' })).rejects.toThrow()
+    await expect(
+      call('skill-set', { id: 'bundled:a', scope: '--json', activation: 'on' }),
+    ).rejects.toThrow()
+    expect(skills.setActivation).not.toHaveBeenCalled()
+    await expect(
+      call('send-skill', {
+        sessionId: 's1',
+        selector: 'x'.repeat(201),
+        effort: 'high',
+        mode: 'queue',
+      }),
+    ).rejects.toThrow()
+    await expect(
+      call('send-skill', { sessionId: 's1', selector: 'a', effort: 'maximum-ish', mode: 'queue' }),
+    ).rejects.toThrow()
+    expect(muse.send).not.toHaveBeenCalled()
+  })
+
   it('checks a skill-set request', async () => {
     const skills = fakeSkills()
     const h = harness(fakeMuse(), [], { skills })

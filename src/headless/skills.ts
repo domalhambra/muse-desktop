@@ -31,16 +31,38 @@ function workspace(project?: string) {
 /** Runs the CLI and returns its standard output. Tests pass a fake. */
 export type RunCli = (cliPath: string, args: string[]) => Promise<string>
 
-export const runCli: RunCli = async (cliPath, args) => {
-  const cli = await discoverCli(cliPath)
-  const { stdout } = await execCli(cli.path, args, {
-    env: cli.environment,
-    timeout: 15000,
-    maxBuffer: 16 * 1024 * 1024,
-    encoding: 'utf8',
-  })
-  return String(stdout)
+const TIMED_OUT = 'Muse Code took too long to answer. Try again.'
+const TOO_MUCH = 'Muse Code returned more than mMac can read. Update your CLI and try again.'
+const FAILED = 'Muse Code could not complete that skills request. Check your CLI and try again.'
+
+/**
+ * The CLI runner. A failed run becomes a plain sentence: the raw message holds the command line
+ * and the CLI's diagnostics, which may name local paths, so only stderr gets it.
+ */
+export function createRunCli(limits: { timeout: number; maxBuffer: number }): RunCli {
+  return async (cliPath, args) => {
+    const cli = await discoverCli(cliPath)
+    try {
+      const { stdout } = await execCli(cli.path, args, {
+        env: cli.environment,
+        timeout: limits.timeout,
+        maxBuffer: limits.maxBuffer,
+        encoding: 'utf8',
+      })
+      return String(stdout)
+    } catch (error) {
+      const failure = error as Error & { code?: unknown; killed?: boolean; signal?: string }
+      console.error(
+        `muse skills ${args[1] ?? ''} failed: ${String(failure.message).slice(0, 2000)}`,
+      )
+      if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new Error(TOO_MUCH)
+      if (failure.killed || failure.code === 'ETIMEDOUT') throw new Error(TIMED_OUT)
+      throw new Error(FAILED)
+    }
+  }
 }
+
+export const runCli: RunCli = createRunCli({ timeout: 15000, maxBuffer: 16 * 1024 * 1024 })
 
 export function createSkills(run: RunCli = runCli) {
   return {
