@@ -482,6 +482,25 @@ export class MuseHost {
   }
 
   /**
+   * A new conversation that copies this one through `turnId`, or through every completed turn.
+   * Muse returns the fork's resume envelope (msp.d.ts, `session/fork`), so it is loaded. A cut
+   * before a goal change fails: plain-errors.ts words that refusal.
+   */
+  async fork(sessionId: string, turnId?: string): Promise<SessionView> {
+    await this.resume(sessionId)
+    const result = sessionResultSchema.parse(
+      await this.connection.command(
+        'session/fork',
+        { sessionId, ...(turnId ? { cutPoint: { lastTurnId: turnId } } : {}) },
+        { maxAttempts: 1 },
+      ),
+    )
+    const live = await this.hydrate(result, true)
+    this.emit({ type: 'sessions-changed' })
+    return this.view(live)
+  }
+
+  /**
    * Runs a shell command in the session's folder, the TUI's `!` escape (msp.d.ts,
    * `session/userShell`). The result arrives as a `userShell` item through the item events.
    */

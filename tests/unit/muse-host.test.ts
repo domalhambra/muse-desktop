@@ -452,6 +452,39 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('forks through a turn and hydrates the fork as loaded', async () => {
+    const events: AppEvent[] = []
+    const host = new MuseHost((event) => events.push(event))
+    await host.connect('')
+    await host.create('/project')
+    wire.command.mockImplementation(async (method: string) =>
+      method === 'session/fork'
+        ? { ...result(), session: { ...session, sessionId: 'fork-1' } }
+        : method === 'session/start' || method === 'session/resume'
+          ? result()
+          : {},
+    )
+    const fork = await host.fork('s1', 't1')
+    expect(fork.session.sessionId).toBe('fork-1')
+    expect(wire.command).toHaveBeenCalledWith(
+      'session/fork',
+      { sessionId: 's1', cutPoint: { lastTurnId: 't1' } },
+      { maxAttempts: 1 },
+    )
+    expect(events.some((event) => event.type === 'sessions-changed')).toBe(true)
+    await host.fork('s1')
+    expect(wire.command).toHaveBeenCalledWith(
+      'session/fork',
+      { sessionId: 's1' },
+      { maxAttempts: 1 },
+    )
+    // Loaded: a send goes straight out, with no resume first.
+    wire.command.mockClear()
+    await host.send('fork-1', [{ type: 'text', text: 'hi' }], 'high', 'queue', 'hi')
+    expect(wire.command.mock.calls.map((call) => call[0])).toEqual(['turn/start'])
+    await host.close()
+  })
+
   it('runs the goal verbs and folds session/goalChanged', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')

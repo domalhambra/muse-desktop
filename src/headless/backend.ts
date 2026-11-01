@@ -76,6 +76,7 @@ export type Muse = Pick<
   | 'setModel'
   | 'setApprovalMode'
   | 'sideChat'
+  | 'fork'
   | 'runShell'
   | 'goal'
   | 'approve'
@@ -583,6 +584,13 @@ export function createBackend({
     const sessionId = id.parse(session)
     await sessionProject(sessionId)
     return muse.sideChat(sessionId)
+  })
+
+  // A new conversation copied from this one, through one turn or through all of them.
+  method('fork', async (session, turn) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.fork(sessionId, turn === undefined ? undefined : id.parse(turn))
   })
 
   // The composer's `!` escape: a shell command in the conversation's folder.

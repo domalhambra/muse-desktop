@@ -159,10 +159,13 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
   public let controlStatus: String?
   public let usage: ItemUsage?
   public let childSessionId: String?
+  /// The turn that produced the item. Fork points use it.
+  public let turnId: String?
   public var id: String { itemId }
 
   public init(
-    itemId: String, kind: String, revision: Int = 0, status: String, text: String? = nil,
+    itemId: String, kind: String, revision: Int = 0, status: String, turnId: String? = nil,
+    text: String? = nil,
     displayText: String? = nil, summary: [String]? = nil, tool: String? = nil,
     args: String? = nil, visibleOutput: String? = nil, commandText: String? = nil,
     fallbackText: String? = nil, statusLine: String? = nil, failureReason: String? = nil,
@@ -205,6 +208,7 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     self.controlStatus = controlStatus
     self.usage = usage
     self.childSessionId = childSessionId
+    self.turnId = turnId
   }
 }
 
@@ -245,6 +249,7 @@ extension TranscriptItem {
     controlStatus = try c.decodeIfPresent(String.self, forKey: .controlStatus)
     usage = try c.decodeIfPresent(ItemUsage.self, forKey: .usage)
     childSessionId = try c.decodeIfPresent(String.self, forKey: .childSessionId)
+    turnId = try c.decodeIfPresent(String.self, forKey: .turnId)
   }
 }
 

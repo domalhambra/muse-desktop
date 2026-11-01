@@ -183,6 +183,13 @@ let fullViewJSON = #"""
   #expect(item.summary == ["One", "Three"])
 }
 
+@Test func anItemCarriesItsTurnWhenTheBackendSendsOne() throws {
+  let with = #"{"itemId":"a1","kind":"agentMessage","revision":1,"status":"completed","turnId":"t1"}"#
+  let without = #"{"itemId":"a2","kind":"agentMessage","revision":1,"status":"completed","turnId":null}"#
+  #expect(try JSONDecoder().decode(TranscriptItem.self, from: Data(with.utf8)).turnId == "t1")
+  #expect(try JSONDecoder().decode(TranscriptItem.self, from: Data(without.utf8)).turnId == nil)
+}
+
 @Test func preferencesDecodeEveryFieldWithElectronsDefaults() throws {
   let empty = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
   #expect(empty.theme == "muse")

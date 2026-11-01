@@ -93,6 +93,7 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     sideChat: vi.fn(async (sessionId: string) =>
       view(session({ sessionId: `${sessionId}-side`, kind: 'sideChat' })),
     ),
+    fork: vi.fn(async (sessionId: string) => view(session({ sessionId: `${sessionId}-fork` }))),
     runShell: vi.fn(async () => {}),
     goal: vi.fn(async () => {}),
     configDir: () => join(dir, 'muse-config'),
@@ -405,6 +406,15 @@ describe('headless backend, M1 methods', () => {
     expect(muse.sideChat).toHaveBeenCalledWith('s1')
   })
 
+  it('forks after the trust check', async () => {
+    const { call, muse } = await trustedSession()
+    const fork = (await call('fork', 's1', 't1')) as SessionView
+    expect(fork.session.sessionId).toBe('s1-fork')
+    expect(muse.fork).toHaveBeenCalledWith('s1', 't1')
+    await call('fork', 's1')
+    expect(muse.fork).toHaveBeenCalledWith('s1', undefined)
+  })
+
   it('runs a shell command after the trust check and refuses an empty one', async () => {
     const { call, muse } = await trustedSession()
     await call('shell', 's1', 'echo hi')
@@ -467,6 +477,7 @@ describe('headless backend, M1 methods', () => {
     ['set-model', 'setModel', ['s1', 'm1']],
     ['set-approval-mode', 'setApprovalMode', ['s1', 'onRequest']],
     ['side-chat', 'sideChat', ['s1']],
+    ['fork', 'fork', ['s1', 't1']],
     ['shell', 'runShell', ['s1', 'echo hi']],
     ['goal', 'goal', ['s1', 'pause']],
     ['approve', 'approve', ['s1', 'a1', 'c1']],
