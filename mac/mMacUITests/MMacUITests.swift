@@ -1356,14 +1356,26 @@ final class MMacUITests: XCTestCase {
     app.typeKey("i", modifierFlags: [.command, .option])
     waitForValue(toggle, "Hidden")
 
-    // Fork: /fork reaches the backend and opens the other conversation.
-    input.click()
-    input.typeText("/fork")
-    input.typeKey(.return, modifierFlags: [])
-    waitUntilLogged(log, ["method": "fork", "args": ["fake-1"]])
+    // Fork: the button under the last Muse message forks through its turn and opens the other
+    // conversation. The button's identifier is `fork-<itemId>` (mac/mMac/TranscriptViews.swift:264).
+    let fork = element(app, "fork-a1")
+    XCTAssertTrue(fork.waitForExistence(timeout: 10), "No fork button. Requests: \(fakeRequests())")
+    fork.click()
+    waitUntilLogged(log, ["method": "fork", "args": ["fake-1", "turn-1"]])
     XCTAssertTrue(
       app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10),
       "The fork did not open. Requests: \(fakeRequests())")
+
+    // /fork reaches the backend too. The fake answers every fork with the second conversation, so
+    // it resolves from there, and the fork is of the conversation then open.
+    let forkInput = composer(app)
+    forkInput.click()
+    forkInput.typeText("/fork")
+    forkInput.typeKey(.return, modifierFlags: [])
+    waitUntilLogged(log, ["method": "fork", "args": ["fake-2"]])
+    XCTAssertTrue(
+      app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10),
+      "The /fork did not open. Requests: \(fakeRequests())")
 
     // Settings › Skills: the pane lists the skill.
     app.typeKey(",", modifierFlags: .command)

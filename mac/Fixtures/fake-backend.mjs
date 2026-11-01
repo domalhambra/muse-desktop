@@ -185,12 +185,14 @@ const models = [
     contextLimit: null,
   },
 ]
+// Every item belongs to turn-1, which has completed: that gives the last Muse message a fork button.
 const items = [
   {
     itemId: 'u1',
     kind: 'userMessage',
     revision: 1,
     status: 'completed',
+    turnId: 'turn-1',
     text: 'Clean the build folder',
   },
   {
@@ -198,6 +200,7 @@ const items = [
     kind: 'agentMessage',
     revision: 1,
     status: 'completed',
+    turnId: 'turn-1',
     text: 'I need two things from you first.',
   },
   {
@@ -205,6 +208,7 @@ const items = [
     kind: 'hookRun',
     revision: 1,
     status: 'completed',
+    turnId: 'turn-1',
     label: 'Format on save',
     statusLine: 'Ran prettier',
   },
@@ -213,6 +217,7 @@ const items = [
     kind: 'toolCall',
     revision: 1,
     status: 'completed',
+    turnId: 'turn-1',
     tool: 'edit',
     statusLine: 'Edited app.swift',
     patchSummary: { added: 12, removed: 1, files: 1 },
@@ -222,6 +227,7 @@ const items = [
     kind: 'subagent',
     revision: 1,
     status: 'completed',
+    turnId: 'turn-1',
     objective: 'Count the files',
     childSessionId: 'fake-2',
     durationMs: 1500,
