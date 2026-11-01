@@ -14,6 +14,7 @@ describe('plainError refusals', () => {
     ['goal/pause', 'missing_goal', 'This conversation has no goal.'],
     ['goal/pause', 'invalid_goal_state', 'The goal cannot do that in its current state.'],
     ['subagent/stop', 'invalid_target', 'This subagent has already finished.'],
+    ['task/stop', 'invalid_target', 'Muse Code refused this request.'],
     ['turn/start', 'something_new', 'Muse Code refused this request.'],
   ])('%s %s', (method, reason, sentence) => {
     expect(plain(`${method} command 01a rejected: ${reason}`)).toBe(sentence)

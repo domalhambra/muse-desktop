@@ -10,11 +10,11 @@ const REFUSALS: Record<string, string> = {
   compaction_unavailable: 'This model cannot compact the conversation.',
   missing_goal: 'This conversation has no goal.',
   invalid_goal_state: 'The goal cannot do that in its current state.',
-  invalid_target: 'This subagent has already finished.',
 }
 const WORKFLOW_GONE = 'This workflow is no longer running.'
 /** Reasons whose meaning depends on the command. These come before REFUSALS. */
 const METHOD_REFUSALS: Record<string, Record<string, string>> = {
+  'subagent/stop': { invalid_target: 'This subagent has already finished.' },
   'session/compact': { missing_run: 'There is no conversation history to compact yet.' },
   'turn/cancel': { missing_run: 'No turn is running.' },
   'workflow/pause': { missing_run: WORKFLOW_GONE },
