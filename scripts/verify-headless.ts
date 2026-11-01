@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -222,13 +223,14 @@ try {
   assert.equal(hello.protocol, HEADLESS_PROTOCOL)
   const bridgeToken = 'verify-token'
   const started = (await backend.request('start', { dataFolder, bridgeToken })) as {
-    status: { state: string; version?: string; message?: string }
+    status: { state: string; version?: string; message?: string; fingerprintWarning?: string }
   }
   assert.equal(
     started.status.state,
     'ready',
     started.status.message ?? 'The backend did not reach ready.',
   )
+  assert.equal(started.status.fingerprintWarning, undefined, 'The SDK and the CLI should match.')
   assertOwnsServe(backend)
   console.log(`PASS · Hello and start; connected to Muse Code ${started.status.version}`)
 
@@ -298,6 +300,199 @@ try {
   await assert.rejects(backend.request('output', sessionId, replyItem), /no stored output/)
   console.log('PASS · Rename, models, preferences and the stored-output error')
 
+  // M6 against the real CLI. Each sentence is what a person reads, so each is checked exactly.
+  const latest = (id: string) =>
+    backend.events
+      .filter((event) => event.type === 'session')
+      .map((event) => event.view as SessionView)
+      .filter((view) => view.session.sessionId === id)
+      .at(-1)
+  await assert.rejects(backend.request('cancel', sessionId), /^Error: No turn is running\.$/)
+  console.log('PASS · cancel with no turn says "No turn is running."')
+
+  const goalId = ((await backend.request('create', project)) as SessionView).session.sessionId
+  await assert.rejects(
+    backend.request('goal', goalId, 'pause'),
+    /^Error: This conversation has no goal\.$/,
+  )
+  await backend.request('goal', goalId, 'set', 'Check the strip')
+  await until(() => latest(goalId)?.goal?.objective === 'Check the strip', 'the goal in an event')
+  // The echo provider pauses a goal soon after it starts.
+  await until(() => latest(goalId)?.goal?.status === 'paused', 'the echo provider to pause it')
+  await assert.rejects(
+    backend.request('goal', goalId, 'pause'),
+    /^Error: The goal cannot do that in its current state\.$/,
+  )
+  await backend.request('goal', goalId, 'edit', 'Check the new strip')
+  await until(() => latest(goalId)?.goal?.objective === 'Check the new strip', 'the edited goal')
+  await until(() => latest(goalId)?.session.status === 'idle', 'the goal turn to end')
+  console.log('PASS · Goal: no-goal refusal, set, the paused refusal and edit')
+
+  const original = latest(sessionId)
+  assert(original, 'the first conversation should have a view')
+  const forked = (await backend.request('fork', sessionId)) as SessionView
+  assert.notEqual(forked.session.sessionId, sessionId)
+  assert(
+    forked.items.some((item) => item.text?.includes('Hello')),
+    'the fork keeps the turns',
+  )
+  assert.equal(latest(sessionId)?.items.length, original.items.length, 'the original is unchanged')
+  const turnId = original.items.find((item) => item.kind === 'agentMessage')?.turnId
+  assert(turnId, 'the echo reply should name its turn')
+  const forkedAtTurn = (await backend.request('fork', sessionId, turnId)) as SessionView
+  assert.notEqual(forkedAtTurn.session.sessionId, sessionId)
+  const goalFork = (await backend.request('fork', goalId)) as SessionView
+  assert.equal(goalFork.goal?.objective, 'Check the new strip', 'the fork should carry the goal')
+  console.log('PASS · Fork: whole, at a turn and with a goal; the original is unchanged')
+
+  assert.deepEqual(await backend.request('task-list', sessionId), [])
+  await assert.rejects(
+    backend.request('task-control', sessionId, 'stop', randomUUID()),
+    /^Error: This task has already finished\.$/,
+  )
+  await backend.request('task-control', sessionId, 'stop-all')
+  console.log('PASS · Background tasks: the empty list, Stop on a finished task and Stop all')
+
+  // MCP servers in the temporary settings.json. The names and the values are all made up here.
+  const settings = join(environment.XDG_CONFIG_HOME, 'muse', 'settings.json')
+  await backend.request('mcp-add', {
+    name: 'local-check',
+    transport: 'stdio',
+    command: '/bin/echo',
+    args: ['--port', 'x'],
+    env: { KEY: 'a b' },
+  })
+  await backend.request('mcp-add', {
+    name: 'remote-check',
+    transport: 'http',
+    url: 'https://example.invalid/mcp',
+    headers: { Authorization: 'made-up' },
+  })
+  await backend.request('mcp-enabled', 'local-check', false)
+  const mcpEntry = (saved: string, name: string) => {
+    const parsed = JSON.parse(saved) as {
+      mcp_servers?: Record<string, Record<string, unknown>>
+      mcpServers?: Record<string, Record<string, unknown>>
+    }
+    return (parsed.mcpServers ?? parsed.mcp_servers)?.[name]
+  }
+  const beforeSkill = await readFile(settings, 'utf8')
+  const local = mcpEntry(beforeSkill, 'local-check')
+  assert.deepEqual(local?.args, ['--port', 'x'])
+  assert.deepEqual(local?.env, { KEY: 'a b' })
+  assert.equal(local?.enabled, false)
+  assert(!('disabled' in local) && !('transport' in local), 'Write enabled: false only.')
+  type McpList = { servers: { name: string; enabled: boolean; envNames?: string[] }[] }
+  const mcp = (await backend.request('mcp-list')) as McpList
+  assert.deepEqual(mcp.servers.find((server) => server.name === 'local-check')?.envNames, ['KEY'])
+  assert(!JSON.stringify(mcp).includes('a b'), 'mcp-list should show env names only.')
+  console.log('PASS · MCP: add local and remote, quoted text, turn off, and names only')
+
+  // Skills. A change runs `muse skills`, which rewrites settings.json, so a copy comes first.
+  type Catalog = { id: string; name: string; scope: string; activation: string }[]
+  const catalog = () => backend.request('skill-catalog', project) as Promise<Catalog>
+  const skill = (await catalog()).find((entry) => entry.scope === 'bundled')
+  assert(skill, 'Muse Code should list a bundled skill.')
+  await assert.rejects(
+    backend.request('skill-set', { id: '--help', scope: 'bundled', activation: 'off' }),
+    /Muse could not read “id”/,
+  )
+  const row = (await backend.request('skill-rows', sessionId)) as { selector: string }[]
+  assert(
+    row.some((entry) => entry.selector === skill.name),
+    'A skill should reach the popup.',
+  )
+  const setSkill = async (activation: string) => {
+    await backend.request('skill-set', {
+      id: skill.id,
+      scope: skill.scope,
+      activation,
+      project,
+    })
+    const read = (await catalog()).find((entry) => entry.id === skill.id)
+    assert.equal(read?.activation, activation, `The catalog should read ${activation}.`)
+  }
+  await setSkill('off')
+  const backups = join(dataFolder, 'settings-backups')
+  const copies = await readdir(backups)
+  assert.equal(copies.length, 1)
+  assert.equal(await readFile(join(backups, copies[0]), 'utf8'), beforeSkill)
+  assert.equal((await stat(backups)).mode & 0o777, 0o700)
+  assert.equal((await stat(join(backups, copies[0]))).mode & 0o777, 0o600)
+  const afterSkill = await readFile(settings, 'utf8')
+  assert.deepEqual(mcpEntry(afterSkill, 'local-check'), local, 'muse skills changed a server.')
+  const relisted = (await backend.request('mcp-list')) as McpList
+  assert.equal(
+    relisted.servers.find((server) => server.name === 'local-check')?.enabled,
+    false,
+    'mMac should still read the servers after muse skills rewrites the file.',
+  )
+  assert.equal(relisted.servers.length, 2)
+  await setSkill('userInvocableOnly')
+  await setSkill('on')
+  console.log('PASS · Skills: the three activations, the copy with its modes, and MCP servers kept')
+
+  await backend.request('send-skill', {
+    sessionId: forked.session.sessionId,
+    selector: skill.name,
+    arguments: 'x',
+    effort: 'high',
+    mode: 'queue',
+  })
+  await until(
+    () =>
+      latest(forked.session.sessionId)?.session.status === 'idle' &&
+      (latest(forked.session.sessionId)?.items.length ?? 0) > forked.items.length,
+    'the skill turn',
+  )
+  console.log('PASS · send-skill adds a turn')
+
+  await backend.request('mcp-remove', 'local-check')
+  await backend.request('mcp-remove', 'remote-check')
+  assert.equal(((await backend.request('mcp-list')) as McpList).servers.length, 0)
+  console.log('PASS · MCP: remove')
+
+  // Scheduled tasks: add, edit, pause, run now and delete.
+  type Entry = {
+    schedule: { id: string; name: string; enabled: boolean }
+    history: { outcome: string; sessionId?: string }[]
+  }
+  const schedules = () => backend.request('schedule-list') as Promise<Entry[]>
+  const task = {
+    name: 'Check',
+    prompt: 'Say hello.',
+    folder: project,
+    preset: 'manual',
+    minute: 0,
+    hour: 0,
+    weekday: 0,
+    approvalMode: 'allowAll',
+    modelId: null,
+    worktree: false,
+    enabled: true,
+  }
+  await backend.request('schedule-save', task)
+  const scheduleId = (await schedules())[0].schedule.id
+  await backend.request('schedule-save', { ...task, id: scheduleId, name: 'Check again' })
+  assert.equal((await schedules())[0].schedule.name, 'Check again')
+  await backend.request('schedule-enabled', scheduleId, false)
+  assert.equal((await schedules())[0].schedule.enabled, false)
+  await backend.request('schedule-enabled', scheduleId, true)
+  await backend.request('schedule-run', scheduleId)
+  const run = (await schedules())[0].history[0]
+  assert.equal(run?.outcome, 'started')
+  assert(run.sessionId, 'A started run should name its conversation.')
+  await until(() => latest(run.sessionId as string)?.session.status === 'idle', 'the scheduled run')
+  await backend.request('schedule-remove', scheduleId)
+  assert.equal((await schedules()).length, 0)
+  console.log('PASS · Scheduled: add, edit, pause, run now and delete')
+
+  const exported = join(temporary, 'export.md')
+  await backend.request('export', sessionId, exported, 'Check')
+  assert.equal((await stat(exported)).mode & 0o777, 0o600)
+  assert((await readFile(exported, 'utf8')).includes('Hello'))
+  console.log('PASS · Export: the file has mode 600')
+
   // The MCP bridge on a free port, with the token from start. It binds 127.0.0.1 only.
   const bridgePort = await freePort()
   await backend.request('preferences', { bridgeMcpEnabled: true, bridgeMcpPort: bridgePort })
@@ -312,6 +507,74 @@ try {
   assert(await listening(bridgePort), 'The MCP bridge should accept connections.')
   console.log('PASS · start with a bridge token; bridge-status reports the MCP bridge running')
 
+  // The token: 401 with none or a wrong one, 200 with the right one, and a new token ends the old.
+  const initialize = (token?: string) =>
+    fetch(bridge.mcp.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-03-26',
+          capabilities: {},
+          clientInfo: { name: 'verify-headless', version: '1' },
+        },
+      }),
+    })
+  const status = async (token?: string) => {
+    const response = await initialize(token)
+    await response.body?.cancel()
+    return response.status
+  }
+  assert.equal(await status(), 401)
+  assert.equal(await status('wrong'), 401)
+  assert.equal(await status(bridgeToken), 200)
+  const newToken = (await backend.request('bridge-token')) as string
+  assert.notEqual(newToken, bridgeToken)
+  assert.equal(await status(bridgeToken), 401)
+  assert.equal(await status(newToken), 200)
+  console.log('PASS · The MCP bridge: 401, then 200, and a new token ends the old one')
+
+  // Bridges restart after preferences reply, so these two checks wait for the change to land.
+  const eventually = async (check: () => Promise<boolean>, what: string) => {
+    const deadline = Date.now() + 15000
+    while (!(await check().catch(() => false))) {
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}.`)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+  type BridgeHealth = { mcp: { running: boolean; error?: string } }
+  const bridgeHealth = () => backend.request('bridge-status') as Promise<BridgeHealth>
+
+  // A port another process holds: the bridge reports the error and does not stop the backend.
+  const holder = createServer()
+  const heldPort = await freePort()
+  await new Promise<void>((resolve) => holder.listen(heldPort, '127.0.0.1', resolve))
+  await backend.request('preferences', { bridgeMcpPort: heldPort })
+  await eventually(async () => Boolean((await bridgeHealth()).mcp.error), 'the port-in-use error')
+  const held = await bridgeHealth()
+  assert(!held.mcp.running, 'The bridge should not run on a port in use.')
+  await new Promise((resolve) => holder.close(resolve))
+  await backend.request('preferences', { bridgeMcpPort: bridgePort })
+  await eventually(async () => (await status(newToken)) === 200, 'the bridge on a free port')
+  console.log(`PASS · A port in use says "${held.mcp.error}"; a free port works again`)
+
+  // The folder bridge writes its README and inbox when it is turned on.
+  await backend.request('preferences', { bridgeFilesEnabled: true })
+  await eventually(async () => {
+    await stat(join(bridge.folder, 'README.md'))
+    return true
+  }, 'the folder bridge README')
+  assert((await readFile(join(bridge.folder, 'README.md'), 'utf8')).includes('inbox/'))
+  assert((await stat(join(bridge.folder, 'inbox'))).isDirectory())
+  console.log('PASS · The folder bridge has its README.md and inbox')
+
   // Only the trust Ask, before and after shutdown: an unexpected Ask must not be quietly confirmed.
   assert.equal(backend.asks.length, 1, 'Only the trust Ask was expected before shutdown.')
   backend.recordServes()
@@ -323,9 +586,11 @@ try {
   // Process exit closes the port too; the stopBridges unit test covers the quit wiring.
   assert(!(await listening(bridgePort)), `Port ${bridgePort} should be closed after the exit.`)
   console.log('PASS · No bridge port stays open after the backend exits')
-  assert(!(await readFile(join(dataFolder, 'preferences.json'), 'utf8')).includes(bridgeToken))
-  assert(!JSON.stringify(backend.events).includes(bridgeToken), 'An event carried the token.')
-  assert(!backend.stderr().includes(bridgeToken), 'stderr carried the token.')
+  for (const token of [bridgeToken, newToken]) {
+    assert(!(await readFile(join(dataFolder, 'preferences.json'), 'utf8')).includes(token))
+    assert(!JSON.stringify(backend.events).includes(token), 'An event carried the token.')
+    assert(!backend.stderr().includes(token), 'stderr carried the token.')
+  }
   console.log('PASS · The token is not in preferences.json, an event or stderr')
 
   const closing = launch('The stdin-closing backend')
@@ -333,6 +598,32 @@ try {
   await closing.request('hello', HEADLESS_PROTOCOL)
   await closing.request('start', { dataFolder })
   assertOwnsServe(closing)
+
+  // A new backend reopens the goal conversation: the goal comes back, and Clear removes it.
+  const reopened = (await closing.request('open', goalId)) as SessionView
+  assert.equal(reopened.goal?.objective, 'Check the new strip', 'The goal should come back.')
+  // The known limit: a reopened fork has no goal event to read, so no strip until the next event.
+  const reopenedFork = (await closing.request('open', goalFork.session.sessionId)) as SessionView
+  assert.equal(reopenedFork.goal, undefined)
+  assert.deepEqual(await closing.request('task-list', sessionId), [])
+  await closing.request('goal', goalId, 'clear')
+  await assert.rejects(
+    closing.request('goal', goalId, 'pause'),
+    /^Error: This conversation has no goal\.$/,
+  )
+  const unloaded = (await closing.request('skill-rows', sessionId)) as { selector: string }[]
+  assert(unloaded.length > 0, 'A conversation that is not loaded should still list skills.')
+  console.log('PASS · Reopen: the goal comes back, Clear, and skills on an unloaded conversation')
+
+  // A wrong CLI path gives a sentence, and "Use automatic detection" reconnects.
+  await closing.request('preferences', { cliPath: join(temporary, 'no-such-muse') })
+  const wrong = (await closing.request('connect')) as { state: string; message?: string }
+  assert.equal(wrong.state, 'missing')
+  await closing.request('preferences', { cliPath: process.env.MUSE_BIN })
+  const right = (await closing.request('connect')) as { state: string; message?: string }
+  assert.equal(right.state, 'ready')
+  console.log(`PASS · A bad path says "${wrong.message}"; a good path reconnects`)
+  closing.recordServes()
   closing.child.stdin.end()
   assert.equal(await exitWithin(closing), 0)
   await until(() => ownedGone(closing), 'muse serve to stop after stdin closed')
