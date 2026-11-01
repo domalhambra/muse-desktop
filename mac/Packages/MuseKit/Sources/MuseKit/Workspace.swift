@@ -81,6 +81,8 @@ public final class Workspace {
   /// the open conversation, and never part of it.
   public internal(set) var sideView: SessionView?
   public internal(set) var sideOpening = false
+  /// True while a fork runs, so a second click cannot make a second fork.
+  public internal(set) var forking = false
   /// A subagent's session, shown read-only in a sheet from the Agents tab, or nil.
   public internal(set) var childView: SessionView?
   /// The subscription's limits as Muse last observed them, or nil. The sidebar footer hides without

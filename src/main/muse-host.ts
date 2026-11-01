@@ -483,8 +483,9 @@ export class MuseHost {
 
   /**
    * A new conversation that copies this one through `turnId`, or through every completed turn.
-   * Muse returns the fork's resume envelope (msp.d.ts, `session/fork`), so it is loaded. A cut
-   * before a goal change fails: plain-errors.ts words that refusal.
+   * Muse returns the fork's resume envelope (msp.d.ts, `session/fork`), so it is loaded. The
+   * envelope carries no goal, so it is read as `open` does. A cut before a goal change fails:
+   * plain-errors.ts words that refusal.
    */
   async fork(sessionId: string, turnId?: string): Promise<SessionView> {
     await this.resume(sessionId)
@@ -496,6 +497,7 @@ export class MuseHost {
       ),
     )
     const live = await this.hydrate(result, true)
+    await this.restoreGoal(live)
     this.emit({ type: 'sessions-changed' })
     return this.view(live)
   }

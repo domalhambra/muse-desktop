@@ -59,3 +59,29 @@ private let noGoal = "This conversation has no goal."
   #expect(workspace.errorMessage == sentence)
   #expect(workspace.view?.goal?.objective == "Ship")
 }
+
+@MainActor @Test func twoQuickForkClicksMakeOneFork() async throws {
+  let forks = Counter()
+  let (workspace, backend) = await makeWorkspace(script: { method, args, id in
+    switch method {
+    case "open":
+      let target = args.first == .string("f1") ? "f1" : "s1"
+      return [reply(id, viewJSON(sessionJSON(target)))]
+    case "fork":
+      forks.next()
+      return [reply(id, viewJSON(sessionJSON("f1")))]
+    default: return [reply(id, "null")]
+    }
+  })
+  await workspace.open("s1")
+  async let first: Void = workspace.fork(fromTurn: "t1")
+  async let second: Void = workspace.fork(fromTurn: "t1")
+  _ = await (first, second)
+  #expect(forks.value == 1)
+  #expect(workspace.view?.session.sessionId == "f1")
+  #expect(!workspace.forking)
+  // Once the first has finished, a fork works again.
+  await workspace.fork()
+  #expect(forks.value == 2)
+  #expect(requests(backend).filter { $0.first == .string("fork") }.count == 2)
+}

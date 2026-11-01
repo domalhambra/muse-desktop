@@ -651,6 +651,24 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('reads the goal of a forked conversation, which the envelope does not carry', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    wire.command.mockImplementation(async (method: string) =>
+      method === 'session/fork'
+        ? { ...result(), session: { ...session, sessionId: 'fork-1' } }
+        : {},
+    )
+    wire.request.mockImplementation(async (method: string) =>
+      method === 'view/page' ? goalPage(held) : {},
+    )
+    const fork = await host.fork('s1')
+    expect(fork.goal?.objective).toBe('Held')
+    expect(host.getView('fork-1').goal?.objective).toBe('Held')
+    await host.close()
+  })
+
   it('keeps the held goal when a resume cannot read the goal', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')

@@ -25,8 +25,11 @@ extension Workspace {
   }
 
   /// Forks through `turnId`, or through every completed turn when it is nil, then opens the fork.
+  /// A second call while one runs does nothing.
   public func fork(fromTurn turnId: String? = nil) async {
-    guard let sessionId = view?.session.sessionId else { return }
+    guard let sessionId = view?.session.sessionId, !forking else { return }
+    forking = true
+    defer { forking = false }
     await run { try await self.forkConversation(sessionId: sessionId, turnId: turnId) }
   }
 
