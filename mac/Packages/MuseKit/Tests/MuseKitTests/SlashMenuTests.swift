@@ -167,3 +167,67 @@ private func skillScript(
   #expect(input["selector"] == .string("create-skill"))
   #expect(input["arguments"] == .string("now"))
 }
+
+private let oddSkills = [
+  SkillRow(selector: "release.notes", description: "Notes"),
+  SkillRow(selector: "release notes now", description: "Spaced"),
+  SkillRow(selector: "release", description: "Short"),
+  SkillRow(selector: "clear-cache", description: "Cache"),
+  SkillRow(selector: "clear cache", description: "Shadowed by /clear"),
+]
+
+@Test func anyListedSelectorCanBeRun() {
+  #expect(
+    SlashMenu.invocation("/release.notes x", skills: oddSkills)
+      == SkillInvocation(selector: "release.notes", arguments: "x"))
+  #expect(
+    SlashMenu.invocation("/release notes now x y", skills: oddSkills)
+      == SkillInvocation(selector: "release notes now", arguments: "x y"))
+  // The longest known selector wins; a shorter one takes the rest as arguments.
+  #expect(
+    SlashMenu.invocation("/release notes later", skills: oddSkills)
+      == SkillInvocation(selector: "release", arguments: "notes later"))
+  #expect(SlashMenu.invocation("/release.notesx", skills: oddSkills) == nil)
+  #expect(SlashMenu.invocation("/nothing here", skills: oddSkills) == nil)
+  // A skill never shadows a command, even one whose name starts with a command word.
+  #expect(SlashMenu.invocation("/clear cache", skills: oddSkills) == nil)
+  #expect(!SlashMenu.rows(for: "/", skills: oddSkills).contains { $0.name == "clear cache" })
+  #expect(SlashMenu.rows(for: "/release.", skills: oddSkills).map(\.name) == ["release.notes"])
+  #expect(SlashMenu.rows(for: "/release n", skills: oddSkills).map(\.name) == ["release notes now"])
+}
+
+@Test func aSelectorIsMatchedWithoutCaseAndSentAsListed() {
+  #expect(
+    SlashMenu.invocation("/Create-Skill go", skills: skills)
+      == SkillInvocation(selector: "create-skill", arguments: "go"))
+  #expect(SlashMenu.keyAction(.enter, draft: "/Create-skill", index: 0, skills: skills) == .submit)
+}
+
+@Test func enterActsOnAHighlightMovedOffTheExactMatch() {
+  let cache = [SkillRow(selector: "clear-cache", description: "Cache")]
+  // Untouched: the exact command runs.
+  #expect(SlashMenu.keyAction(.enter, draft: "/clear", index: 0, skills: cache) == .submit)
+  // Moved to the skill row: that row is chosen.
+  #expect(SlashMenu.keyAction(.enter, draft: "/clear", index: 1, skills: cache) == .setDraft("/clear-cache "))
+  // An exact skill name that is not first still runs when it is highlighted.
+  let short = [SkillRow(selector: "cl", description: "Short")]
+  #expect(SlashMenu.keyAction(.enter, draft: "/cl", index: 1, skills: short) == .submit)
+  #expect(SlashMenu.keyAction(.enter, draft: "/cl", index: 0, skills: short) == .submit)
+}
+
+@MainActor @Test func aSkillRunsWithTheEffortAndModeInForce() async throws {
+  let (workspace, backend) = await makeWorkspace(
+    preferences: Preferences(recentProjects: ["/p"], reasoningEffort: "low"),
+    script: skillScript(rows: skillsJSON))
+  await workspace.open("s1")
+  workspace.mode = .steer
+  await workspace.runSkill(SkillInvocation(selector: "create-skill", arguments: ""))
+  let sent = requests(backend).filter { $0.first == .string("send-skill") }
+  guard case .array(let args)? = sent.first?.last, case .object(let input)? = args.first else {
+    Issue.record("send-skill carried no input")
+    return
+  }
+  #expect(input["effort"] == .string("low"))
+  #expect(input["mode"] == .string("steer"))
+  #expect(input["arguments"] == nil)
+}
