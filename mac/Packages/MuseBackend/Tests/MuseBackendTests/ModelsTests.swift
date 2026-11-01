@@ -310,6 +310,14 @@ let fullViewJSON = #"""
   #expect(try decoder.decode(SessionView.self, from: Data(without.utf8)).goal == nil)
 }
 
+@Test func aToolItemDecodesItsBackgroundFlagWhenPresent() throws {
+  let decoder = JSONDecoder()
+  let with = #"{"itemId":"t1","kind":"toolCall","revision":2,"status":"inProgress","background":true}"#
+  let without = #"{"itemId":"t1","kind":"toolCall","revision":1,"status":"inProgress"}"#
+  #expect(try decoder.decode(TranscriptItem.self, from: Data(with.utf8)).background == true)
+  #expect(try decoder.decode(TranscriptItem.self, from: Data(without.utf8)).background == nil)
+}
+
 @Test func aWorkflowItemAndABackgroundTaskDecode() throws {
   let item = #"{"itemId":"w1","kind":"workflow","revision":1,"status":"inProgress","workflowRunId":"r1","paused":true,"stopAvailable":true,"subagentId":"a1"}"#
   let decoded = try JSONDecoder().decode(TranscriptItem.self, from: Data(item.utf8))

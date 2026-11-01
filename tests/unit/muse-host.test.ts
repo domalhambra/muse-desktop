@@ -729,6 +729,41 @@ describe('Muse protocol boundary', () => {
   })
 
   it.each([
+    ['absent', undefined, true],
+    ['background', 'background', true],
+    ['foreground', 'foreground', false],
+    ['unknown', 'detached', false],
+  ])('lists a task row whose execution mode is %s: %s', async (_name, mode, listed) => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    const row = { taskId: 'k1', kind: 'tool', status: 'inProgress' }
+    wire.request.mockImplementation(async (method: string) =>
+      method === 'task/list' ? { tasks: [mode ? { ...row, executionMode: mode } : row] } : {},
+    )
+    expect((await host.listTasks('s1')).map((task) => task.taskId)).toEqual(listed ? ['k1'] : [])
+    await host.close()
+  })
+
+  it('keeps the background flag an item/updated brings to a tool call', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    const item = {
+      itemId: 't1',
+      kind: 'toolCall',
+      revision: 1,
+      status: 'inProgress',
+      tool: 'bash',
+    }
+    notify('item/started', { item })
+    expect(host.getView('s1').items[0].background).toBeUndefined()
+    notify('item/updated', { item: { ...item, revision: 2, background: true } })
+    expect(host.getView('s1').items).toHaveLength(1)
+    expect(host.getView('s1').items[0].background).toBe(true)
+    await host.close()
+  })
+
+  it.each([
     ['stop', 'task/stop', { taskId: 'x' }],
     ['background', 'task/background', { taskId: 'x' }],
     ['subagent-stop', 'subagent/stop', { subagentId: 'x' }],

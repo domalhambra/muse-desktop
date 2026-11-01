@@ -516,12 +516,19 @@ export class MuseHost {
     return this.view(live)
   }
 
-  /** The conversation's running background tasks. An unloaded conversation runs none here. */
+  /**
+   * The conversation's running background tasks. An unloaded conversation runs none here.
+   * `task/list` also returns foreground rows; an absent `executionMode` means background, and an
+   * unknown mode is ignored (msp.d.ts, `TaskExecutionMode`).
+   */
   async listTasks(sessionId: string): Promise<BackgroundTask[]> {
     try {
       return z
         .object({ tasks: z.array(backgroundTaskSchema) })
-        .parse(await this.connection.request('task/list', { sessionId })).tasks
+        .parse(await this.connection.request('task/list', { sessionId }))
+        .tasks.filter(
+          (task) => task.executionMode === undefined || task.executionMode === 'background',
+        )
     } catch (error) {
       if (error instanceof MspError && error.kind === 'sessionNotLoaded') return []
       throw error

@@ -43,6 +43,8 @@ export const itemSchema = z.object({
   paused: z.boolean().optional(),
   /** `workflow`: true while the run is open. */
   stopAvailable: z.boolean().optional(),
+  /** `toolCall`: true once Muse durably moved the task to the background (`item/updated`). */
+  background: z.boolean().optional(),
   /** `subagent`: the child's observed usage, updated in place. */
   usage: z.object({ inputTokens: z.number(), outputTokens: z.number() }).passthrough().optional(),
   result: z
@@ -231,6 +233,8 @@ export const backgroundTaskSchema = z.object({
   status: z.string(),
   tool: z.string().optional(),
   startedAt: z.string().optional(),
+  /** `foreground` or `background`; absent means background. Open: other values may come. */
+  executionMode: z.string().optional(),
 })
 export type BackgroundTask = z.infer<typeof backgroundTaskSchema>
 export const taskControlSchema = z.enum([

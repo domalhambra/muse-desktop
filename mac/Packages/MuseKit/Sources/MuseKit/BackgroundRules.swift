@@ -29,7 +29,7 @@ public struct RunningToolRow: Equatable, Sendable, Identifiable {
     let background = Set(listed.map(\.taskId))
     return items.compactMap { item in
       guard item.kind == "toolCall", item.status == "inProgress", item.retracted != true,
-        !background.contains(item.itemId)
+        item.background != true, !background.contains(item.itemId)
       else { return nil }
       return RunningToolRow(id: item.itemId, title: ToolPresentation.first(item.tool) ?? "Tool")
     }
@@ -40,13 +40,14 @@ public enum BackgroundRules {
   public static let stopAllTitle = "Stop all background tasks?"
   public static let stopAllDetail = "Muse stops every background task in this conversation."
 
-  /// Muse has no event for `task/list`, but each task that starts or ends changes an item. The
-  /// tab reads the list again when this value changes.
+  /// Muse has no event for `task/list`, but each task that starts or ends changes an item, and a
+  /// tool moved to the background gets its `background` flag by `item/updated`. The tab reads the
+  /// list again when this value changes.
   public static func signature(_ items: [TranscriptItem]) -> String {
     items.filter {
       $0.status == "inProgress" && ["toolCall", "subagent", "workflow"].contains($0.kind)
     }
-    .map(\.itemId).sorted().joined(separator: ",")
+    .map { $0.background == true ? "\($0.itemId):bg" : $0.itemId }.sorted().joined(separator: ",")
   }
 
   /// A task row's name: its tool when it has one, else its kind.

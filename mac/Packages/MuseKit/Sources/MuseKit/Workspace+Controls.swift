@@ -45,9 +45,13 @@ extension Workspace {
       backgroundTasks = []
       return
     }
-    await run {
-      let tasks = try await self.client.tasks(sessionId: sessionId)
-      if self.view?.session.sessionId == sessionId { self.backgroundTasks = tasks }
+    do {
+      let tasks = try await client.tasks(sessionId: sessionId)
+      if view?.session.sessionId == sessionId { backgroundTasks = tasks }
+    } catch is CancellationError {
+      // The tab asked again, or closed. The next read replaces this one.
+    } catch {
+      errorMessage = error.localizedDescription
     }
   }
 

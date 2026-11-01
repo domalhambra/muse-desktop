@@ -1,5 +1,6 @@
 import MuseBackend
 import MuseBackendTesting
+import Synchronization
 import Testing
 @testable import MuseKit
 
@@ -57,4 +58,75 @@ private func item(
   await workspace.loadTasks()
   #expect(workspace.backgroundTasks.isEmpty)
   #expect(requests(backend).filter { $0.first == "task-list" }.isEmpty)
+}
+
+@Test func aToolMovedToTheBackgroundLeavesRunningToolsAndChangesTheSignature() {
+  let plain = [item("t1", "toolCall", tool: "bash")]
+  let moved = [
+    TranscriptItem(itemId: "t1", kind: "toolCall", revision: 2, status: "inProgress", tool: "bash", background: true)
+  ]
+  #expect(RunningToolRow.build(moved, listed: []).isEmpty)
+  #expect(RunningToolRow.build(plain, listed: []).map(\.id) == ["t1"])
+  #expect(BackgroundRules.signature(plain) != BackgroundRules.signature(moved))
+}
+
+private let taskRows = #"[{"taskId":"k1","kind":"tool","status":"inProgress"}]"#
+
+/// Answers `open` with the conversation it names, `task-list` with `tasks` (or never, when nil).
+private func taskScript(tasks: String?, listId: Box? = nil) -> @Sendable (String, [JSONValue], Int) -> [String] {
+  { method, args, id in
+    switch method {
+    case "open":
+      guard case .string(let target)? = args.first else { return [] }
+      return [reply(id, viewJSON(sessionJSON(target)))]
+    case "task-list":
+      listId?.set(id)
+      return tasks.map { [reply(id, $0)] } ?? []
+    default: return [reply(id, "null")]
+    }
+  }
+}
+
+private final class Box: Sendable {
+  private let value = Mutex<Int?>(nil)
+  func set(_ id: Int) { value.withLock { $0 = id } }
+  var current: Int? { value.withLock { $0 } }
+}
+
+@MainActor @Test func switchingConversationsClearsTheTaskRows() async throws {
+  let (workspace, _) = await makeWorkspace(script: taskScript(tasks: taskRows))
+  await workspace.open("s1")
+  await workspace.loadTasks()
+  #expect(workspace.backgroundTasks.map(\.taskId) == ["k1"])
+  await workspace.open("s2")
+  #expect(workspace.backgroundTasks.isEmpty)
+  await workspace.loadTasks()
+  #expect(workspace.backgroundTasks.count == 1)
+  workspace.startNew()
+  #expect(workspace.backgroundTasks.isEmpty)
+}
+
+@MainActor @Test func aCancelledTaskReadShowsNoError() async throws {
+  let listId = Box()
+  let (workspace, _) = await makeWorkspace(script: taskScript(tasks: nil, listId: listId))
+  await workspace.open("s1")
+  let reading = Task { await workspace.loadTasks() }
+  try await eventually { listId.current != nil }
+  reading.cancel()
+  await reading.value
+  #expect(workspace.errorMessage == nil)
+  #expect(workspace.backgroundTasks.isEmpty)
+}
+
+@MainActor @Test func aReadThatReturnsAfterASwitchLeavesTheNewListAlone() async throws {
+  let listId = Box()
+  let (workspace, backend) = await makeWorkspace(script: taskScript(tasks: nil, listId: listId))
+  await workspace.open("s1")
+  let reading = Task { await workspace.loadTasks() }
+  try await eventually { listId.current != nil }
+  await workspace.open("s2")
+  backend.push(reply(try #require(listId.current), taskRows))
+  await reading.value
+  #expect(workspace.view?.session.sessionId == "s2")
+  #expect(workspace.backgroundTasks.isEmpty)
 }

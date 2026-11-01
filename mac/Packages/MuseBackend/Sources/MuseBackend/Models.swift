@@ -169,6 +169,8 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
   public let paused: Bool?
   /// `workflow`: true while the run is open.
   public let stopAvailable: Bool?
+  /// `toolCall`: true once Muse durably moved the task to the background, by `item/updated`.
+  public let background: Bool?
   public var id: String { itemId }
 
   public init(
@@ -184,7 +186,7 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     result: ToolResult? = nil, exitCode: Int? = nil, sideSessionId: String? = nil,
     controlStatus: String? = nil, usage: ItemUsage? = nil, childSessionId: String? = nil,
     subagentId: String? = nil, workflowRunId: String? = nil, paused: Bool? = nil,
-    stopAvailable: Bool? = nil
+    stopAvailable: Bool? = nil, background: Bool? = nil
   ) {
     self.itemId = itemId
     self.kind = kind
@@ -223,6 +225,7 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     self.workflowRunId = workflowRunId
     self.paused = paused
     self.stopAvailable = stopAvailable
+    self.background = background
   }
 }
 
@@ -268,6 +271,7 @@ extension TranscriptItem {
     workflowRunId = try c.decodeIfPresent(String.self, forKey: .workflowRunId)
     paused = try c.decodeIfPresent(Bool.self, forKey: .paused)
     stopAvailable = try c.decodeIfPresent(Bool.self, forKey: .stopAvailable)
+    background = try c.decodeIfPresent(Bool.self, forKey: .background)
   }
 }
 

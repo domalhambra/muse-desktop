@@ -433,6 +433,7 @@ public final class Workspace {
     openSequence += 1
     openingSessionId = nil
     view = nil
+    backgroundTasks = []
     sideView = nil
     childView = nil
     clearPullRequest()
@@ -487,7 +488,12 @@ public final class Workspace {
       let opened = try await client.open(sessionId)
       guard sequence == openSequence else { return }
       if opened.session.sessionId != view?.session.sessionId { clearStoredOutput() }
-      if opened.session.sessionId != view?.session.sessionId { sideView = nil; childView = nil; clearPullRequest() }
+      if opened.session.sessionId != view?.session.sessionId {
+        sideView = nil
+        childView = nil
+        backgroundTasks = []
+        clearPullRequest()
+      }
       view = opened
       // As Electron: a conversation without a folder shows all projects, so it stays visible.
       project = opened.session.workspaceRoot ?? ""
