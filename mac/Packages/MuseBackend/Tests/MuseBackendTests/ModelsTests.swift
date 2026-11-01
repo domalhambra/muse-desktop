@@ -292,3 +292,13 @@ let fullViewJSON = #"""
   #expect(attachment == Attachment(id: "a1", name: "shot.png", kind: "image", size: 2048))
   #expect(try JSONDecoder().decode(Attachment.self, from: JSONEncoder().encode(attachment)) == attachment)
 }
+
+@Test func aGoalDecodesAndIsOptional() throws {
+  let session = #""session":{"sessionId":"s1","workspaceRoot":"/p","createdAt":"t","updatedAt":"t","status":"idle","activeTurnId":null,"modelId":null}"#
+  let with = #"{\#(session),"items":[],"approvals":[],"questions":[],"goal":{"objective":"Ship","status":"active","percentComplete":40}}"#
+  let without = #"{\#(session),"items":[],"approvals":[],"questions":[]}"#
+  let decoder = JSONDecoder()
+  let view = try decoder.decode(SessionView.self, from: Data(with.utf8))
+  #expect(view.goal == SessionGoal(objective: "Ship", status: "active", percentComplete: 40))
+  #expect(try decoder.decode(SessionView.self, from: Data(without.utf8)).goal == nil)
+}

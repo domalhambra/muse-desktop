@@ -8,6 +8,7 @@ import {
   answerSchema,
   approvalModeSchema,
   effortSchema,
+  goalVerbSchema,
   preferencesPatchSchema,
   preferencesSchema,
   type AppEvent,
@@ -76,6 +77,7 @@ export type Muse = Pick<
   | 'setApprovalMode'
   | 'sideChat'
   | 'runShell'
+  | 'goal'
   | 'approve'
   | 'answer'
   | 'cancelQuestion'
@@ -588,6 +590,15 @@ export function createBackend({
     const sessionId = id.parse(session)
     await sessionProject(sessionId)
     return muse.runShell(sessionId, z.string().min(1).max(10000).parse(command))
+  })
+
+  // The session's goal: `/goal` and the strip above the composer.
+  method('goal', async (session, verb, objective) => {
+    const sessionId = id.parse(session)
+    const parsed = goalVerbSchema.parse(verb)
+    await sessionProject(sessionId)
+    if (parsed !== 'set' && parsed !== 'edit') return muse.goal(sessionId, parsed, undefined)
+    return muse.goal(sessionId, parsed, z.string().trim().min(1).max(10000).parse(objective))
   })
 
   // The subscription's limits as Muse last observed them; `usage-changed` carries each new value.

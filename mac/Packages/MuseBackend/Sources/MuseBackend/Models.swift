@@ -501,6 +501,27 @@ public struct PreferencesPatch: Encodable, Equatable, Sendable {
   public var touchesBridges: Bool { bridgeFilesEnabled != nil || bridgeMcpEnabled != nil || bridgeMcpPort != nil }
 }
 
+/// The conversation's goal. Muse carries `status` and `percentComplete` as they are: a status may
+/// be one mMac does not know, and a percent may pass 100.
+public struct SessionGoal: Codable, Equatable, Sendable {
+  public let objective: String
+  public let status: String
+  public let percentComplete: Double
+  public let currentWork: String?
+  public let nextWork: String?
+
+  public init(
+    objective: String, status: String, percentComplete: Double, currentWork: String? = nil,
+    nextWork: String? = nil
+  ) {
+    self.objective = objective
+    self.status = status
+    self.percentComplete = percentComplete
+    self.currentWork = currentWork
+    self.nextWork = nextWork
+  }
+}
+
 public struct SessionView: Codable, Equatable, Sendable {
   public var session: Session
   public var items: [TranscriptItem]
@@ -511,6 +532,7 @@ public struct SessionView: Codable, Equatable, Sendable {
   public var todos: [TodoItem]?
   public var cost: SessionCost?
   public var quota: QuotaStop?
+  public var goal: SessionGoal?
   public let error: String?
   public let historyNotice: String?
 
@@ -518,7 +540,7 @@ public struct SessionView: Codable, Equatable, Sendable {
     session: Session, items: [TranscriptItem] = [], approvals: [Approval] = [],
     questions: [UserQuestion] = [], usage: Usage? = nil, error: String? = nil,
     historyNotice: String? = nil, context: ContextUsage? = nil, todos: [TodoItem]? = nil,
-    cost: SessionCost? = nil, quota: QuotaStop? = nil
+    cost: SessionCost? = nil, quota: QuotaStop? = nil, goal: SessionGoal? = nil
   ) {
     self.session = session
     self.items = items
@@ -531,6 +553,7 @@ public struct SessionView: Codable, Equatable, Sendable {
     self.todos = todos
     self.cost = cost
     self.quota = quota
+    self.goal = goal
   }
 }
 

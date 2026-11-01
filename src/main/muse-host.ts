@@ -5,14 +5,17 @@ import {
   itemSchema,
   modelSchema,
   questionSchema,
+  sessionGoalSchema,
   sessionSchema,
   todoItemSchema,
   worktreeEntrySchema,
   type AppEvent,
   type ApprovalMode,
   type ConnectionStatus,
+  type GoalVerb,
   type MuseSession,
   type QuestionAnswer,
+  type SessionGoal,
   type SessionView,
   type SubscriptionLimits,
   type TranscriptItem,
@@ -63,7 +66,13 @@ function toLimits(value: unknown): SubscriptionLimits {
   }
 }
 
-type LiveSession = { view: SessionView; store: ItemStore<TranscriptItem>; loaded: boolean }
+type LiveSession = {
+  view: SessionView
+  store: ItemStore<TranscriptItem>
+  loaded: boolean
+  /** Counts the `session/goalChanged` events folded live, so a read of the log never overwrites one. */
+  goalEvents: number
+}
 
 export class MuseHost {
   status: ConnectionStatus = { state: 'connecting' }
@@ -260,6 +269,7 @@ export class MuseHost {
       await this.connection.request('session/read', { sessionId, excludeItems: false }),
     )
     const live = await this.hydrate(result, false)
+    await this.restoreGoal(live)
     try {
       await this.connection.request('view/subscribe', { sessionId, after: result.viewCursor })
     } catch (error) {
@@ -290,7 +300,8 @@ export class MuseHost {
         { maxAttempts: 1 },
       ),
     )
-    await this.hydrate(result, true)
+    const before = this.sessions.get(sessionId)?.view.goal
+    await this.restoreGoal(await this.hydrate(result, true), before)
     await this.refreshPending(sessionId)
     this.schedule(sessionId)
   }
@@ -302,6 +313,7 @@ export class MuseHost {
     const live: LiveSession = {
       store,
       loaded,
+      goalEvents: 0,
       view: {
         session: result.session,
         items,
@@ -480,6 +492,60 @@ export class MuseHost {
       { sessionId, commandText },
       { maxAttempts: 1 },
     )
+  }
+
+  /**
+   * One of Muse's five goal verbs (msp.d.ts, `goal/set`). On an idle conversation, set, edit and
+   * resume can start a turn. The new value arrives through `session/goalChanged`.
+   */
+  async goal(sessionId: string, verb: GoalVerb, objective?: string) {
+    await this.resume(sessionId)
+    await this.connection.command(
+      `goal/${verb}`,
+      { sessionId, ...(objective === undefined ? {} : { objective }) },
+      { maxAttempts: 1 },
+    )
+  }
+
+  /**
+   * `session/read` carries no goal, so read the view backward to the latest goal event. A page is
+   * ascending, so its last goal event is the latest; a `null` goal is a clear and ends the search.
+   * When the goal cannot be settled (a failed read, or no goal event in four pages), the strip is a
+   * convenience: keep `fallback`, the goal the host held before it re-read the conversation. A goal
+   * event that arrives live while this reads is newer than anything read, and wins; any live event
+   * beats the fallback.
+   */
+  private async restoreGoal(live: LiveSession, fallback?: SessionGoal) {
+    const sessionId = live.view.session.sessionId
+    const seen = live.goalEvents
+    const schema = z.object({
+      events: z.array(z.object({ method: z.string(), params: z.record(z.string(), z.unknown()) })),
+      nextCursor: z.string().nullable(),
+    })
+    try {
+      let cursor: string | undefined
+      for (let page = 0; page < 4; page++) {
+        const { events, nextCursor } = schema.parse(
+          await this.connection.request('view/page', {
+            sessionId,
+            direction: 'backward',
+            limit: 500,
+            ...(cursor ? { cursor } : {}),
+          }),
+        )
+        const found = [...events].reverse().find((event) => event.method === 'session/goalChanged')
+        if (found) {
+          const goal = sessionGoalSchema.nullable().parse(found.params.goal) ?? undefined
+          if (live.goalEvents === seen) live.view.goal = goal
+          return
+        }
+        if (!nextCursor) break
+        cursor = nextCursor
+      }
+    } catch (error) {
+      console.error(`Could not read the goal: ${messageOf(error)}`)
+    }
+    if (live.goalEvents === 0) live.view.goal = fallback
   }
 
   async approve(sessionId: string, approvalId: string, choiceId: string) {
@@ -716,6 +782,9 @@ export class MuseHost {
         ...(live.view.session.approvalMode ?? {}),
         mode: z.string().parse(params.mode),
       }
+    } else if (method === 'session/goalChanged') {
+      live.view.goal = sessionGoalSchema.nullable().parse(params.goal) ?? undefined
+      live.goalEvents++
     } else if (method === 'view/gap') {
       void this.recover(sessionId).catch((error: unknown) => {
         live.view.error = `Could not recover missed updates: ${messageOf(error)}`
@@ -733,8 +802,9 @@ export class MuseHost {
       const result = sessionResultSchema.parse(
         await this.connection.request('session/read', { sessionId, excludeItems: false }),
       )
-      const loaded = this.requireSession(sessionId).loaded
-      await this.hydrate(result, loaded)
+      const before = this.requireSession(sessionId)
+      const loaded = before.loaded
+      await this.restoreGoal(await this.hydrate(result, loaded), before.view.goal)
       if (loaded) await this.refreshPending(sessionId)
       await this.connection.request('view/subscribe', { sessionId, after: result.viewCursor })
       this.schedule(sessionId)

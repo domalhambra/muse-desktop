@@ -94,6 +94,7 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
       view(session({ sessionId: `${sessionId}-side`, kind: 'sideChat' })),
     ),
     runShell: vi.fn(async () => {}),
+    goal: vi.fn(async () => {}),
     configDir: () => join(dir, 'muse-config'),
     limits: null as SubscriptionLimits | null,
     ...overrides,
@@ -412,6 +413,18 @@ describe('headless backend, M1 methods', () => {
     await expect(call('shell', 's1', 'x'.repeat(10001))).rejects.toThrow()
   })
 
+  it('runs a goal verb after the trust check and checks the objective', async () => {
+    const { call, muse } = await trustedSession()
+    await call('goal', 's1', 'set', '  Ship it  ')
+    expect(muse.goal).toHaveBeenCalledWith('s1', 'set', 'Ship it')
+    await call('goal', 's1', 'pause')
+    expect(muse.goal).toHaveBeenCalledWith('s1', 'pause', undefined)
+    await expect(call('goal', 's1', 'set', '   ')).rejects.toThrow()
+    await expect(call('goal', 's1', 'edit')).rejects.toThrow()
+    await expect(call('goal', 's1', 'explode')).rejects.toThrow()
+    expect(muse.goal).toHaveBeenCalledTimes(2)
+  })
+
   it('returns the latest limits, or null', async () => {
     const limits = {
       observedAt: 1,
@@ -455,6 +468,7 @@ describe('headless backend, M1 methods', () => {
     ['set-approval-mode', 'setApprovalMode', ['s1', 'onRequest']],
     ['side-chat', 'sideChat', ['s1']],
     ['shell', 'runShell', ['s1', 'echo hi']],
+    ['goal', 'goal', ['s1', 'pause']],
     ['approve', 'approve', ['s1', 'a1', 'c1']],
     ['answer', 'answer', ['s1', 'u1', [{ questionId: 'q', selectedLabel: 'Yes' }]]],
     ['cancel-question', 'cancelQuestion', ['s1', 'u1']],

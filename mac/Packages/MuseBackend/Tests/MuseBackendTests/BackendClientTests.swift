@@ -9,14 +9,14 @@ private let viewJSON = #"""
 
 @Test func helloSendsTheProtocolNumber() async throws {
   let backend = ScriptedBackend { message in
-    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":3,"version":"0.2.0"}}"#] : []
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":4,"version":"0.2.0"}}"#] : []
   }
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
   let hello = try await client.hello()
-  #expect(hello.protocolVersion == 3)
+  #expect(hello.protocolVersion == 4)
   #expect(hello.version == "0.2.0")
-  #expect(backend.messages == [["id": 1, "method": "hello", "args": [3]]])
+  #expect(backend.messages == [["id": 1, "method": "hello", "args": [4]]])
 }
 
 @Test func aFailedReplyThrowsTheBackendMessage() async throws {
@@ -342,7 +342,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
     guard case .number(let number)? = message["id"] else { return [] }
     let id = Int(number)
     switch message["method"] {
-    case "hello": return [#"{"id":\#(id),"ok":true,"value":{"protocol":3,"version":"0.2.0"}}"#]
+    case "hello": return [#"{"id":\#(id),"ok":true,"value":{"protocol":4,"version":"0.2.0"}}"#]
     case "start": return [#"{"id":\#(id),"ok":true,"value":{"preferences":{},"status":{"state":"ready"}}}"#]
     default: return []
     }
@@ -354,7 +354,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
     startTimeout: .seconds(10))
   #expect(started.status.state == "ready")
   let sent: [[JSONValue]] = backend.messages.map { [$0["method"] ?? .null, $0["args"] ?? .null] }
-  #expect(sent == [["hello", [3]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
+  #expect(sent == [["hello", [4]], ["start", [["dataFolder": "/d", "bridgeToken": "secret"]]]])
 }
 
 @Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersHelloFailsTheHandshake() async throws {
@@ -372,7 +372,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
 
 @Test(.timeLimit(.minutes(1))) func aBackendThatNeverAnswersStartFailsTheHandshake() async throws {
   let backend = ScriptedBackend { message in
-    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":3,"version":"0.2.0"}}"#] : []
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":4,"version":"0.2.0"}}"#] : []
   }
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()
@@ -395,7 +395,7 @@ private func waitFor(_ condition: () -> Bool) async throws {
 @Test(.timeLimit(.minutes(1))) func startHasItsOwnLimitAfterHello() async throws {
   // hello answers at once; start answers after hello's limit has passed but within its own.
   let backend = ScriptedBackend { message in
-    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":3,"version":"0.2.0"}}"#] : []
+    message["method"] == "hello" ? [#"{"id":1,"ok":true,"value":{"protocol":4,"version":"0.2.0"}}"#] : []
   }
   let client = BackendClient(transport: backend, answerAsk: { _ in -1 })
   await client.run()

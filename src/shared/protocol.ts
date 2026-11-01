@@ -208,6 +208,17 @@ export const todoItemSchema = z.object({
 })
 export type TodoItem = z.infer<typeof todoItemSchema>
 
+export const sessionGoalSchema = z.object({
+  objective: z.string(),
+  status: z.string(),
+  percentComplete: z.number(),
+  currentWork: z.string().optional(),
+  nextWork: z.string().optional(),
+})
+export type SessionGoal = z.infer<typeof sessionGoalSchema>
+export const goalVerbSchema = z.enum(['set', 'edit', 'pause', 'resume', 'clear'])
+export type GoalVerb = z.infer<typeof goalVerbSchema>
+
 export type SessionView = {
   session: MuseSession
   items: TranscriptItem[]
@@ -218,6 +229,7 @@ export type SessionView = {
   todos?: TodoItem[]
   cost?: SessionCost
   quota?: QuotaStop
+  goal?: SessionGoal
   error?: string
   historyNotice?: string
 }

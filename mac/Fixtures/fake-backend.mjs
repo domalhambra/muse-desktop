@@ -434,8 +434,8 @@ const methods = {
   // As backend.ts does: a client that speaks another protocol gets an error reply.
   hello: (theirs) => {
     if (theirs !== 3)
-      throw new Error(`mMac speaks backend protocol ${theirs}, but the fake speaks 3.`)
-    return { protocol: 3, version: 'fake' }
+      throw new Error(`mMac speaks backend protocol ${theirs}, but the fake speaks 4.`)
+    return { protocol: 4, version: 'fake' }
   },
   start: (options) => {
     bridgeToken = options?.bridgeToken ?? ''

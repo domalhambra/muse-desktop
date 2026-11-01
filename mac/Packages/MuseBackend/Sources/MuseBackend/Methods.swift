@@ -122,6 +122,13 @@ extension BackendClient {
     _ = try await request("shell", [.string(sessionId), .string(command)])
   }
 
+  /// Runs one of Muse's goal verbs: `set`, `edit`, `pause`, `resume` or `clear`. The new value
+  /// arrives in a `session` event. `set` and `edit` take an objective, and can start a turn.
+  public func goal(sessionId: String, verb: String, objective: String? = nil) async throws {
+    _ = try await request(
+      "goal", [.string(sessionId), .string(verb)] + (objective.map { [.string($0)] } ?? []))
+  }
+
   /// The subscription's limits as Muse last observed them, or nil before any observation.
   public func usage() async throws -> SubscriptionLimits? {
     try await call("usage", [])

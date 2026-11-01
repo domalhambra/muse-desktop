@@ -452,6 +452,157 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('runs the goal verbs and folds session/goalChanged', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    await host.goal('s1', 'set', 'Ship')
+    expect(wire.command).toHaveBeenCalledWith(
+      'goal/set',
+      { sessionId: 's1', objective: 'Ship' },
+      { maxAttempts: 1 },
+    )
+    await host.goal('s1', 'pause')
+    expect(wire.command).toHaveBeenCalledWith('goal/pause', { sessionId: 's1' }, { maxAttempts: 1 })
+    notify('session/goalChanged', {
+      sessionId: 's1',
+      goal: { objective: 'Ship', status: 'paused', percentComplete: 40 },
+    })
+    expect(host.getView('s1').goal).toEqual({
+      objective: 'Ship',
+      status: 'paused',
+      percentComplete: 40,
+    })
+    notify('session/goalChanged', { sessionId: 's1', goal: null })
+    expect(host.getView('s1').goal).toBeUndefined()
+    await host.close()
+  })
+
+  it('finds a reopened conversation’s goal by paging backward', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    wire.request.mockImplementation(async (method: string) => {
+      if (method === 'session/read') return result()
+      if (method === 'view/page')
+        return {
+          events: [
+            {
+              method: 'session/goalChanged',
+              params: {
+                sessionId: 's1',
+                viewCursor: 'c9',
+                goal: { objective: 'Old', status: 'paused', percentComplete: 0 },
+              },
+            },
+          ],
+          nextCursor: null,
+        }
+      return {}
+    })
+    const view = await host.open('s1')
+    expect(view.goal?.objective).toBe('Old')
+    expect(wire.request).toHaveBeenCalledWith('view/page', {
+      sessionId: 's1',
+      direction: 'backward',
+      limit: 500,
+    })
+    await host.close()
+  })
+
+  it('stops looking for a goal after four pages', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    let page = 0
+    wire.request.mockImplementation(async (method: string) => {
+      if (method === 'session/read') return result()
+      if (method === 'view/page') return { events: [], nextCursor: `c${++page}` }
+      return {}
+    })
+    const view = await host.open('s1')
+    expect(view.goal).toBeUndefined()
+    expect(page).toBe(4)
+    await host.close()
+  })
+
+  it('takes the latest goal event of a page, and a clear means no goal', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    const goal = (objective: string | null) => ({
+      method: 'session/goalChanged',
+      params: {
+        sessionId: 's1',
+        viewCursor: 'c',
+        goal: objective && { objective, status: 'active', percentComplete: 1 },
+      },
+    })
+    wire.request.mockImplementation(async (method: string) => {
+      if (method === 'session/read') return result()
+      // A page is ascending, so its last goal event is the latest.
+      if (method === 'view/page')
+        return { events: [goal('First'), goal('Second'), goal(null)], nextCursor: 'x' }
+      return {}
+    })
+    expect((await host.open('s1')).goal).toBeUndefined()
+    await host.close()
+  })
+
+  it('keeps a goal that changed while the history was being read', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    wire.request.mockImplementation(async (method: string) => {
+      if (method === 'session/read') return result()
+      if (method === 'view/page') {
+        await gate
+        return {
+          events: [
+            {
+              method: 'session/goalChanged',
+              params: {
+                sessionId: 's1',
+                viewCursor: 'c1',
+                goal: { objective: 'Stale', status: 'active', percentComplete: 0 },
+              },
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      return {}
+    })
+    const opening = host.open('s1')
+    await vi.waitFor(() =>
+      expect(wire.request.mock.calls.some(([method]) => method === 'view/page')).toBe(true),
+    )
+    notify('session/goalChanged', {
+      goal: { objective: 'Live', status: 'active', percentComplete: 5 },
+    })
+    release()
+    expect((await opening).goal?.objective).toBe('Live')
+    await host.close()
+  })
+
+  it('keeps the known goal through a gap recovery, and when the goal cannot be read', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/goalChanged', {
+      goal: { objective: 'Ship', status: 'active', percentComplete: 10 },
+    })
+    // The default request mock returns no page, so reading the goal fails.
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    notify('view/gap', {})
+    await vi.waitFor(() =>
+      expect(wire.request).toHaveBeenCalledWith('view/subscribe', {
+        sessionId: 's1',
+        after: 'cursor-1',
+      }),
+    )
+    expect(host.getView('s1').goal?.objective).toBe('Ship')
+    await host.close()
+  })
+
   it('runs a shell command in the session and asks for the userShell capability', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')
