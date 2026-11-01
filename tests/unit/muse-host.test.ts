@@ -690,6 +690,23 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('does not carry a goal that was cleared while the fork ran', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/goalChanged', { sessionId: 's1', goal: held })
+    wire.command.mockImplementation(async (method: string) => {
+      if (method !== 'session/fork') return {}
+      notify('session/goalChanged', { sessionId: 's1', goal: null })
+      return { ...result(), session: { ...session, sessionId: 'fork-1' } }
+    })
+    wire.request.mockImplementation(async (method: string) =>
+      method === 'view/page' ? { events: [], nextCursor: null } : {},
+    )
+    expect((await host.fork('s1')).goal).toBeUndefined()
+    await host.close()
+  })
+
   it('keeps the held goal when a resume cannot read the goal', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')

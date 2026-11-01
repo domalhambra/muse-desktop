@@ -504,7 +504,6 @@ export class MuseHost {
    */
   async fork(sessionId: string, turnId?: string): Promise<SessionView> {
     await this.resume(sessionId)
-    const goal = this.sessions.get(sessionId)?.view.goal
     const result = sessionResultSchema.parse(
       await this.connection.command(
         'session/fork',
@@ -512,6 +511,7 @@ export class MuseHost {
         { maxAttempts: 1 },
       ),
     )
+    const goal = this.sessions.get(sessionId)?.view.goal
     const live = await this.hydrate(result, true)
     await this.restoreGoal(live)
     // Muse keeps the goal on the fork, but the fork's log starts with no goal event.
