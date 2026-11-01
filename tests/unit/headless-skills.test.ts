@@ -53,6 +53,32 @@ describe('the skill catalog', () => {
     expect(run).toHaveBeenCalledWith('/muse', ['skills', 'list', '--source', 'all', '--json'])
   })
 
+  it('maps the CLI’s user-invocable-only to the protocol’s userInvocableOnly', async () => {
+    const entry = (id: string, activation: string) => ({
+      id,
+      name: id,
+      scope: 'user',
+      activation,
+    })
+    const run = vi.fn(async () =>
+      JSON.stringify({
+        skills: [
+          entry('a', 'user-invocable-only'),
+          entry('b', 'on'),
+          entry('c', 'off'),
+          entry('d', 'something-newer'),
+        ],
+      }),
+    )
+    const read = await createSkills(run).readCatalog('/muse')
+    expect(read.map((skill) => skill.activation)).toEqual([
+      'userInvocableOnly',
+      'on',
+      'off',
+      'something-newer',
+    ])
+  })
+
   it('names a trusted project', async () => {
     const run = vi.fn(async () => listing)
     await createSkills(run).readCatalog('/muse', '/project')

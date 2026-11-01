@@ -82,7 +82,8 @@ public enum SlashMenu {
     case .tab:
       return .setDraft("/\(menu[index].name) ")
     case .enter:
-      // A whole name runs. Once the highlight has moved to another row, that row is the choice.
+      // A whole name runs when the highlight is on row 0 or on that name's row. Index 0 cannot
+      // tell an untouched highlight from one moved back to it, so row 0 always counts as untouched.
       if let exact = menu.firstIndex(where: { "/\($0.name)".lowercased() == draft.lowercased() }),
         index == 0 || index == exact
       {

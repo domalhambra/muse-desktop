@@ -15,6 +15,9 @@ public final class SettingsModel {
   public private(set) var settingsFile = ""
   /// Every skill Muse knows, as the CLI last reported it.
   public private(set) var skills: [SkillEntry] = []
+  /// The ids of skills with a change in flight. The pane disables their pickers, so the CLI
+  /// applies changes in the order they were clicked.
+  public private(set) var changingSkills: Set<String> = []
   /// After any MCP change: "Reconnect Muse Code to apply your changes."
   public private(set) var needsReconnect = false
   public private(set) var bridge: BridgeStatus?
@@ -121,14 +124,22 @@ public final class SettingsModel {
     }
   }
 
-  /// Changes one skill. Muse applies it on its next connection, so the pane offers Reconnect.
+  /// Changes one skill. Muse applies it on its next connection, so the pane offers Reconnect. A
+  /// second change to a skill whose change is still in flight does nothing. After a refusal the
+  /// catalog is read again, so the row shows the state Muse kept, and `needsReconnect` stays as it
+  /// was.
   public func setSkill(_ skill: SkillEntry, activation: String) async {
+    guard changingSkills.insert(skill.id).inserted else { return }
+    defer { changingSkills.remove(skill.id) }
     do {
       try await client.setSkill(
         id: skill.id, scope: skill.scope, activation: activation,
         project: workspace.project.isEmpty ? nil : workspace.project)
     } catch {
-      errorMessage = error.localizedDescription
+      let message = error.localizedDescription
+      await loadSkills()
+      // The read's own failure must not replace the refusal.
+      errorMessage = message
       return
     }
     changes += 1

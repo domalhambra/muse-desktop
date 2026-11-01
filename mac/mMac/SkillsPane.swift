@@ -48,11 +48,12 @@ struct SkillsPane: View {
           get: { skill.activation },
           set: { next in Task { await settings.setSkill(skill, activation: next) } })
       ) {
-        Text("On").tag("on")
-        Text("Only when you ask").tag("userInvocableOnly")
-        Text("Off").tag("off")
+        ForEach(SettingsRules.skillActivations(current: skill.activation), id: \.value) { option in
+          Text(option.label).tag(option.value)
+        }
       }
       .labelsHidden()
+      .disabled(settings.changingSkills.contains(skill.id))
       .fixedSize()
       .accessibilityLabel("Activation for \(skill.displayName)")
       .accessibilityIdentifier("skill-activation-\(skill.name)")

@@ -24,6 +24,11 @@ const VERBS: Record<SkillActivation, string> = {
   off: 'disable',
 }
 
+/** The CLI spells the middle state `user-invocable-only`; the protocol spells it camelCase. */
+function activationOf(value: string): string {
+  return value === 'user-invocable-only' ? 'userInvocableOnly' : value
+}
+
 function workspace(project?: string) {
   return project ? ['--workspace', project, '--trust-workspace'] : []
 }
@@ -88,7 +93,7 @@ export function createSkills(run: RunCli = runCli) {
         displayName: skill.display_name || skill.name,
         description: skill.description ?? '',
         scope: skill.scope,
-        activation: skill.activation,
+        activation: activationOf(skill.activation),
       }))
     },
 

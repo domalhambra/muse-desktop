@@ -1249,6 +1249,29 @@ describe('skills', () => {
     ])
   })
 
+  it('lists a user-invocable-only skill in the fallback and still drops an off one', async () => {
+    const skills = fakeSkills()
+    const entry = (name: string, activation: string) => ({
+      id: `user:${name}`,
+      name,
+      displayName: name,
+      description: 'd',
+      scope: 'user',
+      activation,
+    })
+    skills.readCatalog.mockResolvedValue([
+      entry('only', 'userInvocableOnly'),
+      entry('on', 'on'),
+      entry('off', 'off'),
+    ])
+    const h = harness(fakeMuse(), [], { skills })
+    await h.start()
+    await expect(h.call('skill-rows', 's1')).resolves.toEqual([
+      { selector: 'only', displayName: 'only', description: 'd' },
+      { selector: 'on', displayName: 'on', description: 'd' },
+    ])
+  })
+
   it('keeps one row per selector, the higher-precedence scope’s, in catalog order', async () => {
     const skills = fakeSkills()
     const entry = (id: string, name: string, scope: string, description: string) => ({
