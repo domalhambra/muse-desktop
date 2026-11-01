@@ -1,4 +1,5 @@
 import { realpath } from 'node:fs/promises'
+import { MspError } from '@muse-code/sdk'
 
 // Errors a person reads in mMac are plain sentences. Two raw shapes reached the screen in the
 // M4b live run: Node's "ENOENT: no such file or directory, realpath '…'" for a folder that was
@@ -12,9 +13,13 @@ const REFUSALS: Record<string, string> = {
   invalid_goal_state: 'The goal cannot do that in its current state.',
 }
 const WORKFLOW_GONE = 'This workflow is no longer running.'
+const TASK_GONE = 'This task has already finished.'
+const SKILL_UNKNOWN = 'Muse Code does not know this skill. Reconnect, then try again.'
 /** Reasons whose meaning depends on the command. These come before REFUSALS. */
 const METHOD_REFUSALS: Record<string, Record<string, string>> = {
   'subagent/stop': { invalid_target: 'This subagent has already finished.' },
+  'task/stop': { invalid_target: TASK_GONE },
+  'task/background': { invalid_target: TASK_GONE },
   'session/compact': { missing_run: 'There is no conversation history to compact yet.' },
   'turn/cancel': { missing_run: 'No turn is running.' },
   'workflow/pause': { missing_run: WORKFLOW_GONE },
@@ -69,6 +74,14 @@ export function plainError(error: unknown): unknown {
   if (missing(error)) {
     console.error(`A file is missing: ${error.message}`)
     return new Error(FILE_GONE)
+  }
+  // A skill the host does not list: a typed error (`-32032`) whose text names the session.
+  if (
+    (error instanceof MspError && error.kind === 'skillNotFound') ||
+    /\bskillNotFound\b/.test(error.message)
+  ) {
+    console.error(`Muse did not know a skill: ${error.message}`)
+    return new Error(SKILL_UNKNOWN)
   }
   const rejected = REJECTED.exec(error.message)
   if (rejected) {
