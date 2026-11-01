@@ -41,6 +41,7 @@ struct ComposerView: View {
     let mention = draftMention
     let mentionRows = showsPopups && commands.isEmpty ? (mentionMenu?.rows(for: workspace.draft) ?? []) : []
     VStack(alignment: .leading, spacing: 8) {
+      if let goal = workspace.view?.goal { GoalStrip(goal: goal, workspace: workspace) }
       if workspace.isRunning { runningBar }
       if !workspace.attachments.isEmpty { AttachmentChips(workspace: workspace) }
       ComposerTextView(

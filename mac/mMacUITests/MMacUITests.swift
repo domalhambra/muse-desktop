@@ -818,25 +818,27 @@ final class MMacUITests: XCTestCase {
     openSecondConversation(app)
     let composer = self.composer(app)
 
-    // `/` shows the eleven commands, as the Help sheet lists them.
+    // `/` shows the thirteen commands, as the Help sheet lists them.
     composer.click()
     composer.typeText("/")
     let popup = element(app, "composer-commands")
     XCTAssertTrue(popup.waitForExistence(timeout: 5), app.debugDescription)
-    for name in ["clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help", "btw"] {
+    for name in ["clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help", "btw", "goal", "fork"] {
       XCTAssertTrue(element(app, "command-\(name)").exists, "No /\(name) row")
     }
     // The eleventh row peeks above the popup's bottom edge, so the list reads as one that
-    // scrolls; the live run saw ten whole rows and no /btw. A scroll brings it fully in.
+    // scrolls; the live run saw ten whole rows and no /btw. A scroll brings the last row, /fork,
+    // fully in.
     let btw = element(app, "command-btw")
     XCTAssertLessThan(btw.frame.minY, popup.frame.maxY - 4, "/btw at \(btw.frame) is hidden under \(popup.frame)")
+    let fork = element(app, "command-fork")
     // A synthesized scroll sometimes does not reach the list (the frame did not move), so the
     // test scrolls again, up to three times, and waits for each to settle.
-    for _ in 0..<3 where !btw.isHittable {
+    for _ in 0..<3 where !fork.isHittable {
       popup.scroll(byDeltaX: 0, deltaY: -200)
-      _ = btw.wait(for: \.isHittable, toEqual: true, timeout: 2)
+      _ = fork.wait(for: \.isHittable, toEqual: true, timeout: 2)
     }
-    XCTAssertTrue(btw.isHittable, "/btw is not hittable after a scroll: \(btw.frame) in \(popup.frame)")
+    XCTAssertTrue(fork.isHittable, "/fork is not hittable after a scroll: \(fork.frame) in \(popup.frame)")
     // Typing filters the list, and Tab completes the highlighted command and a space.
     composer.typeText("he")
     XCTAssertTrue(element(app, "command-clear").waitForNonExistence(timeout: 5))

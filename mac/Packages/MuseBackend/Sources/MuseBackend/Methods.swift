@@ -129,6 +129,12 @@ extension BackendClient {
       "goal", [.string(sessionId), .string(verb)] + (objective.map { [.string($0)] } ?? []))
   }
 
+  /// Forks a conversation through `turnId`, or through every completed turn when it is nil. The
+  /// fork is a new conversation in the same folder, loaded and subscribed.
+  public func fork(sessionId: String, turnId: String? = nil) async throws -> SessionView {
+    try await call("fork", [.string(sessionId)] + (turnId.map { [.string($0)] } ?? []))
+  }
+
   /// The subscription's limits as Muse last observed them, or nil before any observation.
   public func usage() async throws -> SubscriptionLimits? {
     try await call("usage", [])
