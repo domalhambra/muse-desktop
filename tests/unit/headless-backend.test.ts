@@ -1351,6 +1351,7 @@ describe('skills', () => {
       'project',
       'on',
       undefined,
+      expect.anything(),
     )
     expect(asks).toHaveLength(0)
   })
@@ -1388,6 +1389,8 @@ describe('skills', () => {
       'bundled',
       'off',
       undefined,
+      // Muse's config folder as the host names it, and the data folder the backend started with.
+      { configDir: join(dir, 'muse-config'), dataFolder: join(dir, 'data') },
     )
     await expect(
       h.call('skill-set', { id: 'bundled:a', scope: 'bundled', activation: 'maybe' }),

@@ -145,6 +145,7 @@ export function createBackend({
   let starting = false
   let preferences: Preferences | undefined
   let preferencePath = ''
+  let dataFolderPath = ''
   let preferenceWrites: Promise<void> = Promise.resolve()
   let bridges: Bridges | undefined
   let scheduler: Scheduler | undefined
@@ -405,6 +406,7 @@ export function createBackend({
         .parse(value)
       await mkdir(dataFolder, { recursive: true, mode: 0o700 })
       preferencePath = join(dataFolder, 'preferences.json')
+      dataFolderPath = dataFolder
       preferences = await readPreferences(preferencePath)
       scheduler = new Scheduler({
         file: join(dataFolder, 'schedules.json'),
@@ -661,6 +663,8 @@ export function createBackend({
       input.scope,
       input.activation,
       await trustedOrNone(input.project),
+      // `muse skills` can rewrite settings.json, so the change saves a copy in mMac's data folder first.
+      { configDir: muse.configDir(), dataFolder: dataFolderPath },
     )
   })
 
