@@ -8,14 +8,29 @@ import { realpath } from 'node:fs/promises'
 /** Sentences for the `commandRejected` reasons mMac can meet. Others get REFUSED. */
 const REFUSALS: Record<string, string> = {
   compaction_unavailable: 'This model cannot compact the conversation.',
-  missing_run: 'There is no conversation history to compact yet.',
+  missing_goal: 'This conversation has no goal.',
+  invalid_goal_state: 'The goal cannot do that in its current state.',
+  invalid_target: 'This subagent has already finished.',
 }
+const WORKFLOW_GONE = 'This workflow is no longer running.'
+/** Reasons whose meaning depends on the command. These come before REFUSALS. */
+const METHOD_REFUSALS: Record<string, Record<string, string>> = {
+  'session/compact': { missing_run: 'There is no conversation history to compact yet.' },
+  'turn/cancel': { missing_run: 'No turn is running.' },
+  'workflow/pause': { missing_run: WORKFLOW_GONE },
+  'workflow/resume': { missing_run: WORKFLOW_GONE },
+  'workflow/cancel': { missing_run: WORKFLOW_GONE },
+}
+const FORK_GOAL_CUT =
+  'Muse cannot fork from before this conversation’s goal changed. Fork from the latest turn.'
+const FORK_BOUNDARY = 'Muse cannot fork from this turn. It may not have finished.'
 const REFUSED = 'Muse Code refused this request.'
 const WORKTREE_GONE = 'This conversation’s worktree folder no longer exists.'
 const FOLDER_GONE = 'This folder no longer exists.'
 const FILE_GONE = 'This file no longer exists.'
 
-const REJECTED = /^\S+ command \S+ rejected: ([a-z0-9_]+)$/
+const REJECTED = /^(\S+) command \S+ rejected: ([a-z0-9_]+)$/
+const BOUNDARY = /^invalid fork boundary for session \S+: (\w+)$/
 /** A Muse worktree root: `<project>/.muse/worktrees/<name>`, with nothing after the name. */
 const WORKTREE_ROOT = /[/\\]\.muse[/\\]worktrees[/\\][^/\\]+[/\\]?$/
 
@@ -57,8 +72,14 @@ export function plainError(error: unknown): unknown {
   }
   const rejected = REJECTED.exec(error.message)
   if (rejected) {
-    console.error(`Muse rejected a command: ${rejected[1]}`)
-    return new Error(REFUSALS[rejected[1]] ?? REFUSED)
+    const [, method, reason] = rejected
+    console.error(`Muse rejected ${method}: ${reason}`)
+    return new Error(METHOD_REFUSALS[method]?.[reason] ?? REFUSALS[reason] ?? REFUSED)
+  }
+  const boundary = BOUNDARY.exec(error.message)
+  if (boundary) {
+    console.error(`Muse refused a fork: ${boundary[1]}`)
+    return new Error(boundary[1] === 'HistoricalGoalCutUnsupported' ? FORK_GOAL_CUT : FORK_BOUNDARY)
   }
   return error
 }
