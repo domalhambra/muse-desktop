@@ -13,6 +13,8 @@ public final class SettingsModel {
 
   public private(set) var servers: [McpServer] = []
   public private(set) var settingsFile = ""
+  /// Every skill Muse knows, as the CLI last reported it.
+  public private(set) var skills: [SkillEntry] = []
   /// After any MCP change: "Reconnect Muse Code to apply your changes."
   public private(set) var needsReconnect = false
   public private(set) var bridge: BridgeStatus?
@@ -36,6 +38,8 @@ public final class SettingsModel {
   public private(set) var makingToken = false
   public var errorMessage: String?
   private var listSequence = 0
+  /// Numbers each skill read, so a read that ends after a newer one started is dropped.
+  private var skillSequence = 0
   /// Numbers each bridge read, so a read that ends after a newer one started is dropped.
   private var bridgeSequence = 0
   /// Counts the MCP changes made, so a reconnect knows whether one came in while it ran.
@@ -95,6 +99,41 @@ public final class SettingsModel {
   /// Opens Terminal on `muse mcp login`. Nothing reports back, as in Electron.
   public func signIn(_ name: String) async {
     do { try await client.mcpLogin(name) } catch { errorMessage = error.localizedDescription }
+  }
+
+  // MARK: Skills
+
+  /// Reads the skill catalog. The open project's skills join only if it is already trusted. A
+  /// read that ends after a newer one started is dropped, and a cancelled read is silent: the
+  /// pane asked again, or closed.
+  public func loadSkills() async {
+    skillSequence += 1
+    let sequence = skillSequence
+    do {
+      let list = try await client.skillCatalog(project: workspace.project.isEmpty ? nil : workspace.project)
+      guard sequence == skillSequence else { return }
+      skills = list
+    } catch is CancellationError {
+      // The pane closed, or asked again. The next read replaces this one.
+    } catch {
+      guard sequence == skillSequence else { return }
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  /// Changes one skill. Muse applies it on its next connection, so the pane offers Reconnect.
+  public func setSkill(_ skill: SkillEntry, activation: String) async {
+    do {
+      try await client.setSkill(
+        id: skill.id, scope: skill.scope, activation: activation,
+        project: workspace.project.isEmpty ? nil : workspace.project)
+    } catch {
+      errorMessage = error.localizedDescription
+      return
+    }
+    changes += 1
+    needsReconnect = true
+    await loadSkills()
   }
 
   /// Reconnects Muse Code. The notice stays when the reconnect fails, or when an MCP change was
