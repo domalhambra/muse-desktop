@@ -325,42 +325,139 @@ struct TodoStatusIcon: View {
   }
 }
 
-/// The Agents tab: the subagents this conversation ran. A row opens its session read-only.
+/// The Agents tab: what runs in this conversation, and the subagents it ran. A subagent row opens
+/// its session read-only. Muse has no event for the task list, so the tab reads it when it opens
+/// and when the set of running items changes.
 struct AgentsView: View {
   let rows: [AgentRow]
   let controller: AppController
   let workspace: Workspace
+  @State private var confirmingStopAll = false
+
+  private var items: [TranscriptItem] { workspace.view?.items ?? [] }
 
   var body: some View {
-    if rows.isEmpty {
-      ContentUnavailableView(
-        "No subagents yet", systemImage: "person.2",
-        description: Text("Subagents Muse starts in this conversation appear here.").foregroundStyle(.themeSecondary))
-    } else {
-      List(rows) { row in
-        Button {
-          guard let child = row.childSessionId else { return }
-          Task {
-            await workspace.openChild(child)
-            controller.sheets.child = true
-          }
-        } label: {
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            AgentPhaseIcon(phase: row.phase, status: row.status)
-            VStack(alignment: .leading, spacing: 2) {
-              Text(row.title).bold().lineLimit(1)
-              Text(row.detail.isEmpty ? row.status : "\(row.status) · \(row.detail)")
-                .font(.caption).foregroundStyle(.themeSecondary).lineLimit(1)
+    let tools = RunningToolRow.build(items, listed: workspace.backgroundTasks)
+    let workflows = WorkflowRow.build(items)
+    Group {
+      if rows.isEmpty, tools.isEmpty, workflows.isEmpty, workspace.backgroundTasks.isEmpty {
+        ContentUnavailableView(
+          "No subagents yet", systemImage: "person.2",
+          description: Text("Subagents Muse starts in this conversation appear here.")
+            .foregroundStyle(.themeSecondary))
+      } else {
+        List {
+          backgroundSection
+          if !tools.isEmpty {
+            Section("Running tools") {
+              ForEach(tools) { tool in
+                HStack {
+                  Text(tool.title).lineLimit(1)
+                  Spacer()
+                  Button("Send to background") {
+                    Task { await workspace.controlTask("background", target: tool.id) }
+                  }
+                  .accessibilityIdentifier("tool-background-\(tool.id)")
+                }
+              }
             }
           }
-          .contentShape(.rect)
+          if !workflows.isEmpty {
+            Section("Workflows") {
+              ForEach(workflows) { workflow in workflowRow(workflow) }
+            }
+          }
+          if !rows.isEmpty {
+            Section("Subagents") {
+              ForEach(rows) { row in subagentRow(row) }
+            }
+          }
         }
-        .buttonStyle(.plain)
-        .disabled(row.childSessionId == nil)
-        .accessibilityElement(children: .combine)
+        .listStyle(.inset)
+        .accessibilityIdentifier("agents-list")
       }
-      .listStyle(.inset)
-      .accessibilityIdentifier("agents-list")
+    }
+    // The conversation is part of the key: two conversations can both have an empty signature.
+    .task(id: "\(workspace.view?.session.sessionId ?? "")|\(BackgroundRules.signature(items))") {
+      await workspace.loadTasks()
+    }
+    .confirmationDialog(BackgroundRules.stopAllTitle, isPresented: $confirmingStopAll) {
+      Button("Stop all", role: .destructive) {
+        Task { await workspace.controlTask("stop-all") }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(BackgroundRules.stopAllDetail)
+    }
+  }
+
+  @ViewBuilder private var backgroundSection: some View {
+    if !workspace.backgroundTasks.isEmpty {
+      Section {
+        ForEach(workspace.backgroundTasks) { task in
+          HStack {
+            ProgressView().controlSize(.mini).accessibilityHidden(true)
+            Text(BackgroundRules.title(task)).lineLimit(1)
+            Spacer()
+            Button("Stop") { Task { await workspace.controlTask("stop", target: task.taskId) } }
+              .accessibilityIdentifier("task-stop-\(task.taskId)")
+          }
+        }
+      } header: {
+        HStack {
+          Text("Background tasks")
+          Spacer()
+          Button("Stop all") { confirmingStopAll = true }
+            .accessibilityIdentifier("task-stop-all")
+        }
+      }
+    }
+  }
+
+  private func workflowRow(_ workflow: WorkflowRow) -> some View {
+    HStack {
+      Text(workflow.title).lineLimit(1)
+      if workflow.paused { Text("Paused").font(.caption).foregroundStyle(.themeSecondary) }
+      Spacer()
+      Button(workflow.paused ? "Resume" : "Pause") {
+        let action = workflow.paused ? "workflow-resume" : "workflow-pause"
+        Task { await workspace.controlTask(action, target: workflow.runId) }
+      }
+      Button("Cancel") {
+        Task { await workspace.controlTask("workflow-cancel", target: workflow.runId) }
+      }
+    }
+  }
+
+  private func subagentRow(_ row: AgentRow) -> some View {
+    HStack {
+      Button {
+        guard let child = row.childSessionId else { return }
+        Task {
+          await workspace.openChild(child)
+          controller.sheets.child = true
+        }
+      } label: {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          AgentPhaseIcon(phase: row.phase, status: row.status)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(row.title).bold().lineLimit(1)
+            Text(row.detail.isEmpty ? row.status : "\(row.status) · \(row.detail)")
+              .font(.caption).foregroundStyle(.themeSecondary).lineLimit(1)
+          }
+        }
+        .contentShape(.rect)
+      }
+      .buttonStyle(.plain)
+      .disabled(row.childSessionId == nil)
+      .accessibilityElement(children: .combine)
+      Spacer()
+      if row.canStop, let subagentId = row.subagentId {
+        Button("Stop") {
+          Task { await workspace.controlTask("subagent-stop", target: subagentId) }
+        }
+        .accessibilityIdentifier("subagent-stop-\(row.id)")
+      }
     }
   }
 }

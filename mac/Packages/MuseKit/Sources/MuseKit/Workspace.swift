@@ -80,6 +80,8 @@ public final class Workspace {
   /// The side session shown in the side chat sheet, or nil. A side session is Muse's: seeded from
   /// the open conversation, and never part of it.
   public internal(set) var sideView: SessionView?
+  /// The open conversation's running background tasks, as the Agents tab last read them.
+  public internal(set) var backgroundTasks: [BackgroundTask] = []
   public internal(set) var sideOpening = false
   /// True while a fork runs, so a second click cannot make a second fork.
   public internal(set) var forking = false

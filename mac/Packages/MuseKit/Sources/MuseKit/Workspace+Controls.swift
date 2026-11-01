@@ -38,4 +38,25 @@ extension Workspace {
     await open(forked.session.sessionId)
     showNotice("Forked. The original conversation is unchanged.")
   }
+
+  /// Reads the background tasks. A reply for a conversation no longer open is dropped.
+  public func loadTasks() async {
+    guard let sessionId = view?.session.sessionId else {
+      backgroundTasks = []
+      return
+    }
+    await run {
+      let tasks = try await self.client.tasks(sessionId: sessionId)
+      if self.view?.session.sessionId == sessionId { self.backgroundTasks = tasks }
+    }
+  }
+
+  /// Runs a background control, then reads the list again.
+  public func controlTask(_ action: String, target: String? = nil) async {
+    guard let sessionId = view?.session.sessionId else { return }
+    await run {
+      try await self.client.controlTask(sessionId: sessionId, action: action, target: target)
+    }
+    await loadTasks()
+  }
 }
