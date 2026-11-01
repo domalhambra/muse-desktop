@@ -19,6 +19,7 @@ This is Dom Alhambra's fork of Muse Desktop by [Robert Courson (@robzilla1738)](
 - Shows the conversation's tokens and estimated cost in the inspector, and the 5-hour and weekly limits at the bottom of the sidebar, when Muse Code reports them.
 - Runs scheduled tasks while it is open: a prompt in a trusted project, hourly, daily, on weekdays, weekly, by hand or on a cron expression (**Settings → Scheduled**).
 - Shows a project's pull requests as change cards, with a delivery track and Accept, through the GitHub CLI (`gh`) when it is installed and signed in.
+- Sets, edits, pauses and resumes a conversation's goal (`/goal`), forks a conversation from any completed turn (`/fork`), stops background tasks one at a time or all at once, and lists, runs, enables and disables Muse Code's skills.
 - Imports existing CLI history and finds its project folders. Internal reminders and hooks stay in the Activity inspector.
 
 ## What it needs
@@ -50,7 +51,7 @@ mMac's measured size against the Electron app is in "Size" in `docs/architecture
 
 ## Data and permissions
 
-The CLI stays responsible for credentials, model requests, tools, sandboxing and session storage. mMac changes the CLI's configuration in two places only, each on your action: a worktree conversation adds its project to `~/.config/muse/trust.json`, and **Settings → MCP servers** edits the MCP entries in `~/.config/muse/settings.json`. Every other key stays as it was. mMac stores no copy of your credentials and adds no analytics. Model requests still reach the provider configured in Muse Code.
+The CLI stays responsible for credentials, model requests, tools, sandboxing and session storage. mMac changes the CLI's configuration in three places, each on your action: a worktree conversation adds its project to `~/.config/muse/trust.json`, **Settings → MCP servers** edits the MCP entries in `~/.config/muse/settings.json`, and **Settings → Skills** runs `muse skills enable`, `disable` and `user-only`. mMac keeps every other key as it was. The `muse skills` commands rewrite `~/.config/muse/settings.json` themselves, and in a test they removed an unknown top-level key (see `docs/compatibility.md`). mMac stores no copy of your credentials and adds no analytics. Model requests still reach the provider configured in Muse Code.
 
 mMac keeps its preferences, recent projects, project trust, pins, archives and scheduled tasks in `~/Library/Application Support/mMac`, and the MCP bridge token in the login Keychain. Voice audio goes only through your installed CLI and its transcription service. The temporary recording is private and deleted after transcription or cancellation, and the text is never sent on its own. Pasted images go to private temporary files, which mMac deletes after the send or the removal. Drafts stay in memory and are not restored after quitting. Archiving only hides a conversation in mMac; it does not delete the CLI session. Pull requests go through your own `gh` and its sign-in; mMac merges one only after you confirm.
 
