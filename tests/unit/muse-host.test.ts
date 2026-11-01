@@ -670,6 +670,26 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('carries the goal into a fork whose log has no goal event', async () => {
+    // Muse Code 1.4.14 keeps the goal on the fork, and the fork's log starts with no goal event.
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    notify('session/goalChanged', { sessionId: 's1', goal: held })
+    wire.command.mockImplementation(async (method: string) =>
+      method === 'session/fork'
+        ? { ...result(), session: { ...session, sessionId: 'fork-1' } }
+        : {},
+    )
+    wire.request.mockImplementation(async (method: string) =>
+      method === 'view/page' ? { events: [], nextCursor: null } : {},
+    )
+    const fork = await host.fork('s1')
+    expect(fork.goal?.objective).toBe('Held')
+    expect(host.getView('fork-1').goal?.objective).toBe('Held')
+    await host.close()
+  })
+
   it('keeps the held goal when a resume cannot read the goal', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')
