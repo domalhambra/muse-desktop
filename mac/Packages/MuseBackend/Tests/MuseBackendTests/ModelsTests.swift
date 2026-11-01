@@ -309,3 +309,15 @@ let fullViewJSON = #"""
   #expect(view.goal == SessionGoal(objective: "Ship", status: "active", percentComplete: 40))
   #expect(try decoder.decode(SessionView.self, from: Data(without.utf8)).goal == nil)
 }
+
+@Test func aWorkflowItemAndABackgroundTaskDecode() throws {
+  let item = #"{"itemId":"w1","kind":"workflow","revision":1,"status":"inProgress","workflowRunId":"r1","paused":true,"stopAvailable":true,"subagentId":"a1"}"#
+  let decoded = try JSONDecoder().decode(TranscriptItem.self, from: Data(item.utf8))
+  #expect(decoded.workflowRunId == "r1")
+  #expect(decoded.paused == true)
+  #expect(decoded.stopAvailable == true)
+  #expect(decoded.subagentId == "a1")
+  let task = #"{"taskId":"k1","kind":"tool","status":"inProgress","tool":"bash"}"#
+  let row = try JSONDecoder().decode(BackgroundTask.self, from: Data(task.utf8))
+  #expect(row.tool == "bash")
+}

@@ -37,6 +37,8 @@ const expected = [
   'side-chat',
   'goal',
   'fork',
+  'task-list',
+  'task-control',
   'shell',
   'usage',
   'preferences',
@@ -102,7 +104,7 @@ describe('the backend method list', () => {
       [...methods].sort(),
       'Register a method with a literal method(…) call, and list it in expected here',
     ).toEqual([...expected].sort())
-    expect(expected).toHaveLength(59)
+    expect(expected).toHaveLength(61)
   })
 
   it('gives every method a call in MuseBackend', () => {

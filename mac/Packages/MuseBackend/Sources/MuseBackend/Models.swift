@@ -161,6 +161,14 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
   public let childSessionId: String?
   /// The turn that produced the item. Fork points use it.
   public let turnId: String?
+  /// `subagent`: the child agent this row stands for.
+  public let subagentId: String?
+  /// `subagent`/`workflow`: the owning workflow run.
+  public let workflowRunId: String?
+  /// `workflow`: true only while a pause is in force.
+  public let paused: Bool?
+  /// `workflow`: true while the run is open.
+  public let stopAvailable: Bool?
   public var id: String { itemId }
 
   public init(
@@ -174,7 +182,9 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     durationMs: Double? = nil, truncated: Bool? = nil, retracted: Bool? = nil,
     blocking: Bool? = nil, outputRef: OutputRef? = nil, patchSummary: PatchSummary? = nil,
     result: ToolResult? = nil, exitCode: Int? = nil, sideSessionId: String? = nil,
-    controlStatus: String? = nil, usage: ItemUsage? = nil, childSessionId: String? = nil
+    controlStatus: String? = nil, usage: ItemUsage? = nil, childSessionId: String? = nil,
+    subagentId: String? = nil, workflowRunId: String? = nil, paused: Bool? = nil,
+    stopAvailable: Bool? = nil
   ) {
     self.itemId = itemId
     self.kind = kind
@@ -209,6 +219,10 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     self.usage = usage
     self.childSessionId = childSessionId
     self.turnId = turnId
+    self.subagentId = subagentId
+    self.workflowRunId = workflowRunId
+    self.paused = paused
+    self.stopAvailable = stopAvailable
   }
 }
 
@@ -250,6 +264,10 @@ extension TranscriptItem {
     usage = try c.decodeIfPresent(ItemUsage.self, forKey: .usage)
     childSessionId = try c.decodeIfPresent(String.self, forKey: .childSessionId)
     turnId = try c.decodeIfPresent(String.self, forKey: .turnId)
+    subagentId = try c.decodeIfPresent(String.self, forKey: .subagentId)
+    workflowRunId = try c.decodeIfPresent(String.self, forKey: .workflowRunId)
+    paused = try c.decodeIfPresent(Bool.self, forKey: .paused)
+    stopAvailable = try c.decodeIfPresent(Bool.self, forKey: .stopAvailable)
   }
 }
 
@@ -504,6 +522,27 @@ public struct PreferencesPatch: Encodable, Equatable, Sendable {
 
   /// True when the patch changes a bridge, so the bridge status needs a new read.
   public var touchesBridges: Bool { bridgeFilesEnabled != nil || bridgeMcpEnabled != nil || bridgeMcpPort != nil }
+}
+
+/// One running background task, a row of `task/list`. `kind` and `status` are open vocabularies.
+public struct BackgroundTask: Codable, Equatable, Sendable, Identifiable {
+  public let taskId: String
+  public let kind: String
+  public let status: String
+  public let tool: String?
+  public let startedAt: String?
+  public var id: String { taskId }
+
+  public init(
+    taskId: String, kind: String, status: String = "inProgress", tool: String? = nil,
+    startedAt: String? = nil
+  ) {
+    self.taskId = taskId
+    self.kind = kind
+    self.status = status
+    self.tool = tool
+    self.startedAt = startedAt
+  }
 }
 
 /// The conversation's goal. Muse carries `status` and `percentComplete` as they are: a status may

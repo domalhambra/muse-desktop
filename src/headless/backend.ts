@@ -9,6 +9,7 @@ import {
   approvalModeSchema,
   effortSchema,
   goalVerbSchema,
+  taskControlSchema,
   preferencesPatchSchema,
   preferencesSchema,
   type AppEvent,
@@ -77,6 +78,8 @@ export type Muse = Pick<
   | 'setApprovalMode'
   | 'sideChat'
   | 'fork'
+  | 'listTasks'
+  | 'controlTask'
   | 'runShell'
   | 'goal'
   | 'approve'
@@ -591,6 +594,16 @@ export function createBackend({
     const sessionId = id.parse(session)
     await sessionProject(sessionId)
     return muse.fork(sessionId, turn === undefined ? undefined : id.parse(turn))
+  })
+
+  // The Agents tab: background tasks, subagents and workflows.
+  method('task-list', (session) => muse.listTasks(id.parse(session)))
+
+  method('task-control', async (session, action, target) => {
+    const sessionId = id.parse(session)
+    const parsed = taskControlSchema.parse(action)
+    await sessionProject(sessionId)
+    return muse.controlTask(sessionId, parsed, parsed === 'stop-all' ? undefined : id.parse(target))
   })
 
   // The composer's `!` escape: a shell command in the conversation's folder.

@@ -37,6 +37,12 @@ export const itemSchema = z.object({
   sideSessionId: z.string().optional(),
   /** `subagent`: `accepted`, `starting`, `running`, `resultReady`, `closing`, `closed` or more. */
   controlStatus: z.string().optional(),
+  /** `subagent`/`workflow`: the owning workflow run. */
+  workflowRunId: z.string().optional(),
+  /** `workflow`: true only while a pause is in force. */
+  paused: z.boolean().optional(),
+  /** `workflow`: true while the run is open. */
+  stopAvailable: z.boolean().optional(),
   /** `subagent`: the child's observed usage, updated in place. */
   usage: z.object({ inputTokens: z.number(), outputTokens: z.number() }).passthrough().optional(),
   result: z
@@ -218,6 +224,25 @@ export const sessionGoalSchema = z.object({
 export type SessionGoal = z.infer<typeof sessionGoalSchema>
 export const goalVerbSchema = z.enum(['set', 'edit', 'pause', 'resume', 'clear'])
 export type GoalVerb = z.infer<typeof goalVerbSchema>
+
+export const backgroundTaskSchema = z.object({
+  taskId: z.string(),
+  kind: z.string(),
+  status: z.string(),
+  tool: z.string().optional(),
+  startedAt: z.string().optional(),
+})
+export type BackgroundTask = z.infer<typeof backgroundTaskSchema>
+export const taskControlSchema = z.enum([
+  'stop',
+  'background',
+  'stop-all',
+  'subagent-stop',
+  'workflow-pause',
+  'workflow-resume',
+  'workflow-cancel',
+])
+export type TaskControl = z.infer<typeof taskControlSchema>
 
 export type SessionView = {
   session: MuseSession

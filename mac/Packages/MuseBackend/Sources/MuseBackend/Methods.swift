@@ -135,6 +135,18 @@ extension BackendClient {
     try await call("fork", [.string(sessionId)] + (turnId.map { [.string($0)] } ?? []))
   }
 
+  /// The conversation's running background tasks. An unloaded conversation has none here.
+  public func tasks(sessionId: String) async throws -> [BackgroundTask] {
+    try await call("task-list", [.string(sessionId)])
+  }
+
+  /// Runs a background control: `stop`, `background`, `stop-all`, `subagent-stop`,
+  /// `workflow-pause`, `workflow-resume` or `workflow-cancel`. Only `stop-all` has no target.
+  public func controlTask(sessionId: String, action: String, target: String? = nil) async throws {
+    _ = try await request(
+      "task-control", [.string(sessionId), .string(action)] + (target.map { [.string($0)] } ?? []))
+  }
+
   /// The subscription's limits as Muse last observed them, or nil before any observation.
   public func usage() async throws -> SubscriptionLimits? {
     try await call("usage", [])

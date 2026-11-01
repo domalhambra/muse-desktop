@@ -96,6 +96,8 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     fork: vi.fn(async (sessionId: string) => view(session({ sessionId: `${sessionId}-fork` }))),
     runShell: vi.fn(async () => {}),
     goal: vi.fn(async () => {}),
+    listTasks: vi.fn(async () => []),
+    controlTask: vi.fn(async () => {}),
     configDir: () => join(dir, 'muse-config'),
     limits: null as SubscriptionLimits | null,
     ...overrides,
@@ -415,6 +417,18 @@ describe('headless backend, M1 methods', () => {
     expect(muse.fork).toHaveBeenCalledWith('s1', undefined)
   })
 
+  it('lists tasks and runs a control after the trust check', async () => {
+    const { call, muse } = await trustedSession()
+    await expect(call('task-list', 's1')).resolves.toEqual([])
+    await call('task-control', 's1', 'stop', 'k1')
+    expect(muse.controlTask).toHaveBeenCalledWith('s1', 'stop', 'k1')
+    await call('task-control', 's1', 'stop-all')
+    expect(muse.controlTask).toHaveBeenCalledWith('s1', 'stop-all', undefined)
+    await expect(call('task-control', 's1', 'stop')).rejects.toThrow()
+    await expect(call('task-control', 's1', 'explode', 'k1')).rejects.toThrow()
+    expect(muse.controlTask).toHaveBeenCalledTimes(2)
+  })
+
   it('runs a shell command after the trust check and refuses an empty one', async () => {
     const { call, muse } = await trustedSession()
     await call('shell', 's1', 'echo hi')
@@ -480,6 +494,7 @@ describe('headless backend, M1 methods', () => {
     ['fork', 'fork', ['s1', 't1']],
     ['shell', 'runShell', ['s1', 'echo hi']],
     ['goal', 'goal', ['s1', 'pause']],
+    ['task-control', 'controlTask', ['s1', 'stop', 'k1']],
     ['approve', 'approve', ['s1', 'a1', 'c1']],
     ['answer', 'answer', ['s1', 'u1', [{ questionId: 'q', selectedLabel: 'Yes' }]]],
     ['cancel-question', 'cancelQuestion', ['s1', 'u1']],

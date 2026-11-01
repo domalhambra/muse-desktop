@@ -1,3 +1,4 @@
+import { MspError } from '@muse-code/sdk'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppEvent } from '../../src/shared/protocol'
 
@@ -706,6 +707,57 @@ describe('Muse protocol boundary', () => {
       }),
     )
     expect(host.getView('s1').goal?.objective).toBe('Ship')
+    await host.close()
+  })
+
+  it('lists background tasks and returns none for an unloaded conversation', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    wire.request.mockImplementation(async (method: string) =>
+      method === 'task/list'
+        ? { tasks: [{ taskId: 'k1', kind: 'tool', status: 'inProgress', tool: 'bash' }] }
+        : {},
+    )
+    expect(await host.listTasks('s1')).toEqual([
+      { taskId: 'k1', kind: 'tool', status: 'inProgress', tool: 'bash' },
+    ])
+    wire.request.mockRejectedValueOnce(
+      new MspError({ code: -32000, message: 'not loaded', data: { kind: 'sessionNotLoaded' } }),
+    )
+    expect(await host.listTasks('s1')).toEqual([])
+    await host.close()
+  })
+
+  it.each([
+    ['stop', 'task/stop', { taskId: 'x' }],
+    ['background', 'task/background', { taskId: 'x' }],
+    ['subagent-stop', 'subagent/stop', { subagentId: 'x' }],
+    ['workflow-pause', 'workflow/pause', { workflowRunId: 'x' }],
+    ['workflow-resume', 'workflow/resume', { workflowRunId: 'x' }],
+    ['workflow-cancel', 'workflow/cancel', { workflowRunId: 'x' }],
+  ] as const)('sends the %s control', async (action, method, target) => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    await host.controlTask('s1', action, 'x')
+    expect(wire.command).toHaveBeenCalledWith(
+      method,
+      { sessionId: 's1', ...target },
+      { maxAttempts: 1 },
+    )
+    await host.close()
+  })
+
+  it('sends stop-all with no target', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    await host.create('/project')
+    await host.controlTask('s1', 'stop-all')
+    expect(wire.command).toHaveBeenCalledWith(
+      'task/stopAll',
+      { sessionId: 's1' },
+      { maxAttempts: 1 },
+    )
     await host.close()
   })
 

@@ -2,6 +2,7 @@ import { ItemStore, MspError, spawnMspConnection, type SpawnedMspConnection } fr
 import { z } from 'zod'
 import {
   approvalSchema,
+  backgroundTaskSchema,
   itemSchema,
   modelSchema,
   questionSchema,
@@ -11,12 +12,14 @@ import {
   worktreeEntrySchema,
   type AppEvent,
   type ApprovalMode,
+  type BackgroundTask,
   type ConnectionStatus,
   type GoalVerb,
   type MuseSession,
   type QuestionAnswer,
   type SessionView,
   type SubscriptionLimits,
+  type TaskControl,
   type TranscriptItem,
 } from '../shared/protocol'
 import { discoverCli } from './cli'
@@ -71,6 +74,17 @@ type LiveSession = {
   loaded: boolean
   /** Counts the `session/goalChanged` events folded live, so a read of the log never overwrites one. */
   goalEvents: number
+}
+
+/** Each control's Muse method and the field that names its target. `task/stopAll` has none. */
+const TASK_CONTROLS: Record<TaskControl, [method: string, field?: string]> = {
+  stop: ['task/stop', 'taskId'],
+  background: ['task/background', 'taskId'],
+  'stop-all': ['task/stopAll'],
+  'subagent-stop': ['subagent/stop', 'subagentId'],
+  'workflow-pause': ['workflow/pause', 'workflowRunId'],
+  'workflow-resume': ['workflow/resume', 'workflowRunId'],
+  'workflow-cancel': ['workflow/cancel', 'workflowRunId'],
 }
 
 export class MuseHost {
@@ -500,6 +514,29 @@ export class MuseHost {
     await this.restoreGoal(live)
     this.emit({ type: 'sessions-changed' })
     return this.view(live)
+  }
+
+  /** The conversation's running background tasks. An unloaded conversation runs none here. */
+  async listTasks(sessionId: string): Promise<BackgroundTask[]> {
+    try {
+      return z
+        .object({ tasks: z.array(backgroundTaskSchema) })
+        .parse(await this.connection.request('task/list', { sessionId })).tasks
+    } catch (error) {
+      if (error instanceof MspError && error.kind === 'sessionNotLoaded') return []
+      throw error
+    }
+  }
+
+  /** Runs one background control. The result shows up in the items and the next `task/list`. */
+  async controlTask(sessionId: string, action: TaskControl, target?: string) {
+    await this.resume(sessionId)
+    const [method, field] = TASK_CONTROLS[action]
+    await this.connection.command(
+      method,
+      { sessionId, ...(field ? { [field]: target } : {}) },
+      { maxAttempts: 1 },
+    )
   }
 
   /**
