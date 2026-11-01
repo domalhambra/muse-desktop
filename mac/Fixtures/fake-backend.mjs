@@ -4,8 +4,8 @@
 // question. It also answers the inspector's and the Settings window's methods from fixed or
 // in-memory data, and its rename Asks before it replies. For M5b it reports usage limits, gives
 // the second conversation a quota stop, serves two scheduled tasks and two pull requests, and its
-// pr-merge Asks before it replies. A `send` of "crash now" ends the
-// process with code 1, as a backend that crashes does.
+// pr-merge Asks before it replies. For M6 it keeps a goal, one background task and one skill.
+// A `send` of "crash now" ends the process with code 1, as a backend that crashes does.
 // The M4a methods answer with the real backend's shapes: `export` writes its file with mode 0600,
 // `attachments` checks each file and keeps it under an `att-<n>` id, and `send` takes those ids.
 // `terminal`, `cli-terminal` and `voice` open nothing: no Terminal window, and no microphone.
@@ -285,6 +285,19 @@ let questions = [
     ],
   },
 ]
+// M6: the goal, the background tasks and the skills.
+let goal = null
+let tasks = [{ taskId: 'fake-task', kind: 'tool', status: 'inProgress', tool: 'bash' }]
+const skills = [
+  {
+    id: 'bundled:fake-skill',
+    name: 'fake-skill',
+    displayName: 'Fake skill',
+    description: 'A skill for the UI test',
+    scope: 'bundled',
+    activation: 'on',
+  },
+]
 const view = (sessionId = 'fake-1') => {
   if (sessionId === 'fake-side') return { ...side, approvals: [], questions: [] }
   const other = others.find((entry) => entry.session.sessionId === sessionId)
@@ -295,6 +308,7 @@ const view = (sessionId = 'fake-1') => {
         items,
         approvals,
         questions,
+        ...(goal ? { goal } : {}),
         context: { used: 4200, window: 10000, pressure: 'normal' },
         todos: [
           {
@@ -481,6 +495,37 @@ const methods = {
     return mode
   },
   'side-chat': () => view('fake-side'),
+  // As backend.ts's goal: a verb, and an objective for set and edit. The new goal arrives in a
+  // session event.
+  goal: (_, verb, objective) => {
+    if (verb === 'clear') goal = null
+    else if (verb === 'pause') goal = { ...goal, status: 'paused' }
+    else if (verb === 'resume') goal = { ...goal, status: 'active' }
+    else goal = { objective, status: 'active', percentComplete: 40 }
+    update()
+  },
+  // Opens the second conversation as the fork: the fake has no new session to make.
+  fork: () => view('fake-2'),
+  // The background tasks; Stop and Stop all remove them.
+  'task-list': () => tasks,
+  'task-control': (_, action, target) => {
+    if (action === 'stop-all') tasks = []
+    else tasks = tasks.filter((task) => task.taskId !== target)
+  },
+  // As backend.ts's skill-catalog, skill-set and skill-rows. A skill that is off has no row.
+  'skill-catalog': () => skills,
+  'skill-set': (input) => {
+    skills.find((skill) => skill.id === input.id).activation = input.activation
+  },
+  'skill-rows': () =>
+    skills
+      .filter((skill) => skill.activation !== 'off')
+      .map(({ name, displayName, description }) => ({
+        selector: name,
+        displayName,
+        description,
+      })),
+  'send-skill': () => {},
   shell: (_, command) => {
     items.push({
       itemId: `sh-${items.length}`,

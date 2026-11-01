@@ -1303,4 +1303,87 @@ final class MMacUITests: XCTestCase {
     assertLogged(entries, ["method": "pr-merge", "args": [project, 1]])
     assertLogged(entries, ["method": "open", "args": ["fake-2"]])
   }
+
+  func testM6AgainstTheFakeBackend() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    let app = try launchFake(log: log)
+    waitUntilConnected(app)
+    openFakeConversation(app)
+
+    // Goals: /goal sets one, the strip shows it, and Pause and Clear reach the backend.
+    let input = composer(app)
+    input.click()
+    input.typeText("/goal Write the notes")
+    input.typeKey(.return, modifierFlags: [])
+    let objective = element(app, "goal-objective")
+    XCTAssertTrue(objective.waitForExistence(timeout: 10), "No goal strip. Requests: \(fakeRequests())")
+    waitUntilLogged(log, ["method": "goal", "args": ["fake-1", "set", "Write the notes"]])
+    waitForValue(input, "")
+    element(app, "goal-pause").click()
+    XCTAssertTrue(element(app, "goal-resume").waitForExistence(timeout: 5))
+    waitUntilLogged(log, ["method": "goal", "args": ["fake-1", "pause"]])
+    element(app, "goal-clear").click()
+    XCTAssertTrue(objective.waitForNonExistence(timeout: 5))
+    waitUntilLogged(log, ["method": "goal", "args": ["fake-1", "clear"]])
+
+    // Skills in the popup: `/fake-` matches no command, so the popup's row is the skill's. The
+    // rest of the draft names the skill and its arguments, and it is sent as a skill.
+    input.click()
+    input.typeText("/fake-")
+    XCTAssertTrue(
+      element(app, "command-fake-skill").waitForExistence(timeout: 5), "No skill row. Requests: \(fakeRequests())")
+    input.typeText("skill now")
+    input.typeKey(.return, modifierFlags: [])
+    waitForValue(input, "")
+    XCTAssertEqual(try Self.requests(log, "send-skill").count, 1, "Requests: \(fakeRequests())")
+
+    // Background control: the inspector opens, Stop acts on the task, and the list that follows
+    // leaves the task out.
+    let toggle = app.buttons["Toggle project inspector"]
+    waitForValue(toggle, "Hidden")
+    toggle.click()
+    waitForValue(toggle, "Shown")
+    // As the other inspector tests: fill the screen, so the segments are inside the window.
+    app.menuBars.menuBarItems["Window"].click()
+    app.menuBars.menuItems["Zoom"].click()
+    selectTab(app, "Agents")
+    let stop = element(app, "task-stop-fake-task")
+    XCTAssertTrue(stop.waitForExistence(timeout: 10), "No background task. Requests: \(fakeRequests())")
+    stop.click()
+    XCTAssertTrue(stop.waitForNonExistence(timeout: 5))
+    waitUntilLogged(log, ["method": "task-control", "args": ["fake-1", "stop", "fake-task"]])
+    // Off again, so the tests' own defaults suite ends with the inspector closed.
+    app.typeKey("i", modifierFlags: [.command, .option])
+    waitForValue(toggle, "Hidden")
+
+    // Fork: /fork reaches the backend and opens the other conversation.
+    input.click()
+    input.typeText("/fork")
+    input.typeKey(.return, modifierFlags: [])
+    waitUntilLogged(log, ["method": "fork", "args": ["fake-1"]])
+    XCTAssertTrue(
+      app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10),
+      "The fork did not open. Requests: \(fakeRequests())")
+
+    // Settings › Skills: the pane lists the skill.
+    app.typeKey(",", modifierFlags: .command)
+    let settings = settingsWindow(app)
+    XCTAssertTrue(settings.waitForExistence(timeout: 10))
+    pane(settings, "Skills").click()
+    XCTAssertTrue(
+      settings.descendants(matching: .any)["skill-activation-fake-skill"].waitForExistence(timeout: 10),
+      "No skill row. Requests: \(fakeRequests())")
+    // The catalog read names the open project as its argument, so the check is on the method.
+    XCTAssertFalse(try Self.requests(log, "skill-catalog").isEmpty, "No skill-catalog. Requests: \(fakeRequests())")
+    settings.typeKey("w", modifierFlags: .command)
+    XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+    quit(app)
+
+    // The skill went out by its selector, with the rest of the draft as its arguments.
+    let sent = try XCTUnwrap(Self.requests(log, "send-skill").first?["args"] as? [Any])
+    let input0 = try XCTUnwrap(sent.first as? [String: Any])
+    XCTAssertEqual(input0["sessionId"] as? String, "fake-1")
+    XCTAssertEqual(input0["selector"] as? String, "fake-skill")
+    XCTAssertEqual(input0["arguments"] as? String, "now")
+  }
 }
