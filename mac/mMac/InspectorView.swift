@@ -378,7 +378,11 @@ struct AgentsView: View {
       }
     }
     // The conversation is part of the key: two conversations can both have an empty signature.
-    .task(id: "\(workspace.view?.session.sessionId ?? "")|\(BackgroundRules.signature(items))") {
+    // So is the connection: a reconnect reads `task/list` again, so Stop never acts on a dead row.
+    .task(
+      id:
+        "\(workspace.view?.session.sessionId ?? "")|\(workspace.isConnected)|\(BackgroundRules.signature(items))"
+    ) {
       await workspace.loadTasks()
     }
     .confirmationDialog(BackgroundRules.stopAllTitle, isPresented: $confirmingStopAll) {
