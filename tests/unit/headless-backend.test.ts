@@ -19,6 +19,7 @@ import type {
   ConnectionStatus,
   MuseSession,
   SessionView,
+  SkillRow,
   SubscriptionLimits,
 } from '../../src/shared/protocol'
 import type { AgentApi, AgentPolicy } from '../../src/main/agent-api'
@@ -98,6 +99,7 @@ function fakeMuse(overrides: Partial<Muse> = {}) {
     goal: vi.fn(async () => {}),
     listTasks: vi.fn(async () => []),
     controlTask: vi.fn(async () => {}),
+    listSkills: vi.fn(async () => null as SkillRow[] | null),
     configDir: () => join(dir, 'muse-config'),
     limits: null as SubscriptionLimits | null,
     ...overrides,
@@ -120,6 +122,7 @@ function harness(
     askStartsQuit?: boolean
     dataFolder?: string
     voice?: NonNullable<BackendDeps['voice']>
+    skills?: BackendDeps['skills']
     scheduler?: BackendDeps['scheduler']
     /** A fake gh's environment (tests/unit/fake-gh.ts). Without it, gh is never found. */
     ghEnv?: NodeJS.ProcessEnv
@@ -160,6 +163,7 @@ function harness(
     },
     bridgeFactories,
     voice,
+    skills: options.skills,
     scheduler: options.scheduler ?? { timer: false, tz: 'UTC' },
     // No test may reach the real gh: PATH holds only a fake gh, and no Homebrew folders are added.
     ghEnv: options.ghEnv ?? { PATH: '/nonexistent' },
@@ -1121,6 +1125,126 @@ describe('headless backend, M4a conversation actions', () => {
     await call('add-project', project)
     await call('cli-terminal', project)
     expect(terminal).toEqual([`cd '${project}' && 'muse'`])
+  })
+})
+
+describe('skills', () => {
+  const catalog = [
+    {
+      id: 'bundled:a',
+      name: 'a',
+      displayName: 'A',
+      description: 'd',
+      scope: 'bundled',
+      activation: 'on',
+    },
+    {
+      id: 'bundled:b',
+      name: 'b',
+      displayName: 'B',
+      description: 'd',
+      scope: 'bundled',
+      activation: 'off',
+    },
+  ]
+  const fakeSkills = () => ({
+    readCatalog: vi.fn(async (_cliPath: string, _project?: string) => catalog),
+    setActivation: vi.fn(async () => {}),
+  })
+
+  async function trustedSession(skills = fakeSkills()) {
+    const project = await folder('project')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const h = harness(muse, [0], { skills })
+    await h.start()
+    return { ...h, muse, project, skills }
+  }
+
+  it('reads the catalog with no project and no Ask for an untrusted folder', async () => {
+    const skills = fakeSkills()
+    const h = harness(fakeMuse(), [], { skills })
+    await h.start()
+    await expect(h.call('skill-catalog', await folder('untrusted'))).resolves.toEqual(catalog)
+    expect(skills.readCatalog).toHaveBeenCalledWith(expect.anything(), undefined)
+    expect(h.asks).toHaveLength(0)
+  })
+
+  it('passes a project that is already trusted', async () => {
+    const { call, project, skills, asks } = await trustedSession()
+    // The send's trust check asks once, and the answer trusts the project.
+    await call('send-skill', { sessionId: 's1', selector: 'a', effort: 'high', mode: 'queue' })
+    expect(asks).toHaveLength(1)
+    asks.length = 0
+    await call('skill-catalog', project)
+    expect(skills.readCatalog).toHaveBeenLastCalledWith(expect.anything(), project)
+    expect(asks).toHaveLength(0)
+  })
+
+  it('falls back to the catalog, without off rows, for an unloaded conversation', async () => {
+    const skills = fakeSkills()
+    const project = await folder('project')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const h = harness(muse, [], { skills })
+    await h.start()
+    await expect(h.call('skill-rows', 's1')).resolves.toEqual([
+      { selector: 'a', displayName: 'A', description: 'd' },
+    ])
+  })
+
+  it('uses the conversation’s rows when it is loaded', async () => {
+    const skills = fakeSkills()
+    const rows = [{ selector: 'x', displayName: 'X', description: 'd' }]
+    const h = harness(fakeMuse({ listSkills: vi.fn(async () => rows) }), [], { skills })
+    await h.start()
+    await expect(h.call('skill-rows', 's1')).resolves.toEqual(rows)
+    expect(skills.readCatalog).not.toHaveBeenCalled()
+  })
+
+  it('sends a skill as a skill part after the trust check', async () => {
+    const { call, muse } = await trustedSession()
+    await call('send-skill', {
+      sessionId: 's1',
+      selector: 'blender',
+      arguments: 'a cube',
+      effort: 'high',
+      mode: 'queue',
+    })
+    expect(muse.send).toHaveBeenCalledWith(
+      's1',
+      [{ type: 'skill', selector: 'blender', arguments: 'a cube' }],
+      'high',
+      'queue',
+      '/blender a cube',
+    )
+  })
+
+  it('sends a skill with no arguments as a bare selector', async () => {
+    const { call, muse } = await trustedSession()
+    await call('send-skill', { sessionId: 's1', selector: 'blender', effort: 'low', mode: 'steer' })
+    expect(muse.send).toHaveBeenCalledWith(
+      's1',
+      [{ type: 'skill', selector: 'blender' }],
+      'low',
+      'steer',
+      '/blender',
+    )
+  })
+
+  it('checks a skill-set request', async () => {
+    const skills = fakeSkills()
+    const h = harness(fakeMuse(), [], { skills })
+    await h.start()
+    await h.call('skill-set', { id: 'bundled:a', scope: 'bundled', activation: 'off' })
+    expect(skills.setActivation).toHaveBeenCalledWith(
+      expect.anything(),
+      'bundled:a',
+      'bundled',
+      'off',
+      undefined,
+    )
+    await expect(
+      h.call('skill-set', { id: 'bundled:a', scope: 'bundled', activation: 'maybe' }),
+    ).rejects.toThrow()
   })
 })
 

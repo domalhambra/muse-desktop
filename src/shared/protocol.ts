@@ -248,6 +248,25 @@ export const taskControlSchema = z.enum([
 ])
 export type TaskControl = z.infer<typeof taskControlSchema>
 
+export const skillActivationSchema = z.enum(['on', 'userInvocableOnly', 'off'])
+export type SkillActivation = z.infer<typeof skillActivationSchema>
+/** One row of the Skills pane, from `muse skills list`. `activation` may hold a newer value. */
+export type SkillEntry = {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  scope: string
+  activation: string
+}
+/** One row of the `/` popup. `selector` is what a `skill` input part submits. */
+export type SkillRow = {
+  selector: string
+  displayName: string
+  description: string
+  argumentHint?: string
+}
+
 export type SessionView = {
   session: MuseSession
   items: TranscriptItem[]

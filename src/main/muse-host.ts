@@ -18,6 +18,7 @@ import {
   type MuseSession,
   type QuestionAnswer,
   type SessionView,
+  type SkillRow,
   type SubscriptionLimits,
   type TaskControl,
   type TranscriptItem,
@@ -544,6 +545,27 @@ export class MuseHost {
       { sessionId, ...(field ? { [field]: target } : {}) },
       { maxAttempts: 1 },
     )
+  }
+
+  /** The conversation's skill rows, or null when it is not loaded on this host. */
+  async listSkills(sessionId: string): Promise<SkillRow[] | null> {
+    try {
+      return z
+        .object({
+          skills: z.array(
+            z.object({
+              selector: z.string(),
+              displayName: z.string(),
+              description: z.string(),
+              argumentHint: z.string().optional(),
+            }),
+          ),
+        })
+        .parse(await this.connection.request('skill/list', { sessionId })).skills
+    } catch (error) {
+      if (error instanceof MspError && error.kind === 'sessionNotLoaded') return null
+      throw error
+    }
   }
 
   /**

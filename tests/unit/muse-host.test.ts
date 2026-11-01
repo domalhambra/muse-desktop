@@ -796,6 +796,28 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('lists skill rows, and returns null for an unloaded conversation', async () => {
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    const row = {
+      selector: 'blender',
+      displayName: 'Blender',
+      description: 'Render',
+      source: 'bundled',
+    }
+    wire.request.mockImplementation(async (method: string) =>
+      method === 'skill/list' ? { skills: [row] } : {},
+    )
+    expect(await host.listSkills('s1')).toEqual([
+      { selector: 'blender', displayName: 'Blender', description: 'Render' },
+    ])
+    wire.request.mockRejectedValueOnce(
+      new MspError({ code: -32000, message: 'not loaded', data: { kind: 'sessionNotLoaded' } }),
+    )
+    expect(await host.listSkills('s1')).toBeNull()
+    await host.close()
+  })
+
   it('runs a shell command in the session and asks for the userShell capability', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')

@@ -9,6 +9,7 @@ import {
   approvalModeSchema,
   effortSchema,
   goalVerbSchema,
+  skillActivationSchema,
   taskControlSchema,
   preferencesPatchSchema,
   preferencesSchema,
@@ -49,6 +50,7 @@ import { prList, prMerge, prMergeWhenReady, prStatus } from './pull-request'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
 import { Scheduler, StartFailed } from './schedule'
 import type { Schedule } from './schedule-rules'
+import { createSkills, type Skills } from './skills'
 import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
@@ -80,6 +82,7 @@ export type Muse = Pick<
   | 'fork'
   | 'listTasks'
   | 'controlTask'
+  | 'listSkills'
   | 'runShell'
   | 'goal'
   | 'approve'
@@ -109,6 +112,8 @@ export type BackendDeps = {
   bridgeFactories?: BridgeFactories
   /** Runs `muse voice transcribe`. Tests pass a fake; the default is src/main/voice.ts's. */
   voice?: { transcribe(data: Buffer, cliPath: string): Promise<string>; cancel(): Promise<void> }
+  /** Reads and changes the skill catalog through `muse skills`. Tests pass a fake. */
+  skills?: Skills
   /** Scheduled tasks. Tests pass `{ timer: false }` and call the methods; the default ticks every minute. */
   scheduler?: { timer?: boolean; now?: () => number; tz?: string }
   /** The environment gh runs in. Tests point PATH at a fake gh; the default is the backend's. */
@@ -128,6 +133,7 @@ export function createBackend({
   agent,
   bridgeFactories,
   voice = new VoiceTranscriber(),
+  skills = createSkills(),
   scheduler: schedulerOptions = {},
   ghEnv,
   ghFolders,
@@ -604,6 +610,76 @@ export function createBackend({
     const parsed = taskControlSchema.parse(action)
     await sessionProject(sessionId)
     return muse.controlTask(sessionId, parsed, parsed === 'stop-all' ? undefined : id.parse(target))
+  })
+
+  // Skills. The catalog never raises a trust Ask: a project joins only if it is already trusted.
+  const trustedOrNone = async (value: unknown) => {
+    if (value === undefined || value === null) return undefined
+    const project = await realFolder(pathSchema.parse(value))
+    return current().trustedProjects.includes(project) ? project : undefined
+  }
+
+  method('skill-catalog', async (project) =>
+    skills.readCatalog(current().cliPath, await trustedOrNone(project)),
+  )
+
+  method('skill-set', async (value) => {
+    const input = z
+      .object({
+        id: z.string().min(1),
+        scope: z.string().min(1),
+        activation: skillActivationSchema,
+        project: z.string().optional(),
+      })
+      .parse(value)
+    await skills.setActivation(
+      current().cliPath,
+      input.id,
+      input.scope,
+      input.activation,
+      await trustedOrNone(input.project),
+    )
+  })
+
+  // The `/` popup: the conversation's rows, or the catalog's when Muse has not loaded it.
+  method('skill-rows', async (session) => {
+    const sessionId = id.parse(session)
+    const rows = await muse.listSkills(sessionId)
+    if (rows) return rows
+    const catalog = await skills.readCatalog(current().cliPath)
+    return catalog
+      .filter((skill) => skill.activation !== 'off')
+      .map(({ name, displayName, description }) => ({
+        selector: name,
+        displayName,
+        description,
+      }))
+  })
+
+  method('send-skill', async (value) => {
+    const input = z
+      .object({
+        sessionId: id,
+        selector: z.string().min(1),
+        arguments: z.string().max(100000).optional(),
+        effort: z.string(),
+        mode: z.enum(['queue', 'steer']),
+      })
+      .parse(value)
+    await sessionProject(input.sessionId)
+    await muse.send(
+      input.sessionId,
+      [
+        {
+          type: 'skill',
+          selector: input.selector,
+          ...(input.arguments ? { arguments: input.arguments } : {}),
+        },
+      ],
+      input.effort,
+      input.mode,
+      input.arguments ? `/${input.selector} ${input.arguments}` : `/${input.selector}`,
+    )
   })
 
   // The composer's `!` escape: a shell command in the conversation's folder.

@@ -549,6 +549,48 @@ public struct BackgroundTask: Codable, Equatable, Sendable, Identifiable {
   }
 }
 
+/// One row of Settings › Skills. `activation` is `on`, `userInvocableOnly` or `off`, or a newer
+/// value that shows as it is.
+public struct SkillEntry: Codable, Equatable, Sendable, Identifiable {
+  public let id: String
+  public let name: String
+  public let displayName: String
+  public let description: String
+  public let scope: String
+  public let activation: String
+
+  public init(
+    id: String, name: String, displayName: String, description: String, scope: String,
+    activation: String
+  ) {
+    self.id = id
+    self.name = name
+    self.displayName = displayName
+    self.description = description
+    self.scope = scope
+    self.activation = activation
+  }
+}
+
+/// One skill in the `/` popup. `selector` is what a `skill` input part submits.
+public struct SkillRow: Codable, Equatable, Sendable, Identifiable {
+  public let selector: String
+  public let displayName: String
+  public let description: String
+  public let argumentHint: String?
+  public var id: String { selector }
+
+  public init(
+    selector: String, displayName: String = "", description: String = "",
+    argumentHint: String? = nil
+  ) {
+    self.selector = selector
+    self.displayName = displayName
+    self.description = description
+    self.argumentHint = argumentHint
+  }
+}
+
 /// The conversation's goal. Muse carries `status` and `percentComplete` as they are: a status may
 /// be one mMac does not know, and a percent may pass 100.
 public struct SessionGoal: Codable, Equatable, Sendable {
