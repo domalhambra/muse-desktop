@@ -63,4 +63,47 @@ extension Workspace {
     }
     await loadTasks()
   }
+
+  /// Reads the `/` popup's skills. A failure shows no skill rows and no error: the popup is a
+  /// convenience, and the commands still work. A cancelled read leaves the rows alone, because
+  /// the tab asked again.
+  public func loadSkills() async {
+    guard let sessionId = view?.session.sessionId else {
+      skillRows = []
+      return
+    }
+    let rows: [SkillRow]
+    do {
+      rows = try await client.skillRows(sessionId: sessionId)
+    } catch is CancellationError {
+      return
+    } catch {
+      rows = []
+    }
+    if view?.session.sessionId == sessionId { skillRows = rows }
+  }
+
+  /// Runs the skill the draft names. An error shows in `errorMessage` and keeps the draft.
+  public func runSkill(_ invocation: SkillInvocation) async {
+    guard !submitting else { return }
+    guard let sessionId = view?.session.sessionId else {
+      errorMessage = Self.needsConversation
+      return
+    }
+    guard attachments.isEmpty else {
+      errorMessage = Self.commandWithAttachments
+      return
+    }
+    submitting = true
+    defer { submitting = false }
+    let key = draftKey
+    do {
+      try await client.sendSkill(
+        sessionId: sessionId, selector: invocation.selector, arguments: invocation.arguments,
+        effort: effort, mode: mode)
+      drafts[key] = nil
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
 }

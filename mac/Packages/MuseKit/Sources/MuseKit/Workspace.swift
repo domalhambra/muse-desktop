@@ -82,6 +82,8 @@ public final class Workspace {
   public internal(set) var sideView: SessionView?
   /// The open conversation's running background tasks, as the Agents tab last read them.
   public internal(set) var backgroundTasks: [BackgroundTask] = []
+  /// The skills the `/` popup lists for the open conversation.
+  public internal(set) var skillRows: [SkillRow] = []
   public internal(set) var sideOpening = false
   /// True while a fork runs, so a second click cannot make a second fork.
   public internal(set) var forking = false
@@ -434,6 +436,7 @@ public final class Workspace {
     openingSessionId = nil
     view = nil
     backgroundTasks = []
+    skillRows = []
     sideView = nil
     childView = nil
     clearPullRequest()
@@ -492,6 +495,7 @@ public final class Workspace {
         sideView = nil
         childView = nil
         backgroundTasks = []
+        skillRows = []
         clearPullRequest()
       }
       view = opened
