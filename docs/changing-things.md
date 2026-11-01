@@ -135,7 +135,9 @@ For Muse Desktop's memory, Dom opens `/Applications/Muse Desktop.app` himself, w
 The UI tests drive the real desktop. Before you run them:
 
 - Turn on macOS Automation Mode once: run `automationmodetool enable-automationmode-without-authentication` in Terminal. Leave out `sudo`. With `sudo`, it asks for root's password.
+- Check it with `automationmodetool`. "This device requires user authentication" means a run can stop for a prompt, so run the command above again.
 - Unlock the screen, and put no app full-screen in front.
+- Do not touch the Mac during a run. The Automation Mode stop gesture ends the session at once. The test then fails with "Lost connection to the application", and the system log says "User invoked gesture for stopping automation". That failure says nothing about the code.
 - Expect a prompt after a rebuild. The build is signed ad hoc, and the checkout is under `~/Documents`, so macOS can ask again whether mMac may use the Documents folder. The first run after a rebuild can need you at the keyboard. A worktree outside `~/Documents` (for example `~/mmac-m5a`, where the M5a worktree lives) avoids the prompt.
 
 The echo test pastes its first message through the general pasteboard, then restores every item the pasteboard held. Do not copy anything while it runs.
