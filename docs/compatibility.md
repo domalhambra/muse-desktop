@@ -1,6 +1,6 @@
 # Compatibility
 
-mMac was tested on macOS 27.2 Apple Silicon with Muse Code 1.4.11 (1.4.11-R6667.1) and the official TypeScript SDK 1.4.7, with the echo provider: M1 on October 21, 2026, and M2 to M4a on October 22, 2026. It has not run against a real model yet. The core's extensions (diff review, worktrees, MCP servers, bridges) were first tested on October 20, 2026, with Muse Code 1.4.11. Upstream's Electron app was verified with Muse Code 1.4.7 on October 12, 2026.
+mMac was tested on macOS 27.2 Apple Silicon with Muse Code 1.4.11 (1.4.11-R6667.1) and the official TypeScript SDK 1.4.7, with the echo provider: M1 on October 21, 2026, and M2 to M4a on October 22, 2026. It has not run against a real model yet. The core's extensions (diff review, worktrees, MCP servers, bridges) were first tested on October 20, 2026, with Muse Code 1.4.11. Upstream's Electron app was verified with Muse Code 1.4.7 on October 12, 2026. M6 raised the SDK to 1.4.14 on the branch `mac-m6`. Its pinned schema fingerprint matches the one Muse Code 1.4.13 and 1.4.14 serve, and the integration and headless checks passed on 1.4.14. The one new method since 1.4.7, `session/leave`, is unused.
 
 mMac needs macOS 15 or newer, Node.js 22.12 or newer on the login shell's PATH, and the Muse Session Protocol that `muse serve` exposes. The backend checks the protocol fingerprint when it connects, and a mismatch shows in the connection status. A match is not proof that every capability is compatible. Run the integration and headless checks after you update the CLI or the SDK.
 
