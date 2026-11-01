@@ -1191,6 +1191,39 @@ describe('skills', () => {
     ])
   })
 
+  it('reads a reopened conversation’s catalog with its project when that project is trusted', async () => {
+    const { call, project, skills, asks } = await trustedSession()
+    // The send's trust check asks once, and the answer trusts the project.
+    await call('send-skill', { sessionId: 's1', selector: 'a', effort: 'high', mode: 'queue' })
+    asks.length = 0
+    await call('skill-rows', 's1')
+    expect(skills.readCatalog).toHaveBeenLastCalledWith(expect.anything(), project)
+    expect(asks).toHaveLength(0)
+  })
+
+  it('reads the global list, with no Ask, for a reopened conversation in an untrusted project', async () => {
+    const skills = fakeSkills()
+    const project = await folder('project')
+    const muse = fakeMuse({ getSession: vi.fn(() => session({ workspaceRoot: project })) })
+    const h = harness(muse, [], { skills })
+    await h.start()
+    await h.call('skill-rows', 's1')
+    expect(skills.readCatalog).toHaveBeenLastCalledWith(expect.anything(), undefined)
+    expect(h.asks).toHaveLength(0)
+  })
+
+  it('reads the global list when the conversation’s folder is gone', async () => {
+    const { call, project, skills, asks } = await trustedSession()
+    await call('send-skill', { sessionId: 's1', selector: 'a', effort: 'high', mode: 'queue' })
+    asks.length = 0
+    await rm(project, { recursive: true, force: true })
+    await expect(call('skill-rows', 's1')).resolves.toEqual([
+      { selector: 'a', displayName: 'A', description: 'd' },
+    ])
+    expect(skills.readCatalog).toHaveBeenLastCalledWith(expect.anything(), undefined)
+    expect(asks).toHaveLength(0)
+  })
+
   it('uses the conversation’s rows when it is loaded', async () => {
     const skills = fakeSkills()
     const rows = [{ selector: 'x', displayName: 'X', description: 'd' }]

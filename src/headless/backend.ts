@@ -669,7 +669,16 @@ export function createBackend({
     const sessionId = id.parse(session)
     const rows = await muse.listSkills(sessionId)
     if (rows) return rows
-    const catalog = await skills.readCatalog(current().cliPath)
+    // A reopened conversation is not loaded, so read its project's skills the way skill-catalog
+    // does: only a trusted project joins, an untrusted or deleted folder gives the global list.
+    const root = (() => {
+      try {
+        return muse.getSession(sessionId).workspaceRoot
+      } catch {
+        return null
+      }
+    })()
+    const catalog = await skills.readCatalog(current().cliPath, await trustedOrNone(root))
     const listed = catalog
       .filter((skill) => skill.activation !== 'off')
       .map((skill) => ({ skill, selector: skillSelector(skill) }))
