@@ -11,7 +11,7 @@ public enum GoalRules {
   }
 
   public static let help = "Use /goal <objective>, /goal pause, /goal resume, or /goal clear."
-  /// Shown beside the Edit field and in the Help sheet: a goal costs allowance.
+  /// Shown in the goal strip's Edit alert: a goal costs allowance.
   public static let startsWork = "Setting a goal starts Muse working on it."
 
   /// A lone `pause`, `resume` or `clear` is a verb. Any other text is the objective.

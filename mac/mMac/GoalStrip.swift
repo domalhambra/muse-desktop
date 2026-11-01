@@ -38,6 +38,7 @@ struct GoalStrip: View {
     .alert("Edit goal", isPresented: $editing) {
       TextField("Objective", text: $objective)
       Button("Save") { Task { await workspace.goal("edit", objective: objective) } }
+        .disabled(objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(GoalRules.startsWork)
