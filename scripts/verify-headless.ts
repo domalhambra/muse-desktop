@@ -307,6 +307,17 @@ try {
       .map((event) => event.view as SessionView)
       .filter((view) => view.session.sessionId === id)
       .at(-1)
+  /** A turn may not have started when a command replies, so idle alone proves nothing: it must last. */
+  const settled = async (id: string) => {
+    let quiet = 0
+    let before = backend.events.length
+    await until(() => {
+      const same = backend.events.length === before && latest(id)?.session.status === 'idle'
+      quiet = same ? quiet + 1 : 0
+      before = backend.events.length
+      return quiet >= 10
+    }, `conversation ${id} to settle`)
+  }
   await assert.rejects(backend.request('cancel', sessionId), /^Error: No turn is running\.$/)
   console.log('PASS · cancel with no turn says "No turn is running."')
 
@@ -325,7 +336,7 @@ try {
   )
   await backend.request('goal', goalId, 'edit', 'Check the new strip')
   await until(() => latest(goalId)?.goal?.objective === 'Check the new strip', 'the edited goal')
-  await until(() => latest(goalId)?.session.status === 'idle', 'the goal turn to end')
+  await settled(goalId)
   console.log('PASS · Goal: no-goal refusal, set, the paused refusal and edit')
 
   const original = latest(sessionId)
@@ -336,7 +347,13 @@ try {
     forked.items.some((item) => item.text?.includes('Hello')),
     'the fork keeps the turns',
   )
-  assert.equal(latest(sessionId)?.items.length, original.items.length, 'the original is unchanged')
+  const reread = (await backend.request('open', sessionId)) as SessionView
+  assert.deepEqual(
+    reread.items.map((item) => item.itemId),
+    original.items.map((item) => item.itemId),
+    'the original is unchanged',
+  )
+  assert.notEqual(reread.session.sessionId, forked.session.sessionId)
   const turnId = original.items.find((item) => item.kind === 'agentMessage')?.turnId
   assert(turnId, 'the echo reply should name its turn')
   const forkedAtTurn = (await backend.request('fork', sessionId, turnId)) as SessionView
@@ -482,7 +499,14 @@ try {
   const run = (await schedules())[0].history[0]
   assert.equal(run?.outcome, 'started')
   assert(run.sessionId, 'A started run should name its conversation.')
-  await until(() => latest(run.sessionId as string)?.session.status === 'idle', 'the scheduled run')
+  await until(
+    () =>
+      latest(run.sessionId as string)?.items.some(
+        (item) => item.kind === 'agentMessage' && item.status === 'completed',
+      ) ?? false,
+    'the scheduled reply',
+  )
+  await settled(run.sessionId)
   await backend.request('schedule-remove', scheduleId)
   assert.equal((await schedules()).length, 0)
   console.log('PASS · Scheduled: add, edit, pause, run now and delete')
