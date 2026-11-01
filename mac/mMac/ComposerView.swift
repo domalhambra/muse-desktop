@@ -37,10 +37,11 @@ struct ComposerView: View {
   var body: some View {
     @Bindable var sheets = controller.sheets
     // Read once per render: the popups use the same lists the keys do.
-    let commands = showsPopups ? ComposerCommand.menu(for: workspace.draft) : []
+    let commands = showsPopups ? SlashMenu.rows(for: workspace.draft, skills: workspace.skillRows) : []
     let mention = draftMention
     let mentionRows = showsPopups && commands.isEmpty ? (mentionMenu?.rows(for: workspace.draft) ?? []) : []
     VStack(alignment: .leading, spacing: 8) {
+      if let goal = workspace.view?.goal { GoalStrip(goal: goal, workspace: workspace) }
       if workspace.isRunning { runningBar }
       if !workspace.attachments.isEmpty { AttachmentChips(workspace: workspace) }
       ComposerTextView(
@@ -181,6 +182,10 @@ struct ComposerView: View {
       commandIndex = 0
       mentionIndex = 0
     }
+    // The skills are read for the open conversation, and again when the connection returns.
+    .task(id: "\(workspace.view?.session.sessionId ?? "")|\(workspace.isConnected)") {
+      await workspace.loadSkills()
+    }
     // As Electron's mention effect: the folder is read when the project, the mention's folder or
     // whether a mention is typed changes. Typing within the folder filters what was read. Not on
     // every keystroke: a task keyed on the draft would cancel a listing still in flight.
@@ -212,11 +217,13 @@ struct ComposerView: View {
     let directory: String?
   }
 
-  @ViewBuilder private func popup(commands: [ComposerCommand], mentionRows: [ProjectFile]) -> some View {
+  @ViewBuilder private func popup(commands: [SlashRow], mentionRows: [ProjectFile]) -> some View {
     if !commands.isEmpty {
       SlashCommandMenu(commands: commands, selected: commandIndex) { index in
         // A click does what Tab does on that row.
-        if case .setDraft(let text) = ComposerCommand.slashKeyAction(.tab, draft: workspace.draft, index: index) {
+        if case .setDraft(let text) = SlashMenu.keyAction(
+          .tab, draft: workspace.draft, index: index, skills: workspace.skillRows)
+        {
           setDraft(text)
         }
       }
@@ -242,14 +249,15 @@ struct ComposerView: View {
     guard showsPopups else { return false }
     let draft = workspace.draft
     // Escape with no popup open stops a running turn, as Desktop's Esc does.
-    if key == .escape, ComposerCommand.menu(for: draft).isEmpty, (mentionMenu?.rows(for: draft) ?? []).isEmpty,
+    let slashRows = SlashMenu.rows(for: draft, skills: workspace.skillRows)
+    if key == .escape, slashRows.isEmpty, (mentionMenu?.rows(for: draft) ?? []).isEmpty,
       workspace.isRunning
     {
       Task { await workspace.stop() }
       return true
     }
-    if !ComposerCommand.menu(for: draft).isEmpty {
-      switch ComposerCommand.slashKeyAction(key, draft: draft, index: commandIndex) {
+    if !slashRows.isEmpty {
+      switch SlashMenu.keyAction(key, draft: draft, index: commandIndex, skills: workspace.skillRows) {
       case .pass, .submit: return false
       case .select(let index): commandIndex = index
       case .setDraft(let text): setDraft(text)
@@ -320,6 +328,9 @@ struct ComposerView: View {
     guard !workspace.submitting, workspace.openingSessionId == nil, controller.voice?.isBusy != true
     else { return false }
     if ShellRule.command(in: workspace.draft) != nil { return workspace.isConnected }
+    if SlashMenu.invocation(workspace.draft, skills: workspace.skillRows) != nil {
+      return workspace.isConnected
+    }
     if ComposerCommand.parse(workspace.draft) != nil { return true }
     // As `Workspace.send`: a message can be attachment chips alone.
     return workspace.isConnected
@@ -332,6 +343,10 @@ struct ComposerView: View {
     guard canSend else { return }
     if let command = ShellRule.command(in: workspace.draft) {
       Task { await workspace.runShell(command) }
+      return
+    }
+    if let invocation = SlashMenu.invocation(workspace.draft, skills: workspace.skillRows) {
+      Task { await workspace.runSkill(invocation) }
       return
     }
     if let command = ComposerCommand.parse(workspace.draft) {

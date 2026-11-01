@@ -224,8 +224,19 @@ struct UserMessageView: View {
   }
 }
 
+/// The transcript's fork points and what a click does. Set once by the conversation view.
+struct ForkContext {
+  var points: [String: String] = [:]
+  var fork: @MainActor (String) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+  @Entry var forkContext = ForkContext()
+}
+
 struct AgentMessageView: View {
   let item: TranscriptItem
+  @Environment(\.forkContext) private var forkContext
   /// Bumped after a pause in a streamed reply. `MarkdownCache` parses an in-progress item at most
   /// once per 100 ms, so without it the last text received could stay unparsed until the next
   /// update, or forever for an item that never leaves "inProgress".
@@ -241,6 +252,16 @@ struct AgentMessageView: View {
       } else {
         MarkdownView(
           blocks: MarkdownCache.shared.blocks(id: item.itemId, text: text, final: item.status != "inProgress"))
+      }
+      if let turn = forkContext.points[item.itemId] {
+        Button { forkContext.fork(turn) } label: {
+          Image(systemName: "arrow.triangle.branch")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.themeSecondary)
+        .help("Fork a new conversation from here")
+        .accessibilityLabel("Fork from here")
+        .accessibilityIdentifier("fork-\(item.itemId)")
       }
     }
     .task(id: text) {

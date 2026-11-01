@@ -81,9 +81,10 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
 
 // Composer commands (src/renderer/src/commands.ts and Composer.tsx).
 
-@Test func theTenCommandsKeepElectronsOrderAndDescriptions() {
+@Test func theThirteenCommandsKeepTheirOrderAndDescriptions() {
   #expect(ComposerCommand.allCases.map(\.name) == [
     "clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help", "btw",
+    "goal", "fork",
   ])
   #expect(ComposerCommand.allCases.map(\.description) == [
     "Start a new conversation; keep saved history",
@@ -97,21 +98,25 @@ private func dropFolders() throws -> (base: URL, project: URL, outside: URL) {
     "Open desktop settings",
     "Open the guide and CLI compatibility information",
     "Ask a side question that leaves this conversation untouched",
+    "Set a goal, or /goal pause, resume or clear",
+    "Fork this conversation into a new one",
   ])
 }
 
 /// The M4b live run counted 10 rows in the popup and 11 in Help. Both read `allCases`: the slash
 /// popup's full list (`menu(for: "/")`) and the Help sheet's list (HelpSheet.swift) are the same
-/// eleven, `/btw` last. Electron's 290-point cap fit exactly ten rows, which hid `/btw`; the popup
-/// is now capped at 306 points, so half of `/btw`'s row shows and hints that the list scrolls.
+/// thirteen, `/fork` last. Electron's 290-point cap fit exactly ten rows, which hid `/btw`; the popup
+/// is now capped at 306 points, so half of the eleventh row shows and hints that the list scrolls.
 @Test func thePopupAndTheHelpSheetListTheSameCommands() {
   #expect(ComposerCommand.menu(for: "/") == ComposerCommand.allCases)
-  #expect(ComposerCommand.menu(for: "/").last == .btw)
+  #expect(ComposerCommand.menu(for: "/").last == .fork)
   #expect(ComposerCommand.menu(for: "/b") == [.btw])
+  #expect(ComposerCommand.menu(for: "/g") == [.goal])
+  #expect(ComposerCommand.menu(for: "/f") == [.fork])
 }
 
 @Test func theMenuOpensOnlyForASlashAndLettersOnTheWholeDraft() {
-  #expect(ComposerCommand.menu(for: "/").count == 11)
+  #expect(ComposerCommand.menu(for: "/").count == 13)
   #expect(ComposerCommand.menu(for: "/mo") == [.model])
   #expect(ComposerCommand.menu(for: "/Model") == [.model])
   #expect(ComposerCommand.menu(for: "/MO") == [.model])

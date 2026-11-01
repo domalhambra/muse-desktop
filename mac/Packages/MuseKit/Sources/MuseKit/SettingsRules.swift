@@ -23,6 +23,13 @@ public enum SettingsRules {
     return pairs
   }
 
+  /// The activations Settings › Skills offers, as value and label, in order. A value Muse reports
+  /// that is not one of them joins the end under its own name, so a picker never shows blank.
+  public static func skillActivations(current: String) -> [(value: String, label: String)] {
+    let known = [("on", "On"), ("userInvocableOnly", "Only when you ask"), ("off", "Off")]
+    return known.contains { $0.0 == current } ? known : known + [(current, current)]
+  }
+
   /// The bridge port typed in the field, or nil when it is not a whole number from 1024 to 65535.
   public static func port(_ text: String) -> Int? {
     guard let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)), (1024...65535).contains(value) else {

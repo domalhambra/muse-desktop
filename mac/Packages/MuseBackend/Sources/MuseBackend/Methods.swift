@@ -122,6 +122,65 @@ extension BackendClient {
     _ = try await request("shell", [.string(sessionId), .string(command)])
   }
 
+  /// Runs one of Muse's goal verbs: `set`, `edit`, `pause`, `resume` or `clear`. The new value
+  /// arrives in a `session` event. `set` and `edit` take an objective, and can start a turn.
+  public func goal(sessionId: String, verb: String, objective: String? = nil) async throws {
+    _ = try await request(
+      "goal", [.string(sessionId), .string(verb)] + (objective.map { [.string($0)] } ?? []))
+  }
+
+  /// Forks a conversation through `turnId`, or through every completed turn when it is nil. The
+  /// fork is a new conversation in the same folder, loaded and subscribed.
+  public func fork(sessionId: String, turnId: String? = nil) async throws -> SessionView {
+    try await call("fork", [.string(sessionId)] + (turnId.map { [.string($0)] } ?? []))
+  }
+
+  /// The conversation's running background tasks. An unloaded conversation has none here.
+  public func tasks(sessionId: String) async throws -> [BackgroundTask] {
+    try await call("task-list", [.string(sessionId)])
+  }
+
+  /// Runs a background control: `stop`, `background`, `stop-all`, `subagent-stop`,
+  /// `workflow-pause`, `workflow-resume` or `workflow-cancel`. Only `stop-all` has no target.
+  public func controlTask(sessionId: String, action: String, target: String? = nil) async throws {
+    _ = try await request(
+      "task-control", [.string(sessionId), .string(action)] + (target.map { [.string($0)] } ?? []))
+  }
+
+  /// Every skill Muse knows. A project adds its skills only if it is already trusted.
+  public func skillCatalog(project: String?) async throws -> [SkillEntry] {
+    try await call("skill-catalog", project.map { [.string($0)] } ?? [])
+  }
+
+  /// Changes one skill's activation. Muse applies it on its next connection.
+  public func setSkill(
+    id: String, scope: String, activation: String, project: String?
+  ) async throws {
+    var input: [String: JSONValue] = [
+      "id": .string(id), "scope": .string(scope), "activation": .string(activation),
+    ]
+    if let project { input["project"] = .string(project) }
+    _ = try await request("skill-set", [.object(input)])
+  }
+
+  /// The skills the `/` popup lists for this conversation.
+  public func skillRows(sessionId: String) async throws -> [SkillRow] {
+    try await call("skill-rows", [.string(sessionId)])
+  }
+
+  /// Runs a skill in the conversation, as a `skill` input part.
+  public func sendSkill(
+    sessionId: String, selector: String, arguments: String, effort: String = "high",
+    mode: SendMode = .queue
+  ) async throws {
+    var input: [String: JSONValue] = [
+      "sessionId": .string(sessionId), "selector": .string(selector),
+      "effort": .string(effort), "mode": .string(mode.rawValue),
+    ]
+    if !arguments.isEmpty { input["arguments"] = .string(arguments) }
+    _ = try await request("send-skill", [.object(input)])
+  }
+
   /// The subscription's limits as Muse last observed them, or nil before any observation.
   public func usage() async throws -> SubscriptionLimits? {
     try await call("usage", [])

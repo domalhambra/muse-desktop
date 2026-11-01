@@ -119,6 +119,24 @@ extension Workspace {
         return nil
       }
       return .renameSheet(title: SessionTitle.of(session))
+    case .goal:
+      guard let view else { throw WorkspaceError(Self.needsConversation) }
+      let sessionId = view.session.sessionId
+      switch GoalRules.command(argument, goal: view.goal) {
+      case .help: showNotice(GoalRules.help)
+      case .set(let objective):
+        try await runGoal(sessionId: sessionId, verb: "set", objective: objective)
+      case .edit(let objective):
+        try await runGoal(sessionId: sessionId, verb: "edit", objective: objective)
+      case .verb(let verb): try await runGoal(sessionId: sessionId, verb: verb)
+      }
+      return nil
+    case .fork:
+      guard let sessionId = view?.session.sessionId else {
+        throw WorkspaceError(Self.needsConversation)
+      }
+      try await forkConversation(sessionId: sessionId, turnId: nil)
+      return nil
     }
   }
 }
