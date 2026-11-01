@@ -116,11 +116,14 @@ async function saveSettingsCopy({ configDir, dataFolder }: SettingsBackup, now: 
   await pruneCopies(folder)
 }
 
-/** Keeps the newest copies. Only exact copy names count or go; a failure is logged, not raised. */
+/**
+ * Keeps the first copy, the only one that holds what `muse skills` has not rewritten, and the
+ * newest. Only exact copy names count or go; a failure is logged, not raised.
+ */
 async function pruneCopies(folder: string) {
   try {
     const names = (await readdir(folder)).filter((name) => BACKUP_NAME.test(name)).sort()
-    for (const name of names.slice(0, Math.max(0, names.length - BACKUP_KEEP))) {
+    for (const name of names.slice(1, Math.max(1, names.length - BACKUP_KEEP + 1))) {
       try {
         await unlink(join(folder, name))
       } catch (error) {

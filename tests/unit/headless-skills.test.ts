@@ -277,7 +277,7 @@ describe('the settings backup before a skill change', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
-  it('keeps the newest 10 copies: the eleventh removes the oldest', async () => {
+  it('keeps the first copy and the newest 9: only the first holds what Muse has not rewritten', async () => {
     await writeFile(source(), '{}')
     await mkdir(folder, { recursive: true, mode: 0o700 })
     for (let n = 1; n <= 10; n++) await writeFile(join(folder, stamp(n)), `old ${n}`)
@@ -287,8 +287,9 @@ describe('the settings backup before a skill change', () => {
     ).setActivation('/muse', 'user:notes', 'user', 'on', undefined, backup)
     const left = await copies()
     expect(left).toHaveLength(10)
-    expect(left).not.toContain(stamp(1))
-    expect(left).toContain(stamp(2))
+    expect(left).toContain(stamp(1))
+    expect(left).not.toContain(stamp(2))
+    expect(left).toContain(stamp(3))
     expect(left).toContain('settings-2026-11-01T17-30-05-123Z.json')
   })
 
@@ -310,19 +311,21 @@ describe('the settings backup before a skill change', () => {
     ).setActivation('/muse', 'user:notes', 'user', 'on', undefined, backup)
     const left = await copies()
     for (const name of foreign) expect(left).toContain(name)
-    // 12 old copies and the new one were 13; the newest 10 stay, beside every foreign file.
+    // 12 old copies and the new one were 13; the first and the newest 9 stay, beside every foreign file.
     expect(left).toHaveLength(10 + foreign.length)
-    expect(left).not.toContain(stamp(3))
-    expect(left).toContain(stamp(4))
+    expect(left).toContain(stamp(1))
+    expect(left).not.toContain(stamp(4))
+    expect(left).toContain(stamp(5))
   })
 
   it('runs the change when cleanup fails', async () => {
     await writeFile(source(), '{}')
     await mkdir(folder, { recursive: true, mode: 0o700 })
-    // The oldest "copy" is a non-empty folder, which unlink cannot remove.
-    await mkdir(join(folder, stamp(1)))
-    await writeFile(join(folder, stamp(1), 'inside'), 'x')
-    for (let n = 2; n <= 11; n++) await writeFile(join(folder, stamp(n)), `old ${n}`)
+    // The second "copy", the first to go, is a non-empty folder, which unlink cannot remove.
+    await mkdir(join(folder, stamp(2)))
+    await writeFile(join(folder, stamp(2), 'inside'), 'x')
+    await writeFile(join(folder, stamp(1)), 'old 1')
+    for (let n = 3; n <= 11; n++) await writeFile(join(folder, stamp(n)), `old ${n}`)
     const run = vi.fn(async () => '{}')
     await createSkills(run, { now }).setActivation(
       '/muse',
