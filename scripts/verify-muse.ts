@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
 import { MspError } from '@muse-code/sdk'
+import { execFileSync } from 'node:child_process'
 import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MuseHost } from '../src/main/muse-host'
 import type { AppEvent, SessionView } from '../src/shared/protocol'
 import { discoverCli } from '../src/main/cli'
+import { addServer, setServerEnabled, settingsFile } from '../src/main/mcp-config'
+import { AgentApi } from '../src/main/agent-api'
+import { publish } from '../src/main/event-bus'
+import { worktreeParent } from '../src/shared/worktree'
 
 const binary = (await discoverCli(process.env.MUSE_BIN)).path
 const temporary = await realpath(await mkdtemp(join(tmpdir(), 'muse-desktop-protocol-')))
@@ -24,6 +29,7 @@ const updates: SessionView[] = []
 const errors: string[] = []
 let changed: (() => void) | undefined
 const host = new MuseHost((event: AppEvent) => {
+  publish(event)
   if (event.type === 'session') {
     updates.push(event.view)
     changed?.()
@@ -123,6 +129,106 @@ try {
       error.data.reason === 'compaction_unavailable',
   )
   console.log('PASS · Echo provider reports unsupported compaction without claiming success')
+
+  const repository = join(temporary, 'repository')
+  await mkdir(repository)
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repository, stdio: 'pipe' })
+  git('init', '-q')
+  git(
+    '-c',
+    'user.email=t@e.com',
+    '-c',
+    'user.name=T',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'init',
+  )
+  assert.equal(host.status.experimental, true, 'Muse should grant the experimental API')
+  // MuseHost records the repository in Muse's trust.json itself, after the host started.
+  const isolated = await host.create(repository, undefined, { worktree: true })
+  const worktreePath = isolated.session.workspaceRoot ?? ''
+  assert.equal(worktreeParent(worktreePath), repository)
+  assert.equal(isolated.session.worktree?.path, worktreePath)
+  assert.equal(isolated.session.worktree?.origin, 'created')
+  const worktrees = await host.listWorktrees(repository)
+  const entry = worktrees.find((worktree) => worktree.path === worktreePath)
+  assert(entry?.branch?.startsWith('muse/'), 'Muse should check out a muse/ branch')
+  assert.deepEqual(entry?.sessionIds, [isolated.session.sessionId])
+  updates.length = 0
+  await host.send(
+    isolated.session.sessionId,
+    [{ type: 'text', text: 'Hello from a worktree.' }],
+    'high',
+    'queue',
+    'Hello from a worktree.',
+  )
+  await waitFor(() =>
+    updates.some(
+      (view) =>
+        view.session.sessionId === isolated.session.sessionId &&
+        view.session.status === 'idle' &&
+        view.items.some((item) => item.kind === 'agentMessage' && item.status === 'completed'),
+    ),
+  )
+  console.log('PASS · Muse-created worktree session, worktree listing, and a turn inside it')
+
+  // MCP entries written by Desktop must be ones Muse itself resolves.
+  const settings = settingsFile(host.configDir())
+  await addServer(settings, { name: 'remote', transport: 'http', url: 'https://127.0.0.1:9/mcp' })
+  await addServer(settings, { name: 'local', transport: 'stdio', command: 'true' })
+  const museMcp = (server: string) => {
+    try {
+      return execFileSync(binary, ['mcp', 'login', server, '--headless'], {
+        input: '',
+        stdio: 'pipe',
+        timeout: 15000,
+      }).toString()
+    } catch (error) {
+      const failed = error as { stdout?: Buffer; stderr?: Buffer }
+      return `${failed.stdout ?? ''}${failed.stderr ?? ''}`
+    }
+  }
+  assert.doesNotMatch(museMcp('remote'), /no MCP server named/)
+  await setServerEnabled(settings, 'remote', false)
+  assert.match(museMcp('remote'), /is disabled/)
+  await setServerEnabled(settings, 'remote', true)
+  assert.doesNotMatch(museMcp('remote'), /disabled|no MCP server named/)
+  await host.close()
+  assert.equal((await host.connect(binary)).state, 'ready', 'Muse should start with these entries')
+  console.log('PASS · MCP entries written by Desktop resolve in Muse and keep the host starting')
+
+  const agent = new AgentApi(host, { resolveProject: async (path) => path })
+  const job = await agent.ask({ project, prompt: 'Hello from the bridge.', effort: 'low' })
+  await waitFor(() => agent.get(job.id)?.status === 'done')
+  assert.match(agent.get(job.id)!.reply, /Hello from the bridge/)
+  assert.match(agent.get(job.id)!.transcript, /\*\*You:\*\* Hello from the bridge/)
+  const followUp = await agent.ask({
+    sessionId: job.sessionId,
+    prompt: 'And a follow-up.',
+    effort: 'low',
+  })
+  await waitFor(() => agent.get(followUp.id)?.status === 'done')
+  assert.doesNotMatch(agent.get(followUp.id)!.transcript, /Hello from the bridge/)
+  const fresh = join(temporary, 'bridged-repository')
+  await mkdir(fresh)
+  execFileSync('git', ['init', '-q'], { cwd: fresh })
+  execFileSync(
+    'git',
+    ['-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'i'],
+    { cwd: fresh },
+  )
+  const isolatedJob = await agent.ask({
+    project: fresh,
+    prompt: 'Hello from a bridge worktree.',
+    effort: 'low',
+    worktree: true,
+  })
+  await waitFor(() => agent.get(isolatedJob.id)?.status === 'done')
+  assert.equal(worktreeParent(agent.get(isolatedJob.id)!.project), fresh)
+  agent.dispose()
+  console.log('PASS · Bridge jobs run to completion and stay scoped to their own turn')
 } finally {
   await host.close()
   process.env = original

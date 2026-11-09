@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { delimiter, isAbsolute, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { GitChange, GitStatus } from '../shared/protocol'
@@ -120,4 +121,82 @@ export async function getGitDiff(project: string, path: string) {
       .filter(Boolean)
       .join('\n') || 'No text diff. The file may be binary or its mode changed.'
   )
+}
+
+export function splitHunks(diff: string): { header: string; hunks: string[] } {
+  const lines = diff.replace(/\n$/, '').split('\n')
+  const start = lines.findIndex((line) => line.startsWith('@@'))
+  if (start === -1) return { header: diff, hunks: [] }
+  const header = lines.slice(0, start).join('\n')
+  const hunks: string[] = []
+  let current: string[] = []
+  for (const line of lines.slice(start)) {
+    if (line.startsWith('@@') && current.length) {
+      hunks.push(current.join('\n'))
+      current = []
+    }
+    current.push(line)
+  }
+  if (current.length) hunks.push(current.join('\n'))
+  return { header, hunks }
+}
+
+async function projectPath(project: string, path: string) {
+  const root = await realpath(project)
+  const fromRoot = relative(root, resolve(root, path))
+  if (!fromRoot || fromRoot === '..' || /^\.\.[/\\]/.test(fromRoot) || isAbsolute(fromRoot)) {
+    throw new Error('The file is outside this project.')
+  }
+  return fromRoot
+}
+
+export async function getRawDiff(project: string, path: string) {
+  const relativePath = await projectPath(project, path)
+  const { stdout } = await git(project, [
+    'diff',
+    '--no-ext-diff',
+    '--no-textconv',
+    '--',
+    relativePath,
+  ])
+  return stdout
+}
+
+export async function revertFile(project: string, path: string) {
+  const status = await getGitStatus(project)
+  const change = status.changes.find((entry) => entry.path === path)
+  if (!change) throw new Error('This file has no changes to revert.')
+  const relativePath = await projectPath(project, path)
+  if (change.status === '??') {
+    const target = await containedFile(project, path)
+    if (!(await stat(target)).isFile())
+      throw new Error('This untracked entry is a directory. Remove it in Finder instead.')
+    await unlink(target)
+    return
+  }
+  if (change.status.startsWith('A')) {
+    const target = await containedFile(project, path)
+    await git(project, ['rm', '--cached', '--quiet', '--', relativePath])
+    await unlink(target)
+    return
+  }
+  await git(project, ['restore', '--source=HEAD', '--staged', '--worktree', '--', relativePath])
+}
+
+export async function revertHunk(project: string, path: string, index: number) {
+  const { header, hunks } = splitHunks(await getRawDiff(project, path))
+  const hunk = hunks[index]
+  if (!hunk) throw new Error('That hunk no longer exists. Refresh the diff.')
+  const directory = await mkdtemp(join(tmpdir(), 'muse-hunk-'))
+  const file = join(directory, 'hunk.patch')
+  try {
+    await writeFile(file, `${header}\n${hunk}\n`, { mode: 0o600 })
+    await git(project, ['apply', '--reverse', '--recount', file])
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+export async function stageFile(project: string, path: string) {
+  await git(project, ['add', '--', await projectPath(project, path)])
 }

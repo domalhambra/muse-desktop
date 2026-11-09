@@ -1,0 +1,397 @@
+import AppKit
+import MuseBackend
+import MuseKit
+import Observation
+
+/// Starts and stops the backend, and owns what lives as long as it does: the Workspace, the Ask
+/// queue, and the error output shown when the backend fails.
+@MainActor @Observable
+final class AppController {
+  enum Phase: Equatable {
+    case starting
+    case running
+    /// The backend could not start. `details` is its last stderr output.
+    case setupFailed(message: String, details: String)
+    /// The backend ended while mMac was running.
+    case stopped(message: String, details: String)
+  }
+
+  private(set) var phase: Phase = .starting
+  private(set) var workspace: Workspace?
+  /// The Settings window's store for this Workspace. Made and dropped with it.
+  private(set) var settings: SettingsModel?
+  /// Voice input for this Workspace. Made and dropped with it.
+  private(set) var voice: VoiceSession?
+  /// Read once: in memory mode every read of `BridgeTokenStores.app` makes a new, empty store, so
+  /// every `start` and every `SettingsModel` must share this one.
+  let tokens: any BridgeTokenStore = AppController.tokenStore()
+  /// The last Workspace's unsent drafts, for the next backend's Workspace.
+  private var drafts: [String: String] = [:]
+  /// The conversation the last Workspace showed or was opening, or one whose notification was
+  /// clicked while no Workspace existed, for the next backend's Workspace. Only `dropWorkspace()`
+  /// with a Workspace overwrites it, so a click's id survives a start that has not built one yet.
+  private var reopen: String?
+  let asks = AskQueue()
+  /// The sheets the menu bar, the sidebar, the toolbar and the composer open.
+  let sheets = WindowSheets()
+  /// Completion notifications. A click opens its conversation in the current Workspace.
+  let notifications = Notifications()
+  private var client: BackendClient?
+  private var transport: ProcessTransport?
+  private var launching = false
+  private var quitting = false
+  /// Set by a second Quit. mMac then quits whatever the backend answers.
+  private var forced = false
+  /// A backend that stopped while a Quit waited. If the person then keeps working, mMac shows
+  /// the stopped screen rather than a window on a dead backend.
+  private var stoppedWhileQuitting: BackendClient?
+  /// Opens the main window. RootView sets it, because only SwiftUI can open a scene's window.
+  @ObservationIgnored var showWindow: (@MainActor () -> Void)?
+
+  init() {
+    // A click while no Workspace exists (the backend starting or stopped, or a click that
+    // launched mMac) hands the conversation to the next Workspace, which opens it once ready.
+    notifications.openConversation = { [weak self] sessionId in
+      guard let self else { return }
+      self.showMainWindow()
+      if let workspace = self.workspace {
+        Task { await workspace.open(sessionId) }
+      } else {
+        self.reopen = sessionId
+      }
+    }
+  }
+
+  /// Starts a backend. Does nothing while one is starting or running.
+  func start() async {
+    guard client == nil, !launching else { return }
+    // Cleared before `begin()` and on failure, never by a `defer`: a Restart while `begin()`
+    // runs starts a newer launch, whose flag this start's late return must not clear.
+    launching = true
+    phase = .starting
+    dropWorkspace()
+    stoppedWhileQuitting = nil
+    // Read before the backend launches: the Keychain may wait on a password prompt, and no
+    // backend must be running meanwhile, since one that died could not be restarted until this
+    // start ends. An error does not stop the launch: the backend starts without a token, and the
+    // Bridges pane shows the error.
+    let token: String
+    // Why this launch could not read the token. The Bridges pane shows it through `SettingsModel`.
+    let tokenError: String?
+    do {
+      token = try await Self.readToken(from: tokens)
+      tokenError = nil
+    } catch {
+      token = ""
+      tokenError = "mMac could not read the bridge token from the Keychain: \(error.localizedDescription)"
+    }
+    var launched: ProcessTransport?
+    do {
+      let repository = try Self.repository()
+      let arguments = Self.backendArguments()
+      // A nonisolated async function, so it runs off the main actor.
+      let transport = try await Launcher.launch(repository: repository, arguments: arguments)
+      launched = transport
+      self.transport = transport
+      // Asks are tied to this backend's generation: one that arrives after the queue was
+      // cancelled for it gets -1 at once, and shows no sheet.
+      let generation = asks.generation
+      let client = BackendClient(
+        transport: transport,
+        answerAsk: { [weak self] ask in await self?.present(ask, generation: generation) ?? -1 })
+      self.client = client
+      await client.run()
+      Task {
+        for await event in client.events where self.client === client {
+          self.workspace?.apply(event)
+        }
+        await self.backendStopped(client)
+      }
+      // Fails when the backend runs but never answers (hello within 15 seconds, start within 45,
+      // as BackendClient sets), so the setup screen and its Try again show instead of a spinner
+      // for ever.
+      let started = try await client.handshake(dataFolder: Self.dataFolder(), bridgeToken: token)
+      let workspace = Workspace(client: client, started: started, drafts: drafts, reopen: reopen)
+      reopen = nil
+      // Electron posts unless its window has focus, and with no window it posts too. mMac counts
+      // itself focused only while it is active and the conversation window is open.
+      workspace.turnFinished = { [weak self, weak workspace] session, previous in
+        guard let self, let workspace else { return }
+        // Taken before the check, so a scheduled turn that ends while mMac is focused never names a later turn.
+        let scheduled = workspace.finishScheduledRun(session, previous: previous)
+        if CompletionNotice.shouldPost(
+          previous: previous, next: session.status, enabled: workspace.preferences.notifyOnCompletion,
+          focused: NSApp.isActive && NSApp.windows.contains { $0.isVisible && MMacApp.isMainWindow($0) })
+        {
+          if let scheduled {
+            self.notifications.postScheduled(name: scheduled, session: session)
+          } else {
+            self.notifications.post(for: session)
+          }
+        }
+      }
+      self.workspace = workspace
+      self.settings = SettingsModel(workspace: workspace, tokens: tokens, tokenError: tokenError)
+      self.voice = VoiceSession(workspace: workspace, capture: VoiceRecorder())
+      phase = .running
+      // A backend that stops while history loads shows the stopped screen. Its Restart must not
+      // find this start still under way.
+      launching = false
+      await workspace.begin()
+    } catch {
+      // A backend that failed to start is dropped, and its input closed so it quits. Closing it
+      // first lets stderr end at once, though its tail may then include the shutdown output.
+      launching = false
+      client = nil
+      transport = nil
+      asks.cancelAll()
+      launched?.close()
+      // A backend that never answered may not quit when its input closes either.
+      if case BackendError.noAnswer = error { launched?.forceStop() }
+      let details = await Self.errorOutput(of: launched)
+      phase = .setupFailed(message: error.localizedDescription, details: details)
+    }
+  }
+
+  /// Returns true when mMac may quit. The backend may Ask first if a turn is running.
+  func quit() async -> Bool {
+    guard let client, phase == .running else { return true }
+    quitting = true
+    let quit: Bool
+    do {
+      quit = try await client.shutdown()
+    } catch {
+      quit = true
+    }
+    if forced {
+      // A forced stop can still answer false: the backend's SIGTERM path cancels its Ask, and
+      // "Keep working" is the cancel choice. Wait for the process to end, so mMac does not exit
+      // before forceStop's SIGKILL.
+      await client.waitForExit(timeout: .seconds(3))
+      return true
+    }
+    if quit { return true }
+    quitting = false
+    if let stopped = stoppedWhileQuitting {
+      stoppedWhileQuitting = nil
+      await backendStopped(stopped)
+    }
+    return false
+  }
+
+  /// A second Quit while the first waits: stop the backend now, so the first Quit's wait ends.
+  func forceQuit() {
+    forced = true
+    asks.cancelAll()
+    client?.forceStop()
+  }
+
+  private func backendStopped(_ stopped: BackendClient) async {
+    // A client dropped after a failed start ends too. It must not cancel a newer backend's Asks.
+    guard client === stopped else { return }
+    asks.cancelAll()
+    guard !quitting else {
+      stoppedWhileQuitting = stopped
+      return
+    }
+    let details = await Self.errorOutput(of: transport)
+    guard client === stopped, !quitting else { return }
+    client = nil
+    transport = nil
+    dropWorkspace()
+    phase = .stopped(
+      message: "The backend process ended. Restart it to continue. Your conversations are saved in Muse Code.",
+      details: details)
+  }
+
+  /// Drops the Workspace and keeps its drafts and the conversation it showed, for the next
+  /// backend's Workspace. A send the stop cut off has put its text back by now:
+  /// `BackendError.stopped` reaches it before the event stream ends this backend.
+  private func dropWorkspace() {
+    if let workspace {
+      drafts = workspace.drafts
+      // A reopen the Workspace had not done yet, if it stopped while history loaded, carries on.
+      reopen = workspace.openingSessionId ?? workspace.view?.session.sessionId ?? workspace.pendingReopen
+    }
+    // A recording or a transcription belongs to this backend.
+    voice?.cancel()
+    voice = nil
+    workspace = nil
+    settings = nil
+  }
+
+  /// Reads the token off the main actor. mMac is signed ad hoc, so a new build's first read can
+  /// wait while the Keychain asks for the login password, and the app must keep drawing meanwhile.
+  private static func readToken(from tokens: any BridgeTokenStore) async throws -> String {
+    try await Task.detached { try tokens.read() ?? "" }.value
+  }
+
+  /// This build's token store. The size measurement's build (`MMAC_MEASURE`, which only
+  /// `mac/scripts/measure-size.sh` sets) is a Release build that keeps the token in memory, so a
+  /// measurement never reads or writes the real Keychain item.
+  private nonisolated static func tokenStore() -> any BridgeTokenStore {
+    #if MMAC_MEASURE
+      // The script looks for this line in the binary before it launches the build, and in
+      // mMac's stderr after. Keep the two in step.
+      FileHandle.standardError.write(Data("mMac measurement build: the bridge token stays in memory.\n".utf8))
+      return MemoryTokenStore()
+    #else
+      return BridgeTokenStores.app
+    #endif
+  }
+
+  /// The backend's last stderr output, once stderr has ended.
+  private static func errorOutput(of transport: ProcessTransport?) async -> String {
+    await transport?.errorOutput() ?? ""
+  }
+
+  /// Shows an Ask from the backend of `generation`, opening the window first if it is closed,
+  /// so a Quit's "Quit while Muse is working?" always has a window to show in.
+  private func present(_ ask: Ask, generation: Int) async -> Int {
+    guard generation == asks.generation else { return -1 }
+    revealWindow()
+    return await asks.present(ask, generation: generation)
+  }
+
+  /// Opens the main window when it is not showing. Settings showing does not count. Returns
+  /// false if it cannot.
+  @discardableResult
+  func revealWindow() -> Bool {
+    if NSApp.windows.contains(where: { $0.isVisible && MMacApp.isMainWindow($0) }) { return true }
+    guard let showWindow else { return false }
+    showWindow()
+    NSApp.activate()
+    return true
+  }
+
+  /// Brings the main window forward, opening it when it is closed. The File menu's actions use
+  /// it, so what they do shows there, not on the Settings window.
+  func showMainWindow() {
+    if let window = NSApp.windows.first(where: { $0.isVisible && MMacApp.isMainWindow($0) }) {
+      window.makeKeyAndOrderFront(nil)
+    } else {
+      showWindow?()
+    }
+    NSApp.activate()
+  }
+
+  // MARK: Panels
+
+  /// "Open project…": adds the chosen folder and selects it.
+  func openProject() async {
+    guard let workspace, let folder = await Self.chooseProjectFolder() else { return }
+    await workspace.addProject(folder)
+  }
+
+  /// Sends the draft. With no project yet, asks for one first, as Electron does.
+  /// `send(addingProject:)` moves the draft to the chosen project's composer when that is empty.
+  /// When it already holds a draft, the text is sent from where it was written and the older
+  /// draft stays.
+  func send() async {
+    guard let workspace else { return }
+    guard await workspace.send() == .needsProject, let folder = await Self.chooseProjectFolder() else { return }
+    _ = await workspace.send(addingProject: folder)
+  }
+
+  /// The Muse Code executable for "Choose Muse Code…" in the banner and Browse… in Settings, or
+  /// nil when cancelled. The panel attaches to the window it was started from, the key one. Each
+  /// caller saves the path its own way, so an error shows in its own window.
+  static func chooseCLIPath() async -> String? {
+    let panel = NSOpenPanel()
+    panel.title = "Choose the Muse Code executable"
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.showsHiddenFiles = true
+    return await SheetAlert.run(panel, preferringKey: true)?.path
+  }
+
+  /// "Choose checkout…": runs the backend from another Muse Desktop checkout.
+  func chooseRepository() async {
+    let panel = NSOpenPanel()
+    panel.message = "Choose the folder that holds your Muse Desktop checkout."
+    panel.prompt = "Use this checkout"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    guard let url = await SheetAlert.run(panel) else { return }
+    // A folder that is not a checkout is refused, and the saved choice stays as it was.
+    do {
+      _ = try Self.checkout(at: url.path)
+    } catch {
+      phase = .setupFailed(message: error.localizedDescription, details: "")
+      return
+    }
+    UserDefaults.standard.set(url.path, forKey: Self.repositoryKey)
+    await start()
+  }
+
+  // MARK: Where things are
+
+  static let repositoryKey = "MMacRepository"
+
+  private struct SetupError: LocalizedError {
+    let errorDescription: String?
+    init(_ message: String) { errorDescription = message }
+  }
+
+  /// The checkout the backend runs from: the one chosen in the app, else the one this build came from.
+  /// The size measurement's build always runs the checkout it came from, so its numbers are that
+  /// checkout's, whatever checkout Dom chose in his own mMac.
+  static func repository() throws -> URL {
+    #if MMAC_MEASURE
+      let chosen: String? = nil
+    #else
+      let chosen = UserDefaults.standard.string(forKey: repositoryKey)
+    #endif
+    let built = Bundle.main.object(forInfoDictionaryKey: repositoryKey) as? String
+    guard let path = chosen ?? built else {
+      throw SetupError("This mMac build does not name a Muse Desktop checkout. Choose one.")
+    }
+    return try checkout(at: path)
+  }
+
+  /// `path` as a checkout URL, if it holds the backend.
+  static func checkout(at path: String) throws -> URL {
+    let repository = URL(fileURLWithPath: path).standardizedFileURL
+    guard FileManager.default.fileExists(atPath: repository.appending(path: "src/headless/server.ts").path) else {
+      throw SetupError("mMac could not find src/headless/server.ts in \(repository.path). Choose the Muse Desktop checkout.")
+    }
+    return repository
+  }
+
+  /// `~/Library/Application Support/mMac`. `MMAC_DATA_FOLDER` overrides it for test runs.
+  static func dataFolder() throws -> URL {
+    if let folder = ProcessInfo.processInfo.environment["MMAC_DATA_FOLDER"], !folder.isEmpty {
+      return URL(fileURLWithPath: folder)
+    }
+    return try FileManager.default
+      .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+      .appending(path: "mMac")
+  }
+
+  /// The Node arguments for the backend. Debug builds can run the UI tests' fake backend instead.
+  static func backendArguments() -> [String] {
+    #if DEBUG
+      if let script = ProcessInfo.processInfo.environment["MMAC_BACKEND_SCRIPT"], !script.isEmpty {
+        return [script]
+      }
+    #endif
+    return ProcessTransport.serverArguments
+  }
+
+  /// The folder for "Open project". The open panel runs in another process that UI tests cannot
+  /// drive, so Debug builds take `MMAC_TEST_PROJECT` instead when it is set.
+  static func chooseProjectFolder() async -> URL? {
+    #if DEBUG
+      if let folder = ProcessInfo.processInfo.environment["MMAC_TEST_PROJECT"], !folder.isEmpty {
+        return URL(fileURLWithPath: folder)
+      }
+    #endif
+    let panel = NSOpenPanel()
+    panel.message = "Open a project"
+    panel.prompt = "Open project"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = true
+    return await SheetAlert.run(panel)
+  }
+}

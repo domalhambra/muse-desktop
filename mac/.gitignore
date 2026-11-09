@@ -1,0 +1,7 @@
+# XcodeGen writes these from project.yml.
+mMac.xcodeproj/
+mMac/Info.plist
+# SwiftPM and Xcode state, when a tool runs without the .cache/ paths.
+.build/
+.swiftpm/
+xcuserdata/

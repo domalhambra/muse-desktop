@@ -1,0 +1,98 @@
+import { realpath } from 'node:fs/promises'
+import { MspError } from '@muse-code/sdk'
+
+// Errors a person reads in mMac are plain sentences. Two raw shapes reached the screen in the
+// M4b live run: Node's "ENOENT: no such file or directory, realpath '…'" for a folder that was
+// removed, and Muse's "<method> command <id> rejected: <reason>" for a refused command. The raw
+// text goes to stderr, the backend's log; wire.ts does not log failures.
+
+/** Sentences for the `commandRejected` reasons mMac can meet. Others get REFUSED. */
+const REFUSALS: Record<string, string> = {
+  compaction_unavailable: 'This model cannot compact the conversation.',
+  missing_goal: 'This conversation has no goal.',
+  invalid_goal_state: 'The goal cannot do that in its current state.',
+}
+const WORKFLOW_GONE = 'This workflow is no longer running.'
+const TASK_GONE = 'This task has already finished.'
+const SKILL_UNKNOWN = 'Muse Code does not know this skill. Reconnect, then try again.'
+/** Reasons whose meaning depends on the command. These come before REFUSALS. */
+const METHOD_REFUSALS: Record<string, Record<string, string>> = {
+  'subagent/stop': { invalid_target: 'This subagent has already finished.' },
+  'task/stop': { invalid_target: TASK_GONE },
+  'task/background': { invalid_target: TASK_GONE },
+  'session/compact': { missing_run: 'There is no conversation history to compact yet.' },
+  'turn/cancel': { missing_run: 'No turn is running.' },
+  'workflow/pause': { missing_run: WORKFLOW_GONE },
+  'workflow/resume': { missing_run: WORKFLOW_GONE },
+  'workflow/cancel': { missing_run: WORKFLOW_GONE },
+}
+const FORK_GOAL_CUT =
+  'Muse cannot fork from before this conversation’s goal changed. Fork from the latest turn.'
+const FORK_BOUNDARY = 'Muse cannot fork from this turn. It may not have finished.'
+const REFUSED = 'Muse Code refused this request.'
+const WORKTREE_GONE = 'This conversation’s worktree folder no longer exists.'
+const FOLDER_GONE = 'This folder no longer exists.'
+const FILE_GONE = 'This file no longer exists.'
+
+const REJECTED = /^(\S+) command \S+ rejected: ([a-z0-9_]+)$/
+const BOUNDARY = /^invalid fork boundary for session \S+: (\w+)$/
+/** A Muse worktree root: `<project>/.muse/worktrees/<name>`, with nothing after the name. */
+const WORKTREE_ROOT = /[/\\]\.muse[/\\]worktrees[/\\][^/\\]+[/\\]?$/
+
+/** The fs calls whose ENOENT means a path is gone. A failed spawn (`spawn git`) is not one. */
+const PATH_CALLS = new Set(['realpath', 'open', 'stat', 'lstat', 'scandir'])
+
+function missing(error: unknown): error is NodeJS.ErrnoException {
+  const fs = error as NodeJS.ErrnoException
+  return error instanceof Error && fs.code === 'ENOENT' && PATH_CALLS.has(fs.syscall ?? '')
+}
+
+/** realFolder's error for a folder that is gone. Its message is already a plain sentence. */
+export class MissingFolder extends Error {}
+
+/**
+ * realpath for a project, worktree or conversation folder. A missing folder becomes a plain
+ * sentence: the worktree one when `path` is a Muse worktree's root, else the folder one.
+ */
+export async function realFolder(path: string): Promise<string> {
+  try {
+    return await realpath(path)
+  } catch (error) {
+    if (!missing(error)) throw error
+    console.error(`A folder is missing: ${error.message}`)
+    throw new MissingFolder(WORKTREE_ROOT.test(path) ? WORKTREE_GONE : FOLDER_GONE)
+  }
+}
+
+/**
+ * The error to send to mMac in place of `error`. The folder call sites use realFolder, so an
+ * ENOENT that reaches this point is a file inside a folder that exists, such as one the Files
+ * tab reads. A command Muse rejected becomes a sentence. Any other error is returned as it is.
+ */
+export function plainError(error: unknown): unknown {
+  if (!(error instanceof Error)) return error
+  if (missing(error)) {
+    console.error(`A file is missing: ${error.message}`)
+    return new Error(FILE_GONE)
+  }
+  // A skill the host does not list: a typed error (`-32032`) whose text names the session.
+  if (
+    (error instanceof MspError && error.kind === 'skillNotFound') ||
+    /\bskillNotFound\b/.test(error.message)
+  ) {
+    console.error(`Muse did not know a skill: ${error.message}`)
+    return new Error(SKILL_UNKNOWN)
+  }
+  const rejected = REJECTED.exec(error.message)
+  if (rejected) {
+    const [, method, reason] = rejected
+    console.error(`Muse rejected ${method}: ${reason}`)
+    return new Error(METHOD_REFUSALS[method]?.[reason] ?? REFUSALS[reason] ?? REFUSED)
+  }
+  const boundary = BOUNDARY.exec(error.message)
+  if (boundary) {
+    console.error(`Muse refused a fork: ${boundary[1]}`)
+    return new Error(boundary[1] === 'HistoricalGoalCutUnsupported' ? FORK_GOAL_CUT : FORK_BOUNDARY)
+  }
+  return error
+}

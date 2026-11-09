@@ -2,18 +2,30 @@ import { ItemStore, MspError, spawnMspConnection, type SpawnedMspConnection } fr
 import { z } from 'zod'
 import {
   approvalSchema,
+  backgroundTaskSchema,
   itemSchema,
   modelSchema,
   questionSchema,
+  sessionGoalSchema,
   sessionSchema,
+  todoItemSchema,
+  worktreeEntrySchema,
   type AppEvent,
+  type ApprovalMode,
+  type BackgroundTask,
   type ConnectionStatus,
+  type GoalVerb,
   type MuseSession,
   type QuestionAnswer,
   type SessionView,
+  type SkillRow,
+  type SubscriptionLimits,
+  type TaskControl,
   type TranscriptItem,
 } from '../shared/protocol'
 import { discoverCli } from './cli'
+import { museConfigDir, recordMuseTrust } from './muse-config'
+import { projectRoot } from '../shared/worktree'
 
 const sessionResultSchema = z.object({
   session: sessionSchema,
@@ -31,8 +43,50 @@ const pendingSchema = z.object({
   approvals: z.array(approvalSchema),
   userInputs: z.array(questionSchema),
 })
+/** `SubscriptionUsage` (msp.d.ts:2543), the payload of `usage/read` and `usage/changed`. */
+const subscriptionUsageSchema = z.object({
+  observedAtMs: z.number(),
+  tier: z.string(),
+  window: z.object({
+    usedPercent: z.number(),
+    resetsAtMs: z.number(),
+    windowDurationMins: z.number(),
+  }),
+  weekly: z.object({ usedPercent: z.number(), resetsAtMs: z.number() }),
+})
 
-type LiveSession = { view: SessionView; store: ItemStore<TranscriptItem>; loaded: boolean }
+function toLimits(value: unknown): SubscriptionLimits {
+  const usage = subscriptionUsageSchema.parse(value)
+  return {
+    observedAt: usage.observedAtMs,
+    tier: usage.tier,
+    window: {
+      usedPercent: usage.window.usedPercent,
+      resetsAt: usage.window.resetsAtMs,
+      minutes: usage.window.windowDurationMins,
+    },
+    weekly: { usedPercent: usage.weekly.usedPercent, resetsAt: usage.weekly.resetsAtMs },
+  }
+}
+
+type LiveSession = {
+  view: SessionView
+  store: ItemStore<TranscriptItem>
+  loaded: boolean
+  /** Counts the `session/goalChanged` events folded live, so a read of the log never overwrites one. */
+  goalEvents: number
+}
+
+/** Each control's Muse method and the field that names its target. `task/stopAll` has none. */
+const TASK_CONTROLS: Record<TaskControl, [method: string, field?: string]> = {
+  stop: ['task/stop', 'taskId'],
+  background: ['task/background', 'taskId'],
+  'stop-all': ['task/stopAll'],
+  'subagent-stop': ['subagent/stop', 'subagentId'],
+  'workflow-pause': ['workflow/pause', 'workflowRunId'],
+  'workflow-resume': ['workflow/resume', 'workflowRunId'],
+  'workflow-cancel': ['workflow/cancel', 'workflowRunId'],
+}
 
 export class MuseHost {
   status: ConnectionStatus = { state: 'connecting' }
@@ -42,6 +96,10 @@ export class MuseHost {
   private timers = new Map<string, ReturnType<typeof setTimeout>>()
   private refreshing = new Set<string>()
   private closing = false
+  private environment: NodeJS.ProcessEnv = process.env
+  private experimental = false
+  /** The subscription's limits as Muse last observed them, or null before any observation. */
+  limits: SubscriptionLimits | null = null
 
   constructor(private emit: (event: AppEvent) => void) {}
 
@@ -56,10 +114,12 @@ export class MuseHost {
   private async start(cliPath: string): Promise<ConnectionStatus> {
     await this.close()
     this.closing = false
+    this.limits = null
     this.setStatus({ state: 'connecting' })
     let handshake: ReturnType<typeof spawnMspConnection> | undefined
     try {
       const cli = await discoverCli(cliPath)
+      this.environment = cli.environment
       const isCmdWrapper = process.platform === 'win32' && /\.(cmd|bat)$/i.test(cli.path)
       const serveArgs = [
         'serve',
@@ -77,7 +137,11 @@ export class MuseHost {
         this.host = await Promise.race([
           handshake.initialize({
             clientInfo: { name: 'muse_desktop', title: 'Muse Desktop', version: '0.2.0' },
-            capabilities: { userInputDialogs: true, requestedCapabilities: ['sessionListStream'] },
+            capabilities: {
+              userInputDialogs: true,
+              requestedCapabilities: ['sessionListStream', 'userShell'],
+              experimentalApi: true,
+            },
           }),
           new Promise<never>((_, reject) => {
             timeout = setTimeout(
@@ -114,8 +178,10 @@ export class MuseHost {
           message: 'The Muse connection closed. Reconnect to restore your saved conversations.',
         })
       })
+      this.experimental = this.host.initializeResult?.experimentalApi === true
       this.setStatus({
         state: 'ready',
+        experimental: this.experimental,
         path: cli.path,
         version: cli.version,
         message: cli.shellWarning,
@@ -123,6 +189,7 @@ export class MuseHost {
           ? 'This CLI has a different protocol revision. If a feature fails, check the compatibility guide.'
           : undefined,
       })
+      void this.readLimits()
     } catch (error) {
       if (handshake) await handshake.close()
       this.host = undefined
@@ -137,6 +204,23 @@ export class MuseHost {
   private setStatus(status: ConnectionStatus) {
     this.status = status
     this.emit({ type: 'connection', status })
+  }
+
+  /** `usage/read` (msp.d.ts:3030): omitted when Muse has observed nothing. A CLI without the method keeps null. */
+  private async readLimits() {
+    try {
+      const result = z
+        .object({ usage: z.unknown().optional() })
+        .parse(await this.connection.request('usage/read', {}))
+      if (result.usage === undefined) return
+      const next = toLimits(result.usage)
+      // A usage/changed that arrived while the read was in flight is newer: keep it.
+      if (this.limits && next.observedAt < this.limits.observedAt) return
+      this.limits = next
+      this.emit({ type: 'usage-changed', limits: this.limits })
+    } catch {
+      // An older CLI, or a read that failed: the footer stays hidden.
+    }
   }
 
   private get connection() {
@@ -159,13 +243,29 @@ export class MuseHost {
     return z.object({ models: z.array(modelSchema) }).parse(result).models
   }
 
-  async create(project: string, modelId?: string) {
+  /** Muse Code's config folder (settings.json, auth.json, trust.json). */
+  configDir() {
+    return museConfigDir(this.environment)
+  }
+
+  /**
+   * Starts a session. With `worktree`, Muse creates a worktree of the project
+   * (the parent project when `project` is itself a Muse worktree). Muse's
+   * worktree methods need the repository in its trust.json, so callers must
+   * pass only projects Desktop already trusts.
+   */
+  async create(project: string, modelId?: string, options: { worktree?: boolean } = {}) {
+    if (options.worktree && !this.experimental)
+      throw new Error('This Muse Code version does not offer worktree sessions.')
+    const workspaceRoot = options.worktree ? projectRoot(project) : project
+    if (options.worktree) await recordMuseTrust(this.configDir(), workspaceRoot)
     const result = sessionResultSchema.parse(
       await this.connection.command(
         'session/start',
         {
-          workspaceRoot: project,
+          workspaceRoot,
           ...(modelId ? { modelId } : {}),
+          ...(options.worktree ? { worktree: { mode: 'create' } } : {}),
         },
         { maxAttempts: 1 },
       ),
@@ -183,6 +283,7 @@ export class MuseHost {
       await this.connection.request('session/read', { sessionId, excludeItems: false }),
     )
     const live = await this.hydrate(result, false)
+    await this.restoreGoal(live)
     try {
       await this.connection.request('view/subscribe', { sessionId, after: result.viewCursor })
     } catch (error) {
@@ -213,7 +314,7 @@ export class MuseHost {
         { maxAttempts: 1 },
       ),
     )
-    await this.hydrate(result, true)
+    await this.restoreGoal(await this.hydrate(result, true))
     await this.refreshPending(sessionId)
     this.schedule(sessionId)
   }
@@ -225,11 +326,14 @@ export class MuseHost {
     const live: LiveSession = {
       store,
       loaded,
+      goalEvents: 0,
       view: {
         session: result.session,
         items,
         approvals: [],
         questions: [],
+        // `session/read` carries no goal: keep the one held until the log is read.
+        goal: this.sessions.get(result.session.sessionId)?.view.goal,
         error: result.lastTurn?.error?.message,
         historyNotice:
           result.history?.mode === 'none'
@@ -354,6 +458,196 @@ export class MuseHost {
     this.schedule(sessionId)
   }
 
+  /**
+   * Selects an approval mode for the session. Muse applies it to its next action; an action
+   * already awaiting approval is not re-decided (msp.d.ts, `session/setApprovalMode`).
+   */
+  async setApprovalMode(sessionId: string, mode: ApprovalMode) {
+    await this.resume(sessionId)
+    const result = z
+      .object({
+        applyOutcome: z.string(),
+        effectiveMode: z.object({ mode: z.string() }).passthrough(),
+      })
+      .parse(
+        await this.connection.command(
+          'session/setApprovalMode',
+          { sessionId, mode },
+          { maxAttempts: 1 },
+        ),
+      )
+    this.requireSession(sessionId).view.session.approvalMode = result.effectiveMode
+    this.schedule(sessionId)
+    return result.effectiveMode.mode
+  }
+
+  /**
+   * A side session seeded from `sessionId`: a place for a question that must not join the main
+   * conversation. Muse returns the new session's resume envelope (msp.d.ts, `session/sideChat`),
+   * so it is hydrated loaded, like a created session. The caller shows it; it never joins the
+   * sidebar (its kind is `sideChat`).
+   */
+  async sideChat(sessionId: string): Promise<SessionView> {
+    await this.resume(sessionId)
+    const result = sessionResultSchema.parse(
+      await this.connection.command('session/sideChat', { sessionId }, { maxAttempts: 1 }),
+    )
+    const live = await this.hydrate(result, true)
+    return this.view(live)
+  }
+
+  /**
+   * A new conversation that copies this one through `turnId`, or through every completed turn.
+   * Muse returns the fork's resume envelope (msp.d.ts, `session/fork`), so it is loaded. The
+   * envelope carries no goal, so it is read as `open` does. A cut before a goal change fails:
+   * plain-errors.ts words that refusal. Muse Code 1.4.14 also refuses a named cut at the latest
+   * turn of a conversation with a goal, so the latest completed turn goes with no cut, which
+   * means the same thing.
+   */
+  async fork(sessionId: string, turnId?: string): Promise<SessionView> {
+    await this.resume(sessionId)
+    const cut = turnId && turnId !== this.latestCompletedTurn(sessionId) ? turnId : undefined
+    const result = sessionResultSchema.parse(
+      await this.connection.command(
+        'session/fork',
+        { sessionId, ...(cut ? { cutPoint: { lastTurnId: cut } } : {}) },
+        { maxAttempts: 1 },
+      ),
+    )
+    const goal = this.sessions.get(sessionId)?.view.goal
+    const live = await this.hydrate(result, true)
+    await this.restoreGoal(live)
+    // Muse keeps the goal on the fork, but the fork's log starts with no goal event.
+    if (live.goalEvents === 0) live.view.goal ??= goal
+    this.emit({ type: 'sessions-changed' })
+    return this.view(live)
+  }
+
+  /** The last turn in the loaded transcript that is not running, if any. */
+  private latestCompletedTurn(sessionId: string): string | undefined {
+    const view = this.sessions.get(sessionId)?.view
+    const active = view?.session.activeTurnId
+    return (
+      view?.items.findLast((item) => item.turnId && item.turnId !== active)?.turnId ?? undefined
+    )
+  }
+
+  /**
+   * The conversation's running background tasks. An unloaded conversation runs none here.
+   * `task/list` also returns foreground rows; an absent `executionMode` means background, and an
+   * unknown mode is ignored (msp.d.ts, `TaskExecutionMode`).
+   */
+  async listTasks(sessionId: string): Promise<BackgroundTask[]> {
+    try {
+      return z
+        .object({ tasks: z.array(backgroundTaskSchema) })
+        .parse(await this.connection.request('task/list', { sessionId }))
+        .tasks.filter(
+          (task) => task.executionMode === undefined || task.executionMode === 'background',
+        )
+    } catch (error) {
+      if (error instanceof MspError && error.kind === 'sessionNotLoaded') return []
+      throw error
+    }
+  }
+
+  /** Runs one background control. The result shows up in the items and the next `task/list`. */
+  async controlTask(sessionId: string, action: TaskControl, target?: string) {
+    await this.resume(sessionId)
+    const [method, field] = TASK_CONTROLS[action]
+    await this.connection.command(
+      method,
+      { sessionId, ...(field ? { [field]: target } : {}) },
+      { maxAttempts: 1 },
+    )
+  }
+
+  /** The conversation's skill rows, or null when it is not loaded on this host. */
+  async listSkills(sessionId: string): Promise<SkillRow[] | null> {
+    try {
+      return z
+        .object({
+          skills: z.array(
+            z.object({
+              selector: z.string(),
+              displayName: z.string(),
+              description: z.string(),
+              argumentHint: z.string().optional(),
+            }),
+          ),
+        })
+        .parse(await this.connection.request('skill/list', { sessionId })).skills
+    } catch (error) {
+      if (error instanceof MspError && error.kind === 'sessionNotLoaded') return null
+      throw error
+    }
+  }
+
+  /**
+   * Runs a shell command in the session's folder, the TUI's `!` escape (msp.d.ts,
+   * `session/userShell`). The result arrives as a `userShell` item through the item events.
+   */
+  async runShell(sessionId: string, commandText: string) {
+    await this.resume(sessionId)
+    await this.connection.command(
+      'session/userShell',
+      { sessionId, commandText },
+      { maxAttempts: 1 },
+    )
+  }
+
+  /**
+   * One of Muse's five goal verbs (msp.d.ts, `goal/set`). On an idle conversation, set, edit and
+   * resume can start a turn. The new value arrives through `session/goalChanged`.
+   */
+  async goal(sessionId: string, verb: GoalVerb, objective?: string) {
+    await this.resume(sessionId)
+    await this.connection.command(
+      `goal/${verb}`,
+      { sessionId, ...(objective === undefined ? {} : { objective }) },
+      { maxAttempts: 1 },
+    )
+  }
+
+  /**
+   * `session/read` carries no goal, so read the view backward to the latest goal event. A page is
+   * ascending, so its last goal event is the latest; a `null` goal is a clear and ends the search.
+   * When the goal cannot be settled (a failed read, or no goal event in four pages), the strip is a
+   * convenience: the goal `seed` carried over stays. A goal event that arrives live while this
+   * reads is newer than anything read, and wins.
+   */
+  private async restoreGoal(live: LiveSession) {
+    const sessionId = live.view.session.sessionId
+    const seen = live.goalEvents
+    const schema = z.object({
+      events: z.array(z.object({ method: z.string(), params: z.record(z.string(), z.unknown()) })),
+      nextCursor: z.string().nullable(),
+    })
+    try {
+      let cursor: string | undefined
+      for (let page = 0; page < 4; page++) {
+        const { events, nextCursor } = schema.parse(
+          await this.connection.request('view/page', {
+            sessionId,
+            direction: 'backward',
+            limit: 500,
+            ...(cursor ? { cursor } : {}),
+          }),
+        )
+        const found = [...events].reverse().find((event) => event.method === 'session/goalChanged')
+        if (found) {
+          const goal = sessionGoalSchema.nullable().parse(found.params.goal) ?? undefined
+          if (live.goalEvents === seen) live.view.goal = goal
+          return
+        }
+        if (!nextCursor) break
+        cursor = nextCursor
+      }
+    } catch (error) {
+      console.error(`Could not read the goal: ${messageOf(error)}`)
+    }
+  }
+
   async approve(sessionId: string, approvalId: string, choiceId: string) {
     await this.resume(sessionId)
     const approval = this.requireSession(sessionId).view.approvals.find(
@@ -410,6 +704,20 @@ export class MuseHost {
         ? ''
         : '\n\n[Preview limited to 1 MB. Full output remains in Muse’s session log.]')
     )
+  }
+
+  /** Every worktree of the repository at `project`, via Muse's `worktree/list`. */
+  async listWorktrees(project: string) {
+    if (!this.experimental) return []
+    try {
+      const result = await this.connection.request('worktree/list', { workspaceRoot: project })
+      return z.object({ worktrees: z.array(worktreeEntrySchema) }).parse(result).worktrees
+    } catch (error) {
+      // Untrusted or non-Git folders have no Muse worktrees to show.
+      if (error instanceof MspError && error.kind === 'workspaceNotTrusted') return []
+      if (/not a git repository|not trusted|no repository/i.test(messageOf(error))) return []
+      throw error
+    }
   }
 
   getSession(sessionId: string): MuseSession {
@@ -470,6 +778,11 @@ export class MuseHost {
       this.emit({ type: 'sessions-changed' })
       return
     }
+    if (method === 'usage/changed') {
+      this.limits = toLimits(params)
+      this.emit({ type: 'usage-changed', limits: this.limits })
+      return
+    }
     const sessionId = typeof params.sessionId === 'string' ? params.sessionId : undefined
     if (!sessionId) return
     const live = this.sessions.get(sessionId)
@@ -491,8 +804,17 @@ export class MuseHost {
       live.view.session.activeTurnId = null
       live.view.session.status = 'idle'
       live.view.session.updatedAt = new Date().toISOString()
-      const error = z.object({ message: z.string() }).optional().parse(params.error)
+      const error = z
+        .object({
+          message: z.string(),
+          quota: z.object({ limitKind: z.string(), resetsAtMs: z.number() }).optional(),
+        })
+        .optional()
+        .parse(params.error)
       live.view.error = error?.message
+      live.view.quota = error?.quota
+        ? { kind: error.quota.limitKind, resetsAt: error.quota.resetsAtMs }
+        : undefined
       this.emit({ type: 'sessions-changed' })
     } else if (method === 'session/statusChanged') {
       live.view.session.status = z.string().parse(params.status)
@@ -527,13 +849,42 @@ export class MuseHost {
       )
     } else if (method === 'session/tokenUsage') {
       const usage = z
-        .object({ promptTokens: z.number(), outputTokens: z.number(), totalTokens: z.number() })
+        .object({
+          promptTokens: z.number(),
+          outputTokens: z.number(),
+          totalTokens: z.number(),
+          cost: z.object({ usd: z.number(), partial: z.boolean() }).optional(),
+        })
         .parse(params.cumulative)
       live.view.usage = {
         input: usage.promptTokens,
         output: usage.outputTokens,
         total: usage.totalTokens,
       }
+      live.view.cost = usage.cost
+    } else if (method === 'session/contextUsage') {
+      const usage = z
+        .object({
+          usedTokens: z.number(),
+          windowTokens: z.number().optional(),
+          pressure: z.string(),
+        })
+        .parse(params)
+      live.view.context = {
+        used: usage.usedTokens,
+        window: usage.windowTokens,
+        pressure: usage.pressure,
+      }
+    } else if (method === 'session/todoListChanged') {
+      live.view.todos = z.array(todoItemSchema).parse(params.items)
+    } else if (method === 'session/approvalModeChanged') {
+      live.view.session.approvalMode = {
+        ...(live.view.session.approvalMode ?? {}),
+        mode: z.string().parse(params.mode),
+      }
+    } else if (method === 'session/goalChanged') {
+      live.view.goal = sessionGoalSchema.nullable().parse(params.goal) ?? undefined
+      live.goalEvents++
     } else if (method === 'view/gap') {
       void this.recover(sessionId).catch((error: unknown) => {
         live.view.error = `Could not recover missed updates: ${messageOf(error)}`
@@ -552,7 +903,7 @@ export class MuseHost {
         await this.connection.request('session/read', { sessionId, excludeItems: false }),
       )
       const loaded = this.requireSession(sessionId).loaded
-      await this.hydrate(result, loaded)
+      await this.restoreGoal(await this.hydrate(result, loaded))
       if (loaded) await this.refreshPending(sessionId)
       await this.connection.request('view/subscribe', { sessionId, after: result.viewCursor })
       this.schedule(sessionId)

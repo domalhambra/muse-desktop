@@ -1,44 +1,83 @@
 # Compatibility
 
-Verified locally on macOS Apple Silicon with Muse Code **1.4.7 (1.4.7-R6101.1)** and the official TypeScript SDK **1.4.7**, on October 12, 2026.
+mMac was tested on macOS 27.2 Apple Silicon with Muse Code 1.4.11 (1.4.11-R6667.1) and the official TypeScript SDK 1.4.7, with the echo provider: M1 on October 21, 2026, and M2 to M4a on October 22, 2026. It has not run against a real model yet. The core's extensions (diff review, worktrees, MCP servers, bridges) were first tested on October 20, 2026, with Muse Code 1.4.11. Upstream's Electron app was verified with Muse Code 1.4.7 on October 12, 2026. M6 raised the SDK to 1.4.14 on the branch `mac-m6`. Its pinned schema fingerprint matches the one Muse Code 1.4.13 and 1.4.14 serve, and the integration and headless checks passed on 1.4.14. The one new method since 1.4.7, session/leave, is unused.
 
-The GUI requires the Muse Session Protocol exposed by `muse serve`. Protocol fingerprint mismatches are visible in Settings; they are not treated as proof that every capability is compatible. Re-run integration checks after updating the CLI or SDK.
+mMac needs macOS 15 or newer, Node.js 22.12 or newer on the login shell's PATH, and the Muse Session Protocol that `muse serve` exposes. The backend checks the protocol fingerprint when it connects, and a mismatch shows in the connection status. A match is not proof that every capability is compatible. Run the integration and headless checks after you update the CLI or the SDK.
 
-## Supported desktop workflows
+## Supported workflows
 
-Automatic CLI discovery across macOS, Windows, and Linux; custom CLI path; session listing, reading, resuming, renaming and exporting; local pins and archives; streamed messages and tool items; reasoning summaries; server-provided approval choices; agent questions; stop, queue and steer; model selection and reasoning effort; text/image attachments; project file previews; Git status/diff; Finder / Explorer / Files and Terminal handoff; appearance settings and completion notifications; microphone recording and CLI voice transcription; full CLI handoff from the inspector.
+Automatic CLI discovery with the login-shell environment; a custom CLI path; session listing, reading, resuming, renaming and Markdown export; ⌘K search; local pins and archives; streamed messages and tool items; reasoning summaries; server-provided approval choices; agent questions; stop, queue and steer; model selection and reasoning effort; text and image attachments by the paperclip, a drop or a paste; `@` mentions of project files; composer commands; project file previews; Git status and diffs; diff review; worktree conversations; Finder, Terminal and full CLI handoff from the inspector; permission modes (Allow all, Prompt unmatched, On request, Deny unmatched); the `!` shell escape in the composer; side chat; the context gauge; the Tasks, Agents and Preview inspector tabs; the file context menu; Desktop's session shortcuts (⌘⇧] and ⌘⇧[, Esc to stop, ⌘;, ⌘/); the Muse and Moonlight themes, text size, Reduce motion and completion notifications; microphone recording and CLI voice transcription; MCP servers; both bridges; the conversation's tokens and estimated cost, and the 5-hour and weekly limits; local scheduled tasks; the PR monitor and change cards, with `gh`; goals with a strip above the composer; fork from any completed turn; stop one or every background task; and listing, running, enabling and disabling skills.
 
 ## Practical limits
 
-- A live session owned by a separate CLI process may be leased. Finish or close it there before resuming in Desktop. The app shows the CLI's rejection and does not force ownership.
-- Account setup, plugin/skill administration, advanced permission-profile editing, worktree creation, goals/workflow administration, and CLI-specific slash commands remain CLI tasks. Open **Project inspector → Muse Code** for the full interactive CLI. The composer handles /clear, /new, /voice, /model, /effort, /compact, /rename, /stop, /settings, and /help. Other slash commands explain the CLI handoff without sending them as model messages.
-- Existing session lists are paged automatically. If the CLI omits inline transcript history, Desktop reads and folds the durable view pages. Muse Code 1.4.7 can reject live subscriptions to unloaded sessions; these remain readable as saved history and are resumed only for a mutating action. Reopen a conversation to refresh its saved history.
-- Tool output preview is limited to 1 MB. File preview is limited to 512 KB. Attachments allow five files, 2 MB per file, 200 KB per text file, and approximately 4 MB per message including encoded image data.
-- Remote images embedded in model Markdown are not fetched. Ordinary web links open in your default browser after a click.
-- Unsent drafts survive conversation switching within the running app, but not quitting. Attachment selections belong to the current composer and are temporary.
+- A live session owned by a separate CLI process may be leased. Finish or close it there before you resume it in mMac. mMac shows the CLI's rejection and does not force ownership.
+- Account setup, plugin administration, skill imports, advanced permission-profile editing and CLI-specific slash commands stay CLI tasks. Click **Muse Code** in the project inspector for the full interactive CLI. The composer handles /clear, /new, /voice, /model, /effort, /compact, /rename, /stop, /settings, /help, /goal, /fork and /btw. A skill that Muse lists runs from the `/` popup or as `/<skill> <arguments>`, once a conversation is open. Any other slash command explains the CLI handoff, and is not sent as a model message.
+- Existing session lists are paged automatically. If the CLI omits inline transcript history, the backend reads and folds the durable view pages. Muse Code 1.4.7 can reject live subscriptions to unloaded sessions. These stay readable as saved history, and are resumed only for a mutating action.
+- Tool output preview is limited to 1 MB. File preview is limited to 512 KB. Attachments allow five files, 2 MB per file, 200 KB per text file, and about 4 MB per message including encoded image data.
+- Images in model Markdown never load. They show as `[Image: <alt>]`. Web links open in your default browser after a click.
+- Unsent drafts survive conversation switching within the running app, but not quitting. Attachment chips belong to the composer and are temporary.
 - Model availability and reasoning support come from the installed CLI and provider. Unsupported combinations produce the CLI's error.
-- No automatic application updater is included. Install a newer app bundle to update Desktop. Your CLI updates independently.
-- Intel builds are configured but have not been run on Intel hardware. Signed and notarized release verification requires the maintainer's Apple Developer credentials.
+- mMac has no updater. Rebuild it from the checkout to update it. Your CLI updates on its own.
+- Markdown footnotes show as superscript numbers, with the notes in a numbered list at the end. mMac rewrites them before parsing, because swift-markdown does not parse them. A definition must start a line; indented lines continue it.
 
-Preference updates are independently validated: changing reasoning effort preserves themes, background intensity, the executable path, text size, pins, and archives. With saved conversations, the sidebar uses a compact mascot; short windows switch navigation to labeled icon buttons so conversation history retains scroll space.
+## Extensions
+
+- Worktree conversations use Muse's experimental MSP surface (`'session/start'` `worktree`, `'worktree/list'`). When the CLI does not grant it, the worktree toggle is hidden and the inspector lists no worktrees. mMac records the project in Muse's `~/.config/muse/trust.json` before a worktree session starts, from the window or a bridge, the same record the TUI writes when you trust a folder.
+- Merge refuses a worktree with uncommitted changes, and aborts a merge with conflicts so the main checkout stays unchanged. Remove keeps the worktree's branch.
+- MCP server changes take effect when mMac reconnects to Muse. The pane offers **Reconnect** and never reconnects during your work on its own. Remote servers that need OAuth sign in through `muse mcp login`, which opens in Terminal.
+- The diff view shows hunk revert buttons for working-tree changes only. Staged changes have none.
+
+## Session controls (M5a)
+
+- The host asks Muse for the `userShell` capability at the handshake (`requestedCapabilities`), beside `sessionListStream`. Without the grant, `'session/userShell'` fails and mMac shows Muse's error.
+- `'session/setApprovalMode'` takes one of Muse's four modes and returns the mode in effect, which can differ from the one asked for. It applies to Muse's next action; an action already awaiting approval is not re-decided.
+- `'session/sideChat'` returns the new side session's resume envelope. The side session's kind is `sideChat`; it never appears in the sidebar or ⌘K.
+- The host folds `'session/approvalModeChanged'`, `'session/contextUsage'` (`usedTokens`, `windowTokens`, `pressure`) and `'session/todoListChanged'` (the whole list, replaced each time). A reopened conversation shows context and todos after the next event.
+- Subagent items carry `childSessionId`, `controlStatus` and `usage`; shell items carry `exitCode`; side chat items carry `sideSessionId`. All are optional: an older CLI's items still decode.
+
+## Usage, scheduled tasks and pull requests (M5b)
+
+- The host calls `'usage/read'` after the handshake and folds `'usage/changed'` (`SubscriptionUsage`: `observedAtMs`, `tier`, `window.usedPercent`, `window.resetsAtMs`, `window.windowDurationMins`, `weekly.usedPercent`, `weekly.resetsAtMs`). A CLI without the method, or a login that reports no usage, keeps the sidebar footer hidden. Whether Muse 1.4.12 reports usage for Dom's provider waits for the live run.
+- The `'session/tokenUsage'` fold keeps `cumulative.cost` (`usd`, `partial`). The `'turn/completed'` fold keeps `error.quota` (`limitKind`, `resetsAtMs`). `limitKind` has one value, `tierLimit`, so the stop banner tells the two limits apart by their reset times.
+- Scheduled tasks run only while mMac runs. They use cron-parser 5.10.2 for the cron fields, and compute run times on the Mac's wall clock. Lord Howe Island's 30-minute daylight-saving change is not tested.
+- The PR monitor needs the GitHub CLI, `gh`, installed and signed in (`gh auth login`). mMac looks for it on the backend's `PATH`, then in `/opt/homebrew/bin` and `/usr/local/bin`. It reads these fields with `gh pr view --json` and `gh pr list --json`: `number`, `title`, `url`, `state`, `isDraft`, `reviewDecision`, `mergeStateStatus`, `baseRefName`, `headRefName`, `mergedAt`, `mergeCommit`, `body`, `files` and `statusCheckRollup`. From `gh repo view --json` it reads `nameWithOwner` and `defaultBranchRef`. For Live it reads `gh api repos/<owner>/<repo>/deployments?sha=<merge commit>` and that deployment's `statuses`. Accept runs `gh pr merge --squash`; Merge when ready runs `gh pr merge --auto --squash`.
+- No test runs the real `gh`. A `gh` version that renames one of those fields shows "gh returned data mMac could not read."
+
+## Muse Code controls (M6)
+
+- `'goal/set'`, `'goal/edit'` and `'goal/resume'` can start a turn on an idle conversation. `'goal/pause'` refuses a goal that is not active (`invalid_goal_state`). Every verb but `set` refuses when there is no goal (`missing_goal`). Muse Code's echo provider pauses a goal soon after it starts.
+- `'session/read'` and an inline `'session/resume'` carry no goal. The host reads `'view/page'` backward when it opens a conversation, at most four pages of 500 events.
+- `'session/fork'` copies through a completed turn. The fork's kind is `root`. A cut before a goal change fails with `HistoricalGoalCutUnsupported`. A fork with no cut works. The fork keeps the goal, but its log has no `'session/goalChanged'` event, so mMac carries the source's goal. A later launch that reopens the fork shows no strip until the next goal event. A fork during a goal's first turn can fail with `GoalSnapshotInvalid`, and mMac shows the plain fork sentence.
+- `'task/list'` and `'skill/list'` fail with `sessionNotLoaded` on a conversation this host has not loaded. mMac shows no background tasks there, and the `/` popup uses `muse skills list`.
+- `'task/list'` returns foreground rows too. An absent `executionMode` means background. mMac keeps only the background rows. The Agents tab shows the others as running tools.
+- `'skill/list'` does not change after an activation change until the next `muse serve`. The Skills pane reads and writes through `muse skills`, and offers **Reconnect**.
+- `muse skills enable`, `disable` and `user-only` rewrite `~/.config/muse/settings.json`. Under a temporary home, this removed an unknown top-level key and renamed `mcp_servers` to `mcpServers`. Known keys and `enabled: false` survived. mMac itself writes nothing to that file for a skill. Before each change it saves a copy of the file in `settings-backups` in its data folder (`~/Library/Application Support/mMac`, or `MMAC_DATA_FOLDER`), named `settings-<UTC time>.json`. It keeps the first copy, the only one that holds what `muse skills` has not rewritten, and the newest 9. The folder is mode 700 and each copy mode 600, because the file can hold MCP env values. With no settings file, mMac makes no copy. If a copy fails, mMac does not run the change. To restore, quit Muse Code, then copy the copy you want over the file in Muse's config folder (`$XDG_CONFIG_HOME/muse`, else `~/.config/muse`).
+- `muse skills list --json` reports `user-invocable-only`. The backend maps it to `userInvocableOnly`.
+- A plugin skill's catalog name is `plugin:<plugin>:<skill>`. The host accepts `<plugin>:<skill>`.
+- With a long temporary `HOME`, `muse` failed once with "File name too long" (os error 63). The cause is not established. Use a short path in a probe or a test.
 
 ## Voice
 
-The installed CLI must provide `muse voice transcribe <FILE>`. Option–V or the microphone button starts and stops recording; Escape cancels. Audio is mixed to mono 16 kHz PCM WAV and passed to that command using the discovered CLI environment. Temporary directories and clips have private permissions and are removed on completion, failure, cancellation, or normal app shutdown. A two-minute recording limit and ninety-second transcription timeout keep requests bounded. Audio may be sent to the service configured by Muse Code; this is not offline transcription.
+The installed CLI must provide `muse voice transcribe <FILE>`. Option–V or the microphone button starts and stops recording, and Escape cancels. mMac records with AVAudioEngine and writes mono 16 kHz 16-bit PCM WAV to a private temporary file. The backend checks the file, passes the audio to that command with the discovered CLI environment, and deletes the file. A two-minute limit (the recorder stops at 119 seconds) and a ninety-second transcription timeout keep requests bounded. Audio may be sent to the service configured by Muse Code; this is not offline transcription.
 
-macOS microphone permission is requested on first use. Signed bundles include `NSMicrophoneUsageDescription` and the audio-input entitlement. No camera access is requested. The recording indicator remains visible while capturing; hiding the app cancels input. Transcription appends to the draft without sending it. Switching projects/conversations cancels recording so speech cannot land in a different conversation.
+macOS asks for microphone access on first use. `mac/project.yml` sets `NSMicrophoneUsageDescription`. mMac is not sandboxed and has no hardened runtime, so it needs no audio-input entitlement. mMac is signed ad hoc, so macOS can ask again after a rebuild. Transcription appends to the draft without sending it.
 
-The CLI transcription path was verified using generated speech and the installed authenticated CLI. Recording, cancellation, WAV encoding, and draft insertion are covered using simulated microphone input. Physical microphone capture and macOS permission presentation still need a first-use check on the release candidate.
+The WAV encoding, the voice states and the backend's calls have unit tests. The real microphone, the permission prompt and a real transcription wait for M4b's live run.
+
+## Runtime dependencies
+
+- cron-parser 5.10.2. Scheduled tasks' custom trigger and next run. A cron parser with tests is more code than the rest of scheduled tasks (parity spec).
+- The GitHub CLI, `gh`, for the PR monitor only. mMac does not install it. Without it, the Changes card shows how to install it.
 
 ## Diagnose a connection
 
-Check `muse --version` and `muse serve --help` in Terminal. Complete `muse login` there if authentication is needed. Select the executable in **Settings → Muse Code** if discovery fails. Login-shell discovery has a six-second timeout, then falls back to normal installation paths. CLI initialization has a fifteen-second timeout.
+Check `muse --version` and `muse serve --help` in Terminal. Complete `muse login` there if authentication is needed. Choose the executable in **Settings → Muse Code** if discovery fails. Login-shell discovery has a six-second timeout, then falls back to normal installation paths. CLI initialization has a fifteen-second timeout.
 
-The tests can use an explicit installation:
+The checks can use an explicit installation:
 
 ```sh
 MUSE_BIN=/absolute/path/to/muse npm run test:integration
-MUSE_BIN=/absolute/path/to/muse npm run test:e2e
+MUSE_BIN=/absolute/path/to/muse npm run test:headless
 ```
 
 See the [official SDK guide](https://meta-models.github.io/muse-code-sdk/next/guides/quickstart/) for the underlying protocol.

@@ -1,0 +1,65 @@
+name: mMac
+options:
+  bundleIdPrefix: com.domalhambra
+  deploymentTarget:
+    macOS: '15.0'
+packages:
+  MuseBackend:
+    path: Packages/MuseBackend
+  MuseKit:
+    path: Packages/MuseKit
+targets:
+  mMac:
+    type: application
+    platform: macOS
+    sources: [mMac]
+    dependencies:
+      - package: MuseBackend
+      - package: MuseKit
+    info:
+      path: mMac/Info.plist
+      properties:
+        CFBundleDisplayName: mMac
+        # XcodeGen writes 1.0 and 1 unless these name the build settings.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        # macOS ends an app that touches the microphone without this key.
+        NSMicrophoneUsageDescription: mMac records your voice only when you start voice input, then uses your Muse Code CLI to transcribe it into a draft.
+        # The checkout this build came from. A checkout chosen in the app (the MMacRepository user default) wins.
+        MMacRepository: $(SRCROOT)/..
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.domalhambra.mmac
+        PRODUCT_NAME: mMac
+        SWIFT_VERSION: '6.0'
+        MARKETING_VERSION: '0.1.0'
+        CURRENT_PROJECT_VERSION: '1'
+        CODE_SIGN_IDENTITY: '-'
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+  mMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [mMacUITests]
+    dependencies:
+      - target: mMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.domalhambra.mmac.uitests
+        SWIFT_VERSION: '6.0'
+        CODE_SIGN_IDENTITY: '-'
+        CODE_SIGN_STYLE: Manual
+        TEST_TARGET_NAME: mMac
+        # A test bundle has no Info.plist of its own; Xcode writes one.
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  mMac:
+    build:
+      targets:
+        mMac: all
+        mMacUITests: [test]
+    test:
+      targets: [mMacUITests]
+      # UI tests drive the real desktop. Recordings would capture whatever else is on screen.
+      captureScreenshotsAutomatically: false
