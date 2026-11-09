@@ -58,7 +58,7 @@ struct ComposerPopup<Row: View>: View {
 
 /// The slash-command popup, as Electron's `.slash-menu`.
 struct SlashCommandMenu: View {
-  let commands: [ComposerCommand]
+  let commands: [SlashRow]
   let selected: Int
   let choose: (Int) -> Void
 

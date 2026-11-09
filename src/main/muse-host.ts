@@ -2,19 +2,25 @@ import { ItemStore, MspError, spawnMspConnection, type SpawnedMspConnection } fr
 import { z } from 'zod'
 import {
   approvalSchema,
+  backgroundTaskSchema,
   itemSchema,
   modelSchema,
   questionSchema,
+  sessionGoalSchema,
   sessionSchema,
   todoItemSchema,
   worktreeEntrySchema,
   type AppEvent,
   type ApprovalMode,
+  type BackgroundTask,
   type ConnectionStatus,
+  type GoalVerb,
   type MuseSession,
   type QuestionAnswer,
   type SessionView,
+  type SkillRow,
   type SubscriptionLimits,
+  type TaskControl,
   type TranscriptItem,
 } from '../shared/protocol'
 import { discoverCli } from './cli'
@@ -63,7 +69,24 @@ function toLimits(value: unknown): SubscriptionLimits {
   }
 }
 
-type LiveSession = { view: SessionView; store: ItemStore<TranscriptItem>; loaded: boolean }
+type LiveSession = {
+  view: SessionView
+  store: ItemStore<TranscriptItem>
+  loaded: boolean
+  /** Counts the `session/goalChanged` events folded live, so a read of the log never overwrites one. */
+  goalEvents: number
+}
+
+/** Each control's Muse method and the field that names its target. `task/stopAll` has none. */
+const TASK_CONTROLS: Record<TaskControl, [method: string, field?: string]> = {
+  stop: ['task/stop', 'taskId'],
+  background: ['task/background', 'taskId'],
+  'stop-all': ['task/stopAll'],
+  'subagent-stop': ['subagent/stop', 'subagentId'],
+  'workflow-pause': ['workflow/pause', 'workflowRunId'],
+  'workflow-resume': ['workflow/resume', 'workflowRunId'],
+  'workflow-cancel': ['workflow/cancel', 'workflowRunId'],
+}
 
 export class MuseHost {
   status: ConnectionStatus = { state: 'connecting' }
@@ -260,6 +283,7 @@ export class MuseHost {
       await this.connection.request('session/read', { sessionId, excludeItems: false }),
     )
     const live = await this.hydrate(result, false)
+    await this.restoreGoal(live)
     try {
       await this.connection.request('view/subscribe', { sessionId, after: result.viewCursor })
     } catch (error) {
@@ -290,7 +314,7 @@ export class MuseHost {
         { maxAttempts: 1 },
       ),
     )
-    await this.hydrate(result, true)
+    await this.restoreGoal(await this.hydrate(result, true))
     await this.refreshPending(sessionId)
     this.schedule(sessionId)
   }
@@ -302,11 +326,14 @@ export class MuseHost {
     const live: LiveSession = {
       store,
       loaded,
+      goalEvents: 0,
       view: {
         session: result.session,
         items,
         approvals: [],
         questions: [],
+        // `session/read` carries no goal: keep the one held until the log is read.
+        goal: this.sessions.get(result.session.sessionId)?.view.goal,
         error: result.lastTurn?.error?.message,
         historyNotice:
           result.history?.mode === 'none'
@@ -470,6 +497,93 @@ export class MuseHost {
   }
 
   /**
+   * A new conversation that copies this one through `turnId`, or through every completed turn.
+   * Muse returns the fork's resume envelope (msp.d.ts, `session/fork`), so it is loaded. The
+   * envelope carries no goal, so it is read as `open` does. A cut before a goal change fails:
+   * plain-errors.ts words that refusal. Muse Code 1.4.14 also refuses a named cut at the latest
+   * turn of a conversation with a goal, so the latest completed turn goes with no cut, which
+   * means the same thing.
+   */
+  async fork(sessionId: string, turnId?: string): Promise<SessionView> {
+    await this.resume(sessionId)
+    const cut = turnId && turnId !== this.latestCompletedTurn(sessionId) ? turnId : undefined
+    const result = sessionResultSchema.parse(
+      await this.connection.command(
+        'session/fork',
+        { sessionId, ...(cut ? { cutPoint: { lastTurnId: cut } } : {}) },
+        { maxAttempts: 1 },
+      ),
+    )
+    const goal = this.sessions.get(sessionId)?.view.goal
+    const live = await this.hydrate(result, true)
+    await this.restoreGoal(live)
+    // Muse keeps the goal on the fork, but the fork's log starts with no goal event.
+    if (live.goalEvents === 0) live.view.goal ??= goal
+    this.emit({ type: 'sessions-changed' })
+    return this.view(live)
+  }
+
+  /** The last turn in the loaded transcript that is not running, if any. */
+  private latestCompletedTurn(sessionId: string): string | undefined {
+    const view = this.sessions.get(sessionId)?.view
+    const active = view?.session.activeTurnId
+    return (
+      view?.items.findLast((item) => item.turnId && item.turnId !== active)?.turnId ?? undefined
+    )
+  }
+
+  /**
+   * The conversation's running background tasks. An unloaded conversation runs none here.
+   * `task/list` also returns foreground rows; an absent `executionMode` means background, and an
+   * unknown mode is ignored (msp.d.ts, `TaskExecutionMode`).
+   */
+  async listTasks(sessionId: string): Promise<BackgroundTask[]> {
+    try {
+      return z
+        .object({ tasks: z.array(backgroundTaskSchema) })
+        .parse(await this.connection.request('task/list', { sessionId }))
+        .tasks.filter(
+          (task) => task.executionMode === undefined || task.executionMode === 'background',
+        )
+    } catch (error) {
+      if (error instanceof MspError && error.kind === 'sessionNotLoaded') return []
+      throw error
+    }
+  }
+
+  /** Runs one background control. The result shows up in the items and the next `task/list`. */
+  async controlTask(sessionId: string, action: TaskControl, target?: string) {
+    await this.resume(sessionId)
+    const [method, field] = TASK_CONTROLS[action]
+    await this.connection.command(
+      method,
+      { sessionId, ...(field ? { [field]: target } : {}) },
+      { maxAttempts: 1 },
+    )
+  }
+
+  /** The conversation's skill rows, or null when it is not loaded on this host. */
+  async listSkills(sessionId: string): Promise<SkillRow[] | null> {
+    try {
+      return z
+        .object({
+          skills: z.array(
+            z.object({
+              selector: z.string(),
+              displayName: z.string(),
+              description: z.string(),
+              argumentHint: z.string().optional(),
+            }),
+          ),
+        })
+        .parse(await this.connection.request('skill/list', { sessionId })).skills
+    } catch (error) {
+      if (error instanceof MspError && error.kind === 'sessionNotLoaded') return null
+      throw error
+    }
+  }
+
+  /**
    * Runs a shell command in the session's folder, the TUI's `!` escape (msp.d.ts,
    * `session/userShell`). The result arrives as a `userShell` item through the item events.
    */
@@ -480,6 +594,58 @@ export class MuseHost {
       { sessionId, commandText },
       { maxAttempts: 1 },
     )
+  }
+
+  /**
+   * One of Muse's five goal verbs (msp.d.ts, `goal/set`). On an idle conversation, set, edit and
+   * resume can start a turn. The new value arrives through `session/goalChanged`.
+   */
+  async goal(sessionId: string, verb: GoalVerb, objective?: string) {
+    await this.resume(sessionId)
+    await this.connection.command(
+      `goal/${verb}`,
+      { sessionId, ...(objective === undefined ? {} : { objective }) },
+      { maxAttempts: 1 },
+    )
+  }
+
+  /**
+   * `session/read` carries no goal, so read the view backward to the latest goal event. A page is
+   * ascending, so its last goal event is the latest; a `null` goal is a clear and ends the search.
+   * When the goal cannot be settled (a failed read, or no goal event in four pages), the strip is a
+   * convenience: the goal `seed` carried over stays. A goal event that arrives live while this
+   * reads is newer than anything read, and wins.
+   */
+  private async restoreGoal(live: LiveSession) {
+    const sessionId = live.view.session.sessionId
+    const seen = live.goalEvents
+    const schema = z.object({
+      events: z.array(z.object({ method: z.string(), params: z.record(z.string(), z.unknown()) })),
+      nextCursor: z.string().nullable(),
+    })
+    try {
+      let cursor: string | undefined
+      for (let page = 0; page < 4; page++) {
+        const { events, nextCursor } = schema.parse(
+          await this.connection.request('view/page', {
+            sessionId,
+            direction: 'backward',
+            limit: 500,
+            ...(cursor ? { cursor } : {}),
+          }),
+        )
+        const found = [...events].reverse().find((event) => event.method === 'session/goalChanged')
+        if (found) {
+          const goal = sessionGoalSchema.nullable().parse(found.params.goal) ?? undefined
+          if (live.goalEvents === seen) live.view.goal = goal
+          return
+        }
+        if (!nextCursor) break
+        cursor = nextCursor
+      }
+    } catch (error) {
+      console.error(`Could not read the goal: ${messageOf(error)}`)
+    }
   }
 
   async approve(sessionId: string, approvalId: string, choiceId: string) {
@@ -716,6 +882,9 @@ export class MuseHost {
         ...(live.view.session.approvalMode ?? {}),
         mode: z.string().parse(params.mode),
       }
+    } else if (method === 'session/goalChanged') {
+      live.view.goal = sessionGoalSchema.nullable().parse(params.goal) ?? undefined
+      live.goalEvents++
     } else if (method === 'view/gap') {
       void this.recover(sessionId).catch((error: unknown) => {
         live.view.error = `Could not recover missed updates: ${messageOf(error)}`
@@ -734,7 +903,7 @@ export class MuseHost {
         await this.connection.request('session/read', { sessionId, excludeItems: false }),
       )
       const loaded = this.requireSession(sessionId).loaded
-      await this.hydrate(result, loaded)
+      await this.restoreGoal(await this.hydrate(result, loaded))
       if (loaded) await this.refreshPending(sessionId)
       await this.connection.request('view/subscribe', { sessionId, after: result.viewCursor })
       this.schedule(sessionId)

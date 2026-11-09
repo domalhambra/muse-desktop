@@ -17,6 +17,11 @@ struct ConversationView: View {
       Group {
         if let view = workspace.view {
           TranscriptView(controller: controller, workspace: workspace, view: view).id(view.session.sessionId)
+            .environment(
+              \.forkContext,
+              ForkContext(
+                points: ForkRules.points(view.items, activeTurnId: view.session.activeTurnId),
+                fork: { turn in Task { await workspace.fork(fromTurn: turn) } }))
         } else if workspace.openingSessionId != nil {
           ProgressView("Loading conversation…")
         } else {

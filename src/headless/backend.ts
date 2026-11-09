@@ -8,6 +8,9 @@ import {
   answerSchema,
   approvalModeSchema,
   effortSchema,
+  goalVerbSchema,
+  skillActivationSchema,
+  taskControlSchema,
   preferencesPatchSchema,
   preferencesSchema,
   type AppEvent,
@@ -47,6 +50,7 @@ import { prList, prMerge, prMergeWhenReady, prStatus } from './pull-request'
 import { revertExpectedHunk, STALE_HUNK } from './revert-hunk'
 import { Scheduler, StartFailed } from './schedule'
 import type { Schedule } from './schedule-rules'
+import { createSkills, type Skills } from './skills'
 import { folderCommand, openInTerminal, terminalCommand } from './terminal'
 import { HEADLESS_PROTOCOL, type Ask, type Method } from './wire'
 
@@ -75,7 +79,12 @@ export type Muse = Pick<
   | 'setModel'
   | 'setApprovalMode'
   | 'sideChat'
+  | 'fork'
+  | 'listTasks'
+  | 'controlTask'
+  | 'listSkills'
   | 'runShell'
+  | 'goal'
   | 'approve'
   | 'answer'
   | 'cancelQuestion'
@@ -103,6 +112,8 @@ export type BackendDeps = {
   bridgeFactories?: BridgeFactories
   /** Runs `muse voice transcribe`. Tests pass a fake; the default is src/main/voice.ts's. */
   voice?: { transcribe(data: Buffer, cliPath: string): Promise<string>; cancel(): Promise<void> }
+  /** Reads and changes the skill catalog through `muse skills`. Tests pass a fake. */
+  skills?: Skills
   /** Scheduled tasks. Tests pass `{ timer: false }` and call the methods; the default ticks every minute. */
   scheduler?: { timer?: boolean; now?: () => number; tz?: string }
   /** The environment gh runs in. Tests point PATH at a fake gh; the default is the backend's. */
@@ -122,6 +133,7 @@ export function createBackend({
   agent,
   bridgeFactories,
   voice = new VoiceTranscriber(),
+  skills = createSkills(),
   scheduler: schedulerOptions = {},
   ghEnv,
   ghFolders,
@@ -133,6 +145,7 @@ export function createBackend({
   let starting = false
   let preferences: Preferences | undefined
   let preferencePath = ''
+  let dataFolderPath = ''
   let preferenceWrites: Promise<void> = Promise.resolve()
   let bridges: Bridges | undefined
   let scheduler: Scheduler | undefined
@@ -203,11 +216,16 @@ export function createBackend({
     return project
   }
 
-  async function trustProject(project: string) {
+  /** True when the project, or the project a Muse worktree belongs to, is already trusted. */
+  function isTrusted(project: string) {
     const { trustedProjects } = current()
-    if (trustedProjects.includes(project)) return
+    if (trustedProjects.includes(project)) return true
     const parent = worktreeParent(project)
-    if (parent && trustedProjects.includes(parent)) return
+    return parent !== null && trustedProjects.includes(parent)
+  }
+
+  async function trustProject(project: string) {
+    if (isTrusted(project)) return
     const choice = await ask({
       kind: 'confirm',
       title: 'Trust this project?',
@@ -388,6 +406,7 @@ export function createBackend({
         .parse(value)
       await mkdir(dataFolder, { recursive: true, mode: 0o700 })
       preferencePath = join(dataFolder, 'preferences.json')
+      dataFolderPath = dataFolder
       preferences = await readPreferences(preferencePath)
       scheduler = new Scheduler({
         file: join(dataFolder, 'schedules.json'),
@@ -583,11 +602,146 @@ export function createBackend({
     return muse.sideChat(sessionId)
   })
 
+  // A new conversation copied from this one, through one turn or through all of them.
+  method('fork', async (session, turn) => {
+    const sessionId = id.parse(session)
+    await sessionProject(sessionId)
+    return muse.fork(sessionId, turn === undefined ? undefined : id.parse(turn))
+  })
+
+  // The Agents tab: background tasks, subagents and workflows.
+  method('task-list', (session) => muse.listTasks(id.parse(session)))
+
+  method('task-control', async (session, action, target) => {
+    const sessionId = id.parse(session)
+    const parsed = taskControlSchema.parse(action)
+    await sessionProject(sessionId)
+    return muse.controlTask(sessionId, parsed, parsed === 'stop-all' ? undefined : id.parse(target))
+  })
+
+  // An id or scope that starts with `-` would reach the CLI as an option: `--help` exits 0.
+  const NOT_AN_OPTION = /^[^-]/
+  const NOT_AN_OPTION_MESSAGE = 'That skill name is not valid.'
+
+  /** What a `skill` input part accepts. A plugin skill's name carries a `plugin:` prefix the host drops. */
+  const skillSelector = ({ name, scope }: { name: string; scope: string }) =>
+    scope === 'plugin' ? name.replace(/^plugin:/, '') : name
+  /** A skill that shadows another by selector wins by scope: project, user, plugin, then the rest. */
+  const scopeRank = (scope: string) => {
+    const rank = ['project', 'user', 'plugin'].indexOf(scope)
+    return rank === -1 ? 3 : rank
+  }
+
+  // Skills. The catalog never raises a trust Ask: a project joins only if it is already trusted.
+  const trustedOrNone = async (value: unknown) => {
+    if (value === undefined || value === null) return undefined
+    const path = pathSchema.parse(value)
+    // A deleted project must not fail the catalog: the global list still reads.
+    const project = await realFolder(path).catch((error) => {
+      if (error instanceof MissingFolder) return undefined
+      throw error
+    })
+    return project && isTrusted(project) ? project : undefined
+  }
+
+  method('skill-catalog', async (project) =>
+    skills.readCatalog(current().cliPath, await trustedOrNone(project)),
+  )
+
+  method('skill-set', async (value) => {
+    const input = z
+      .object({
+        id: z.string().min(1).max(500).regex(NOT_AN_OPTION, NOT_AN_OPTION_MESSAGE),
+        scope: z.string().min(1).max(100).regex(NOT_AN_OPTION, NOT_AN_OPTION_MESSAGE),
+        activation: skillActivationSchema,
+        project: z.string().optional(),
+      })
+      .parse(value)
+    await skills.setActivation(
+      current().cliPath,
+      input.id,
+      input.scope,
+      input.activation,
+      await trustedOrNone(input.project),
+      // `muse skills` can rewrite settings.json, so the change saves a copy in mMac's data folder first.
+      { configDir: muse.configDir(), dataFolder: dataFolderPath },
+    )
+  })
+
+  // The `/` popup: the conversation's rows, or the catalog's when Muse has not loaded it.
+  method('skill-rows', async (session) => {
+    const sessionId = id.parse(session)
+    const rows = await muse.listSkills(sessionId)
+    if (rows) return rows
+    // A reopened conversation is not loaded, so read its project's skills the way skill-catalog
+    // does: only a trusted project joins, an untrusted or deleted folder gives the global list.
+    const root = (() => {
+      try {
+        return muse.getSession(sessionId).workspaceRoot
+      } catch {
+        return null
+      }
+    })()
+    const catalog = await skills.readCatalog(current().cliPath, await trustedOrNone(root))
+    const listed = catalog
+      .filter((skill) => skill.activation !== 'off')
+      .map((skill) => ({ skill, selector: skillSelector(skill) }))
+    // One row per selector, the higher-precedence scope's, in the catalog's order.
+    const winner = new Map<string, (typeof listed)[number]>()
+    for (const row of listed) {
+      const held = winner.get(row.selector)
+      if (!held || scopeRank(row.skill.scope) < scopeRank(held.skill.scope))
+        winner.set(row.selector, row)
+    }
+    return listed
+      .filter((row) => winner.get(row.selector) === row)
+      .map(({ skill, selector }) => ({
+        selector,
+        displayName: skill.displayName,
+        description: skill.description,
+      }))
+  })
+
+  method('send-skill', async (value) => {
+    const input = z
+      .object({
+        sessionId: id,
+        selector: z.string().min(1).max(200),
+        arguments: z.string().max(100000).optional(),
+        effort: effortSchema,
+        mode: z.enum(['queue', 'steer']),
+      })
+      .parse(value)
+    await sessionProject(input.sessionId)
+    await muse.send(
+      input.sessionId,
+      [
+        {
+          type: 'skill',
+          selector: input.selector,
+          ...(input.arguments ? { arguments: input.arguments } : {}),
+        },
+      ],
+      input.effort,
+      input.mode,
+      input.arguments ? `/${input.selector} ${input.arguments}` : `/${input.selector}`,
+    )
+  })
+
   // The composer's `!` escape: a shell command in the conversation's folder.
   method('shell', async (session, command) => {
     const sessionId = id.parse(session)
     await sessionProject(sessionId)
     return muse.runShell(sessionId, z.string().min(1).max(10000).parse(command))
+  })
+
+  // The session's goal: `/goal` and the strip above the composer.
+  method('goal', async (session, verb, objective) => {
+    const sessionId = id.parse(session)
+    const parsed = goalVerbSchema.parse(verb)
+    await sessionProject(sessionId)
+    if (parsed !== 'set' && parsed !== 'edit') return muse.goal(sessionId, parsed, undefined)
+    return muse.goal(sessionId, parsed, z.string().trim().min(1).max(10000).parse(objective))
   })
 
   // The subscription's limits as Muse last observed them; `usage-changed` carries each new value.

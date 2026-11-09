@@ -818,25 +818,27 @@ final class MMacUITests: XCTestCase {
     openSecondConversation(app)
     let composer = self.composer(app)
 
-    // `/` shows the eleven commands, as the Help sheet lists them.
+    // `/` shows the thirteen commands, as the Help sheet lists them.
     composer.click()
     composer.typeText("/")
     let popup = element(app, "composer-commands")
     XCTAssertTrue(popup.waitForExistence(timeout: 5), app.debugDescription)
-    for name in ["clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help", "btw"] {
+    for name in ["clear", "new", "voice", "model", "effort", "compact", "rename", "stop", "settings", "help", "btw", "goal", "fork"] {
       XCTAssertTrue(element(app, "command-\(name)").exists, "No /\(name) row")
     }
     // The eleventh row peeks above the popup's bottom edge, so the list reads as one that
-    // scrolls; the live run saw ten whole rows and no /btw. A scroll brings it fully in.
+    // scrolls; the live run saw ten whole rows and no /btw. A scroll brings the last row, /fork,
+    // fully in.
     let btw = element(app, "command-btw")
     XCTAssertLessThan(btw.frame.minY, popup.frame.maxY - 4, "/btw at \(btw.frame) is hidden under \(popup.frame)")
+    let fork = element(app, "command-fork")
     // A synthesized scroll sometimes does not reach the list (the frame did not move), so the
     // test scrolls again, up to three times, and waits for each to settle.
-    for _ in 0..<3 where !btw.isHittable {
+    for _ in 0..<3 where !fork.isHittable {
       popup.scroll(byDeltaX: 0, deltaY: -200)
-      _ = btw.wait(for: \.isHittable, toEqual: true, timeout: 2)
+      _ = fork.wait(for: \.isHittable, toEqual: true, timeout: 2)
     }
-    XCTAssertTrue(btw.isHittable, "/btw is not hittable after a scroll: \(btw.frame) in \(popup.frame)")
+    XCTAssertTrue(fork.isHittable, "/fork is not hittable after a scroll: \(fork.frame) in \(popup.frame)")
     // Typing filters the list, and Tab completes the highlighted command and a space.
     composer.typeText("he")
     XCTAssertTrue(element(app, "command-clear").waitForNonExistence(timeout: 5))
@@ -1300,5 +1302,100 @@ final class MMacUITests: XCTestCase {
     let entries = try Self.logged(log)
     assertLogged(entries, ["method": "pr-merge", "args": [project, 1]])
     assertLogged(entries, ["method": "open", "args": ["fake-2"]])
+  }
+
+  func testM6AgainstTheFakeBackend() throws {
+    let log = temporary.appending(path: "requests.jsonl")
+    let app = try launchFake(log: log)
+    waitUntilConnected(app)
+    openFakeConversation(app)
+
+    // Goals: /goal sets one, the strip shows it, and Pause and Clear reach the backend.
+    let input = composer(app)
+    input.click()
+    input.typeText("/goal Write the notes")
+    input.typeKey(.return, modifierFlags: [])
+    let objective = element(app, "goal-objective")
+    XCTAssertTrue(objective.waitForExistence(timeout: 10), "No goal strip. Requests: \(fakeRequests())")
+    waitUntilLogged(log, ["method": "goal", "args": ["fake-1", "set", "Write the notes"]])
+    waitForValue(input, "")
+    element(app, "goal-pause").click()
+    XCTAssertTrue(element(app, "goal-resume").waitForExistence(timeout: 5))
+    waitUntilLogged(log, ["method": "goal", "args": ["fake-1", "pause"]])
+    element(app, "goal-clear").click()
+    XCTAssertTrue(objective.waitForNonExistence(timeout: 5))
+    waitUntilLogged(log, ["method": "goal", "args": ["fake-1", "clear"]])
+
+    // Skills in the popup: `/fake-` matches no command, so the popup's row is the skill's. The
+    // rest of the draft names the skill and its arguments, and it is sent as a skill.
+    input.click()
+    input.typeText("/fake-")
+    XCTAssertTrue(
+      element(app, "command-fake-skill").waitForExistence(timeout: 5), "No skill row. Requests: \(fakeRequests())")
+    input.typeText("skill now")
+    input.typeKey(.return, modifierFlags: [])
+    waitForValue(input, "")
+    XCTAssertEqual(try Self.requests(log, "send-skill").count, 1, "Requests: \(fakeRequests())")
+
+    // Background control: the inspector opens, Stop acts on the task, and the list that follows
+    // leaves the task out.
+    let toggle = app.buttons["Toggle project inspector"]
+    waitForValue(toggle, "Hidden")
+    toggle.click()
+    waitForValue(toggle, "Shown")
+    // As the other inspector tests: fill the screen, so the segments are inside the window.
+    app.menuBars.menuBarItems["Window"].click()
+    app.menuBars.menuItems["Zoom"].click()
+    selectTab(app, "Agents")
+    let stop = element(app, "task-stop-fake-task")
+    XCTAssertTrue(stop.waitForExistence(timeout: 10), "No background task. Requests: \(fakeRequests())")
+    stop.click()
+    XCTAssertTrue(stop.waitForNonExistence(timeout: 5))
+    waitUntilLogged(log, ["method": "task-control", "args": ["fake-1", "stop", "fake-task"]])
+    // Off again, so the tests' own defaults suite ends with the inspector closed.
+    app.typeKey("i", modifierFlags: [.command, .option])
+    waitForValue(toggle, "Hidden")
+
+    // Fork: the button under the last Muse message forks through its turn and opens the other
+    // conversation. The button's identifier is `fork-<itemId>` (mac/mMac/TranscriptViews.swift:264).
+    let fork = element(app, "fork-a1")
+    XCTAssertTrue(fork.waitForExistence(timeout: 10), "No fork button. Requests: \(fakeRequests())")
+    fork.click()
+    waitUntilLogged(log, ["method": "fork", "args": ["fake-1", "turn-1"]])
+    XCTAssertTrue(
+      app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10),
+      "The fork did not open. Requests: \(fakeRequests())")
+
+    // /fork reaches the backend too. The fake answers every fork with the second conversation, so
+    // it resolves from there, and the fork is of the conversation then open.
+    let forkInput = composer(app)
+    forkInput.click()
+    forkInput.typeText("/fork")
+    forkInput.typeKey(.return, modifierFlags: [])
+    waitUntilLogged(log, ["method": "fork", "args": ["fake-2"]])
+    XCTAssertTrue(
+      app.staticTexts["The second conversation says hello."].waitForExistence(timeout: 10),
+      "The /fork did not open. Requests: \(fakeRequests())")
+
+    // Settings › Skills: the pane lists the skill.
+    app.typeKey(",", modifierFlags: .command)
+    let settings = settingsWindow(app)
+    XCTAssertTrue(settings.waitForExistence(timeout: 10))
+    pane(settings, "Skills").click()
+    XCTAssertTrue(
+      settings.descendants(matching: .any)["skill-activation-fake-skill"].waitForExistence(timeout: 10),
+      "No skill row. Requests: \(fakeRequests())")
+    // The catalog read names the open project as its argument, so the check is on the method.
+    XCTAssertFalse(try Self.requests(log, "skill-catalog").isEmpty, "No skill-catalog. Requests: \(fakeRequests())")
+    settings.typeKey("w", modifierFlags: .command)
+    XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+    quit(app)
+
+    // The skill went out by its selector, with the rest of the draft as its arguments.
+    let sent = try XCTUnwrap(Self.requests(log, "send-skill").first?["args"] as? [Any])
+    let input0 = try XCTUnwrap(sent.first as? [String: Any])
+    XCTAssertEqual(input0["sessionId"] as? String, "fake-1")
+    XCTAssertEqual(input0["selector"] as? String, "fake-skill")
+    XCTAssertEqual(input0["arguments"] as? String, "now")
   }
 }

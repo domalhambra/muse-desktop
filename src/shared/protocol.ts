@@ -37,6 +37,14 @@ export const itemSchema = z.object({
   sideSessionId: z.string().optional(),
   /** `subagent`: `accepted`, `starting`, `running`, `resultReady`, `closing`, `closed` or more. */
   controlStatus: z.string().optional(),
+  /** `subagent`/`workflow`: the owning workflow run. */
+  workflowRunId: z.string().optional(),
+  /** `workflow`: true only while a pause is in force. */
+  paused: z.boolean().optional(),
+  /** `workflow`: true while the run is open. */
+  stopAvailable: z.boolean().optional(),
+  /** `toolCall`: true once Muse durably moved the task to the background (`item/updated`). */
+  background: z.boolean().optional(),
   /** `subagent`: the child's observed usage, updated in place. */
   usage: z.object({ inputTokens: z.number(), outputTokens: z.number() }).passthrough().optional(),
   result: z
@@ -208,6 +216,57 @@ export const todoItemSchema = z.object({
 })
 export type TodoItem = z.infer<typeof todoItemSchema>
 
+export const sessionGoalSchema = z.object({
+  objective: z.string(),
+  status: z.string(),
+  percentComplete: z.number(),
+  currentWork: z.string().optional(),
+  nextWork: z.string().optional(),
+})
+export type SessionGoal = z.infer<typeof sessionGoalSchema>
+export const goalVerbSchema = z.enum(['set', 'edit', 'pause', 'resume', 'clear'])
+export type GoalVerb = z.infer<typeof goalVerbSchema>
+
+export const backgroundTaskSchema = z.object({
+  taskId: z.string(),
+  kind: z.string(),
+  status: z.string(),
+  tool: z.string().optional(),
+  startedAt: z.string().optional(),
+  /** `foreground` or `background`; absent means background. Open: other values may come. */
+  executionMode: z.string().optional(),
+})
+export type BackgroundTask = z.infer<typeof backgroundTaskSchema>
+export const taskControlSchema = z.enum([
+  'stop',
+  'background',
+  'stop-all',
+  'subagent-stop',
+  'workflow-pause',
+  'workflow-resume',
+  'workflow-cancel',
+])
+export type TaskControl = z.infer<typeof taskControlSchema>
+
+export const skillActivationSchema = z.enum(['on', 'userInvocableOnly', 'off'])
+export type SkillActivation = z.infer<typeof skillActivationSchema>
+/** One row of the Skills pane, from `muse skills list`. `activation` may hold a newer value. */
+export type SkillEntry = {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  scope: string
+  activation: string
+}
+/** One row of the `/` popup. `selector` is what a `skill` input part submits. */
+export type SkillRow = {
+  selector: string
+  displayName: string
+  description: string
+  argumentHint?: string
+}
+
 export type SessionView = {
   session: MuseSession
   items: TranscriptItem[]
@@ -218,6 +277,7 @@ export type SessionView = {
   todos?: TodoItem[]
   cost?: SessionCost
   quota?: QuotaStop
+  goal?: SessionGoal
   error?: string
   historyNotice?: string
 }

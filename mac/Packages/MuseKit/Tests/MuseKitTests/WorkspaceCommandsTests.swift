@@ -132,6 +132,17 @@ private func runDraft(_ workspace: Workspace, _ text: String) async -> CommandEf
   #expect(backend.messages.isEmpty)
 }
 
+@MainActor @Test func goalNeedsAConversationAndKeepsTheDraft() async throws {
+  let (workspace, backend) = await makeWorkspace(script: commandScript())
+  for text in ["/goal", "/goal Ship it", "/goal pause"] {
+    workspace.errorMessage = nil
+    #expect(await runDraft(workspace, text) == nil)
+    #expect(workspace.errorMessage == "Open a conversation before using this command.")
+    #expect(workspace.draft == text)
+  }
+  #expect(backend.messages.isEmpty)
+}
+
 @MainActor @Test func compactShowsWhichNoticeTheStatusAsksFor() async throws {
   let (quiet, quietBackend) = await makeWorkspace(script: commandScript(compact: "noop"))
   await quiet.open("s1")

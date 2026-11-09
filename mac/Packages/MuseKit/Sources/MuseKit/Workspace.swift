@@ -80,7 +80,13 @@ public final class Workspace {
   /// The side session shown in the side chat sheet, or nil. A side session is Muse's: seeded from
   /// the open conversation, and never part of it.
   public internal(set) var sideView: SessionView?
+  /// The open conversation's running background tasks, as the Agents tab last read them.
+  public internal(set) var backgroundTasks: [BackgroundTask] = []
+  /// The skills the `/` popup lists for the open conversation.
+  public internal(set) var skillRows: [SkillRow] = []
   public internal(set) var sideOpening = false
+  /// True while a fork runs, so a second click cannot make a second fork.
+  public internal(set) var forking = false
   /// A subagent's session, shown read-only in a sheet from the Agents tab, or nil.
   public internal(set) var childView: SessionView?
   /// The subscription's limits as Muse last observed them, or nil. The sidebar footer hides without
@@ -429,6 +435,8 @@ public final class Workspace {
     openSequence += 1
     openingSessionId = nil
     view = nil
+    backgroundTasks = []
+    skillRows = []
     sideView = nil
     childView = nil
     clearPullRequest()
@@ -483,7 +491,13 @@ public final class Workspace {
       let opened = try await client.open(sessionId)
       guard sequence == openSequence else { return }
       if opened.session.sessionId != view?.session.sessionId { clearStoredOutput() }
-      if opened.session.sessionId != view?.session.sessionId { sideView = nil; childView = nil; clearPullRequest() }
+      if opened.session.sessionId != view?.session.sessionId {
+        sideView = nil
+        childView = nil
+        backgroundTasks = []
+        skillRows = []
+        clearPullRequest()
+      }
       view = opened
       // As Electron: a conversation without a folder shows all projects, so it stays visible.
       project = opened.session.workspaceRoot ?? ""

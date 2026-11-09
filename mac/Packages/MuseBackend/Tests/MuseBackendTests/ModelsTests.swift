@@ -183,6 +183,13 @@ let fullViewJSON = #"""
   #expect(item.summary == ["One", "Three"])
 }
 
+@Test func anItemCarriesItsTurnWhenTheBackendSendsOne() throws {
+  let with = #"{"itemId":"a1","kind":"agentMessage","revision":1,"status":"completed","turnId":"t1"}"#
+  let without = #"{"itemId":"a2","kind":"agentMessage","revision":1,"status":"completed","turnId":null}"#
+  #expect(try JSONDecoder().decode(TranscriptItem.self, from: Data(with.utf8)).turnId == "t1")
+  #expect(try JSONDecoder().decode(TranscriptItem.self, from: Data(without.utf8)).turnId == nil)
+}
+
 @Test func preferencesDecodeEveryFieldWithElectronsDefaults() throws {
   let empty = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
   #expect(empty.theme == "muse")
@@ -291,4 +298,34 @@ let fullViewJSON = #"""
   let attachment = try JSONDecoder().decode(Attachment.self, from: Data(json.utf8))
   #expect(attachment == Attachment(id: "a1", name: "shot.png", kind: "image", size: 2048))
   #expect(try JSONDecoder().decode(Attachment.self, from: JSONEncoder().encode(attachment)) == attachment)
+}
+
+@Test func aGoalDecodesAndIsOptional() throws {
+  let session = #""session":{"sessionId":"s1","workspaceRoot":"/p","createdAt":"t","updatedAt":"t","status":"idle","activeTurnId":null,"modelId":null}"#
+  let with = #"{\#(session),"items":[],"approvals":[],"questions":[],"goal":{"objective":"Ship","status":"active","percentComplete":40}}"#
+  let without = #"{\#(session),"items":[],"approvals":[],"questions":[]}"#
+  let decoder = JSONDecoder()
+  let view = try decoder.decode(SessionView.self, from: Data(with.utf8))
+  #expect(view.goal == SessionGoal(objective: "Ship", status: "active", percentComplete: 40))
+  #expect(try decoder.decode(SessionView.self, from: Data(without.utf8)).goal == nil)
+}
+
+@Test func aToolItemDecodesItsBackgroundFlagWhenPresent() throws {
+  let decoder = JSONDecoder()
+  let with = #"{"itemId":"t1","kind":"toolCall","revision":2,"status":"inProgress","background":true}"#
+  let without = #"{"itemId":"t1","kind":"toolCall","revision":1,"status":"inProgress"}"#
+  #expect(try decoder.decode(TranscriptItem.self, from: Data(with.utf8)).background == true)
+  #expect(try decoder.decode(TranscriptItem.self, from: Data(without.utf8)).background == nil)
+}
+
+@Test func aWorkflowItemAndABackgroundTaskDecode() throws {
+  let item = #"{"itemId":"w1","kind":"workflow","revision":1,"status":"inProgress","workflowRunId":"r1","paused":true,"stopAvailable":true,"subagentId":"a1"}"#
+  let decoded = try JSONDecoder().decode(TranscriptItem.self, from: Data(item.utf8))
+  #expect(decoded.workflowRunId == "r1")
+  #expect(decoded.paused == true)
+  #expect(decoded.stopAvailable == true)
+  #expect(decoded.subagentId == "a1")
+  let task = #"{"taskId":"k1","kind":"tool","status":"inProgress","tool":"bash"}"#
+  let row = try JSONDecoder().decode(BackgroundTask.self, from: Data(task.utf8))
+  #expect(row.tool == "bash")
 }

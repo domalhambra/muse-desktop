@@ -4,13 +4,14 @@ import SwiftUI
 /// The Settings window: Electron's Settings dialog as macOS panes, with Desktop's Scheduled page. About is macOS's own panel.
 struct SettingsView: View {
   enum Pane: String, CaseIterable, Identifiable {
-    case appearance, museCode, mcp, bridges, scheduled
+    case appearance, museCode, mcp, skills, bridges, scheduled
     var id: String { rawValue }
     var title: String {
       switch self {
       case .appearance: "Appearance"
       case .museCode: "Muse Code"
       case .mcp: "MCP servers"
+      case .skills: "Skills"
       case .bridges: "Bridges"
       case .scheduled: "Scheduled"
       }
@@ -20,6 +21,7 @@ struct SettingsView: View {
       case .appearance: "paintpalette"
       case .museCode: "terminal"
       case .mcp: "puzzlepiece.extension"
+      case .skills: "wand.and.stars"
       case .bridges: "point.3.connected.trianglepath.dotted"
       case .scheduled: "calendar.badge.clock"
       }
@@ -66,6 +68,7 @@ struct SettingsView: View {
       case .appearance: AppearancePane(settings: settings, notifications: controller.notifications)
       case .museCode: MuseCodePane(settings: settings)
       case .mcp: McpPane(settings: settings)
+      case .skills: SkillsPane(settings: settings)
       case .bridges: BridgesPane(settings: settings)
       case .scheduled: SchedulesPane(settings: settings)
       }

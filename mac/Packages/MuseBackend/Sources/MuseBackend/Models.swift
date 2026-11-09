@@ -159,10 +159,23 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
   public let controlStatus: String?
   public let usage: ItemUsage?
   public let childSessionId: String?
+  /// The turn that produced the item. Fork points use it.
+  public let turnId: String?
+  /// `subagent`: the child agent this row stands for.
+  public let subagentId: String?
+  /// `subagent`/`workflow`: the owning workflow run.
+  public let workflowRunId: String?
+  /// `workflow`: true only while a pause is in force.
+  public let paused: Bool?
+  /// `workflow`: true while the run is open.
+  public let stopAvailable: Bool?
+  /// `toolCall`: true once Muse durably moved the task to the background, by `item/updated`.
+  public let background: Bool?
   public var id: String { itemId }
 
   public init(
-    itemId: String, kind: String, revision: Int = 0, status: String, text: String? = nil,
+    itemId: String, kind: String, revision: Int = 0, status: String, turnId: String? = nil,
+    text: String? = nil,
     displayText: String? = nil, summary: [String]? = nil, tool: String? = nil,
     args: String? = nil, visibleOutput: String? = nil, commandText: String? = nil,
     fallbackText: String? = nil, statusLine: String? = nil, failureReason: String? = nil,
@@ -171,7 +184,9 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     durationMs: Double? = nil, truncated: Bool? = nil, retracted: Bool? = nil,
     blocking: Bool? = nil, outputRef: OutputRef? = nil, patchSummary: PatchSummary? = nil,
     result: ToolResult? = nil, exitCode: Int? = nil, sideSessionId: String? = nil,
-    controlStatus: String? = nil, usage: ItemUsage? = nil, childSessionId: String? = nil
+    controlStatus: String? = nil, usage: ItemUsage? = nil, childSessionId: String? = nil,
+    subagentId: String? = nil, workflowRunId: String? = nil, paused: Bool? = nil,
+    stopAvailable: Bool? = nil, background: Bool? = nil
   ) {
     self.itemId = itemId
     self.kind = kind
@@ -205,6 +220,12 @@ public struct TranscriptItem: Codable, Equatable, Sendable, Identifiable {
     self.controlStatus = controlStatus
     self.usage = usage
     self.childSessionId = childSessionId
+    self.turnId = turnId
+    self.subagentId = subagentId
+    self.workflowRunId = workflowRunId
+    self.paused = paused
+    self.stopAvailable = stopAvailable
+    self.background = background
   }
 }
 
@@ -245,6 +266,12 @@ extension TranscriptItem {
     controlStatus = try c.decodeIfPresent(String.self, forKey: .controlStatus)
     usage = try c.decodeIfPresent(ItemUsage.self, forKey: .usage)
     childSessionId = try c.decodeIfPresent(String.self, forKey: .childSessionId)
+    turnId = try c.decodeIfPresent(String.self, forKey: .turnId)
+    subagentId = try c.decodeIfPresent(String.self, forKey: .subagentId)
+    workflowRunId = try c.decodeIfPresent(String.self, forKey: .workflowRunId)
+    paused = try c.decodeIfPresent(Bool.self, forKey: .paused)
+    stopAvailable = try c.decodeIfPresent(Bool.self, forKey: .stopAvailable)
+    background = try c.decodeIfPresent(Bool.self, forKey: .background)
   }
 }
 
@@ -501,6 +528,90 @@ public struct PreferencesPatch: Encodable, Equatable, Sendable {
   public var touchesBridges: Bool { bridgeFilesEnabled != nil || bridgeMcpEnabled != nil || bridgeMcpPort != nil }
 }
 
+/// One running background task, a row of `task/list`. `kind` and `status` are open vocabularies.
+public struct BackgroundTask: Codable, Equatable, Sendable, Identifiable {
+  public let taskId: String
+  public let kind: String
+  public let status: String
+  public let tool: String?
+  public let startedAt: String?
+  public var id: String { taskId }
+
+  public init(
+    taskId: String, kind: String, status: String = "inProgress", tool: String? = nil,
+    startedAt: String? = nil
+  ) {
+    self.taskId = taskId
+    self.kind = kind
+    self.status = status
+    self.tool = tool
+    self.startedAt = startedAt
+  }
+}
+
+/// One row of Settings › Skills. `activation` is `on`, `userInvocableOnly` or `off`, or a newer
+/// value that shows as it is.
+public struct SkillEntry: Codable, Equatable, Sendable, Identifiable {
+  public let id: String
+  public let name: String
+  public let displayName: String
+  public let description: String
+  public let scope: String
+  public let activation: String
+
+  public init(
+    id: String, name: String, displayName: String, description: String, scope: String,
+    activation: String
+  ) {
+    self.id = id
+    self.name = name
+    self.displayName = displayName
+    self.description = description
+    self.scope = scope
+    self.activation = activation
+  }
+}
+
+/// One skill in the `/` popup. `selector` is what a `skill` input part submits.
+public struct SkillRow: Codable, Equatable, Sendable, Identifiable {
+  public let selector: String
+  public let displayName: String
+  public let description: String
+  public let argumentHint: String?
+  public var id: String { selector }
+
+  public init(
+    selector: String, displayName: String = "", description: String = "",
+    argumentHint: String? = nil
+  ) {
+    self.selector = selector
+    self.displayName = displayName
+    self.description = description
+    self.argumentHint = argumentHint
+  }
+}
+
+/// The conversation's goal. Muse carries `status` and `percentComplete` as they are: a status may
+/// be one mMac does not know, and a percent may pass 100.
+public struct SessionGoal: Codable, Equatable, Sendable {
+  public let objective: String
+  public let status: String
+  public let percentComplete: Double
+  public let currentWork: String?
+  public let nextWork: String?
+
+  public init(
+    objective: String, status: String, percentComplete: Double, currentWork: String? = nil,
+    nextWork: String? = nil
+  ) {
+    self.objective = objective
+    self.status = status
+    self.percentComplete = percentComplete
+    self.currentWork = currentWork
+    self.nextWork = nextWork
+  }
+}
+
 public struct SessionView: Codable, Equatable, Sendable {
   public var session: Session
   public var items: [TranscriptItem]
@@ -511,6 +622,7 @@ public struct SessionView: Codable, Equatable, Sendable {
   public var todos: [TodoItem]?
   public var cost: SessionCost?
   public var quota: QuotaStop?
+  public var goal: SessionGoal?
   public let error: String?
   public let historyNotice: String?
 
@@ -518,7 +630,7 @@ public struct SessionView: Codable, Equatable, Sendable {
     session: Session, items: [TranscriptItem] = [], approvals: [Approval] = [],
     questions: [UserQuestion] = [], usage: Usage? = nil, error: String? = nil,
     historyNotice: String? = nil, context: ContextUsage? = nil, todos: [TodoItem]? = nil,
-    cost: SessionCost? = nil, quota: QuotaStop? = nil
+    cost: SessionCost? = nil, quota: QuotaStop? = nil, goal: SessionGoal? = nil
   ) {
     self.session = session
     self.items = items
@@ -531,6 +643,7 @@ public struct SessionView: Codable, Equatable, Sendable {
     self.todos = todos
     self.cost = cost
     self.quota = quota
+    self.goal = goal
   }
 }
 

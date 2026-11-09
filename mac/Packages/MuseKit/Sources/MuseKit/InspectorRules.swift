@@ -409,6 +409,7 @@ public struct AgentRow: Equatable, Sendable, Identifiable {
   /// Duration and tokens, joined with " · ". Empty when the item has neither.
   public let detail: String
   public let childSessionId: String?
+  public let subagentId: String?
 
   public static func build(_ items: [TranscriptItem]) -> [AgentRow] {
     items.filter { $0.kind == "subagent" && $0.retracted != true }.map { item in
@@ -420,7 +421,7 @@ public struct AgentRow: Equatable, Sendable, Identifiable {
         title: ToolPresentation.first(item.objective, item.label, item.role) ?? "Subagent",
         status: ToolPresentation.first(item.controlStatus) ?? item.status,
         detail: parts.joined(separator: " · "),
-        childSessionId: item.childSessionId)
+        childSessionId: item.childSessionId, subagentId: item.subagentId)
     }
   }
 
@@ -432,6 +433,9 @@ public struct AgentRow: Equatable, Sendable, Identifiable {
     default: .other
     }
   }
+
+  /// Muse can stop a subagent that is running and has a durable id.
+  public var canStop: Bool { phase == .running && subagentId != nil }
 
   public enum Phase: Equatable, Sendable { case running, done, other }
 }

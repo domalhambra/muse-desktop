@@ -116,9 +116,9 @@ public enum SlashKeyAction: Equatable, Sendable {
   case submit
 }
 
-/// The eleven composer commands, in Electron's menu order (src/renderer/src/commands.ts).
+/// The composer commands: Electron's eleven in its menu order, then M6's two.
 public enum ComposerCommand: String, CaseIterable, Sendable, Identifiable {
-  case clear, new, voice, model, effort, compact, rename, stop, settings, help, btw
+  case clear, new, voice, model, effort, compact, rename, stop, settings, help, btw, goal, fork
 
   public var id: String { rawValue }
   public var name: String { rawValue }
@@ -136,6 +136,8 @@ public enum ComposerCommand: String, CaseIterable, Sendable, Identifiable {
     case .settings: "Open desktop settings"
     case .help: "Open the guide and CLI compatibility information"
     case .btw: "Ask a side question that leaves this conversation untouched"
+    case .goal: "Set a goal, or /goal pause, resume or clear"
+    case .fork: "Fork this conversation into a new one"
     }
   }
 
