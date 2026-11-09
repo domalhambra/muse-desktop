@@ -500,14 +500,17 @@ export class MuseHost {
    * A new conversation that copies this one through `turnId`, or through every completed turn.
    * Muse returns the fork's resume envelope (msp.d.ts, `session/fork`), so it is loaded. The
    * envelope carries no goal, so it is read as `open` does. A cut before a goal change fails:
-   * plain-errors.ts words that refusal.
+   * plain-errors.ts words that refusal. Muse Code 1.4.14 also refuses a named cut at the latest
+   * turn of a conversation with a goal, so the latest completed turn goes with no cut, which
+   * means the same thing.
    */
   async fork(sessionId: string, turnId?: string): Promise<SessionView> {
     await this.resume(sessionId)
+    const cut = turnId && turnId !== this.latestCompletedTurn(sessionId) ? turnId : undefined
     const result = sessionResultSchema.parse(
       await this.connection.command(
         'session/fork',
-        { sessionId, ...(turnId ? { cutPoint: { lastTurnId: turnId } } : {}) },
+        { sessionId, ...(cut ? { cutPoint: { lastTurnId: cut } } : {}) },
         { maxAttempts: 1 },
       ),
     )
@@ -518,6 +521,15 @@ export class MuseHost {
     if (live.goalEvents === 0) live.view.goal ??= goal
     this.emit({ type: 'sessions-changed' })
     return this.view(live)
+  }
+
+  /** The last turn in the loaded transcript that is not running, if any. */
+  private latestCompletedTurn(sessionId: string): string | undefined {
+    const view = this.sessions.get(sessionId)?.view
+    const active = view?.session.activeTurnId
+    return (
+      view?.items.findLast((item) => item.turnId && item.turnId !== active)?.turnId ?? undefined
+    )
   }
 
   /**

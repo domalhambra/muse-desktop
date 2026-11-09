@@ -486,6 +486,40 @@ describe('Muse protocol boundary', () => {
     await host.close()
   })
 
+  it('forks from the latest completed turn without a cut, which a goal conversation needs', async () => {
+    // Muse Code 1.4.14 refuses any named cut in a conversation with a goal
+    // (historical_goal_cut_unsupported), even the latest turn. No cut means every completed turn.
+    const host = new MuseHost(() => {})
+    await host.connect('')
+    const items = [
+      { itemId: 'u1', kind: 'userMessage', revision: 1, status: 'completed', turnId: 't1' },
+      { itemId: 'a1', kind: 'assistantMessage', revision: 1, status: 'completed', turnId: 't1' },
+      { itemId: 'u2', kind: 'userMessage', revision: 1, status: 'completed', turnId: 't2' },
+      { itemId: 'a2', kind: 'assistantMessage', revision: 1, status: 'completed', turnId: 't2' },
+    ]
+    wire.command.mockImplementation(async (method: string) =>
+      method === 'session/fork'
+        ? { ...result(), session: { ...session, sessionId: 'fork-1' } }
+        : method === 'session/start' || method === 'session/resume'
+          ? result(items)
+          : {},
+    )
+    await host.fork('s1', 't2')
+    expect(wire.command).toHaveBeenCalledWith(
+      'session/fork',
+      { sessionId: 's1' },
+      { maxAttempts: 1 },
+    )
+    wire.command.mockClear()
+    await host.fork('s1', 't1')
+    expect(wire.command).toHaveBeenCalledWith(
+      'session/fork',
+      { sessionId: 's1', cutPoint: { lastTurnId: 't1' } },
+      { maxAttempts: 1 },
+    )
+    await host.close()
+  })
+
   it('runs the goal verbs and folds session/goalChanged', async () => {
     const host = new MuseHost(() => {})
     await host.connect('')
